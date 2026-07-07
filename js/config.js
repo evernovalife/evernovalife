@@ -19,7 +19,7 @@
    http://localhost:4242 so nothing breaks while you develop.
    ============================================================ */
 (function () {
-  var PROD_API_BASE = '';   // ← set your API origin here for production (or leave '')
+  var PROD_API_BASE = 'https://evernova-api.onrender.com';   // ← your Render backend
 
   // Respect an explicit value if something set it earlier.
   if (typeof window.PEPTIDE_API_BASE === 'string' && window.PEPTIDE_API_BASE) return;
