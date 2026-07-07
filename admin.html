@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Signups — Ever Nova Life Admin</title>
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="theme-color" content="#1e1b4b">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/styles.css?v=5">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Cpath d='M20.00 1.00 L21.91 15.38 L27.78 12.22 L24.62 18.09 L39.00 20.00 L24.62 21.91 L27.78 27.78 L21.91 24.62 L20.00 39.00 L18.09 24.62 L12.22 27.78 L15.38 21.91 L1.00 20.00 L15.38 18.09 L12.22 12.22 L18.09 15.38 Z' fill='%23a855f7'/%3E%3C/svg%3E">
+  <style>
+    .admin-table { width:100%; border-collapse:collapse; margin-top:1rem; font-size:0.95rem; }
+    .admin-table th, .admin-table td { text-align:left; padding:10px 12px; border-bottom:1px solid rgba(148,163,184,0.25); }
+    .admin-table th { color:#a78bfa; font-weight:600; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.04em; }
+    .admin-table tbody tr:hover { background:rgba(148,163,184,0.08); }
+    .admin-table-wrap { overflow-x:auto; }
+    .admin-actions { display:flex; gap:0.6rem; align-items:flex-end; flex-wrap:wrap; }
+    .admin-actions .form-field { flex:1; min-width:220px; margin:0; }
+  </style>
+</head>
+<body>
+
+  <!-- ===== HEADER ===== -->
+  <header class="site-header">
+    <div class="container header-inner">
+      <a href="index.html" class="logo">
+        <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="navStarDark1" gradientUnits="userSpaceOnUse" x1="50" y1="2" x2="50" y2="98"><stop offset="0%" stop-color="#6d28d9"/><stop offset="50%" stop-color="#a21caf"/><stop offset="100%" stop-color="#c0267e"/></linearGradient><linearGradient id="navStarLight1" gradientUnits="userSpaceOnUse" x1="50" y1="2" x2="50" y2="98"><stop offset="0%" stop-color="#ede9fe"/><stop offset="50%" stop-color="#ffffff"/><stop offset="100%" stop-color="#fce7f3"/></linearGradient></defs><path d="M50.0 50.0 L50.00 0.00 L54.97 37.99 Z" fill="url(#navStarDark1)"/><path d="M50.0 50.0 L70.51 29.49 L62.01 45.03 Z" fill="url(#navStarDark1)"/><path d="M50.0 50.0 L100.00 50.00 L62.01 54.97 Z" fill="url(#navStarDark1)"/><path d="M50.0 50.0 L70.51 70.51 L54.97 62.01 Z" fill="url(#navStarDark1)"/><path d="M50.0 50.0 L50.00 100.00 L45.03 62.01 Z" fill="url(#navStarDark1)"/><path d="M50.0 50.0 L29.49 70.51 L37.99 54.97 Z" fill="url(#navStarDark1)"/><path d="M50.0 50.0 L0.00 50.00 L37.99 45.03 Z" fill="url(#navStarDark1)"/><path d="M50.0 50.0 L29.49 29.49 L45.03 37.99 Z" fill="url(#navStarDark1)"/><path d="M50.0 50.0 L45.03 37.99 L50.00 0.00 Z" fill="url(#navStarLight1)"/><path d="M50.0 50.0 L54.97 37.99 L70.51 29.49 Z" fill="url(#navStarLight1)"/><path d="M50.0 50.0 L62.01 45.03 L100.00 50.00 Z" fill="url(#navStarLight1)"/><path d="M50.0 50.0 L62.01 54.97 L70.51 70.51 Z" fill="url(#navStarLight1)"/><path d="M50.0 50.0 L54.97 62.01 L50.00 100.00 Z" fill="url(#navStarLight1)"/><path d="M50.0 50.0 L45.03 62.01 L29.49 70.51 Z" fill="url(#navStarLight1)"/><path d="M50.0 50.0 L37.99 54.97 L0.00 50.00 Z" fill="url(#navStarLight1)"/><path d="M50.0 50.0 L37.99 45.03 L29.49 29.49 Z" fill="url(#navStarLight1)"/><circle cx="50" cy="50" r="6" fill="url(#navStarDark1)"/><circle cx="50" cy="50" r="2.6" fill="#f5f3ff"/></svg>
+        <span class="logo-text">Ever Nova Life</span>
+      </a>
+      <nav class="main-nav" id="mainNav">
+        <a href="index.html">Home</a>
+        <a href="products.html">Products</a>
+        <a href="account.html">Account</a>
+      </nav>
+      <div class="header-actions">
+        <a href="index.html" class="icon-btn" aria-label="Home">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12l9-9 9 9"/><path d="M9 21V12h6v9"/></svg>
+        </a>
+        <button class="hamburger" id="hamburger" aria-label="Menu">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <section class="page-head">
+    <div class="container">
+      <div class="breadcrumb"><a href="index.html">Home</a> <span>/</span> <span>Admin</span></div>
+      <h1>Sign<span class="gradient-text">ups</span></h1>
+      <p>Everyone who has created an account. Enter your admin key to view.</p>
+    </div>
+  </section>
+
+  <section class="section" style="padding-top:0">
+    <div class="container">
+      <div class="account-card glass">
+        <form id="adminForm" novalidate>
+          <div class="admin-actions">
+            <div class="form-field">
+              <label for="adminKey">Admin key</label>
+              <input type="password" id="adminKey" name="key" placeholder="Paste your admin key" autocomplete="off">
+            </div>
+            <button class="btn btn-primary" type="submit">View signups</button>
+          </div>
+          <div class="form-msg" id="adminMsg"></div>
+        </form>
+        <div id="adminResults" class="admin-table-wrap"></div>
+      </div>
+    </div>
+  </section>
+
+  <script src="js/config.js"></script>
+  <script>
+    (function () {
+      var API = (window.PEPTIDE_API_BASE || '');
+      var STORE_KEY = 'enl_admin_key';
+      var form = document.getElementById('adminForm');
+      var keyInput = document.getElementById('adminKey');
+      var msg = document.getElementById('adminMsg');
+      var results = document.getElementById('adminResults');
+
+      try { keyInput.value = localStorage.getItem(STORE_KEY) || ''; } catch (e) {}
+
+      function esc(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+          return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+      }
+      function fmtDate(iso) { try { return new Date(iso).toLocaleString(); } catch (e) { return iso || ''; } }
+      function setMsg(text, kind) { msg.className = 'form-msg' + (kind ? ' ' + kind : ''); msg.textContent = text || ''; }
+
+      async function load(key) {
+        setMsg('Loading…', '');
+        results.innerHTML = '';
+        var res;
+        try {
+          res = await fetch(API + '/api/admin/users', { headers: { 'x-admin-key': key } });
+        } catch (e) { setMsg("Can't reach the server. Is the backend awake?", 'error'); return; }
+        var data = await res.json().catch(function () { return {}; });
+        if (!res.ok) { setMsg(data.error || 'Could not load signups.', 'error'); return; }
+        try { localStorage.setItem(STORE_KEY, key); } catch (e) {}
+        setMsg(data.count + ' signup' + (data.count === 1 ? '' : 's'), 'success');
+        if (!data.users || !data.users.length) { results.innerHTML = '<p class="text-muted" style="margin-top:1rem">No signups yet.</p>'; return; }
+        var rows = data.users.map(function (u, i) {
+          var name = ((u.firstName || '') + ' ' + (u.lastName || '')).trim() || '—';
+          return '<tr><td>' + (i + 1) + '</td><td>' + esc(name) + '</td><td>' + esc(u.email) + '</td><td>' + esc(fmtDate(u.createdAt)) + '</td></tr>';
+        }).join('');
+        results.innerHTML = '<table class="admin-table"><thead><tr><th>#</th><th>Name</th><th>Email</th><th>Signed up</th></tr></thead><tbody>' + rows + '</tbody></table>';
+      }
+
+      form.addEventListener('submit', function (e) {
+        e.preventDefault();
+        var k = keyInput.value.trim();
+        if (!k) { setMsg('Enter your admin key.', 'error'); return; }
+        load(k);
+      });
+
+      // auto-load if a key was saved from last time
+      if (keyInput.value) load(keyInput.value);
+    })();
+  </script>
+</body>
+</html>

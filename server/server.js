@@ -77,13 +77,34 @@ app.post('/api/auth/register', async (req, res) => {
     const result = await auth.registerUser({ firstName, lastName, email, password });
     res.status(201).json({ success: true, ...result });
 
-    // Welcome email — fire-and-forget after responding, so it never delays or
-    // fails signup. Only sends when SMTP is configured.
+    // Fire-and-forget after responding, so they never delay or fail signup.
     sendWelcomeEmail(result.user).catch(err => console.error('[welcome] failed:', err.message));
+    notifyAdminOfSignup(result.user).catch(err => console.error('[admin-notify] failed:', err.message));
   } catch (err) {
     res.status(err.status || 400).json({ error: err.message });
   }
 });
+
+/* Notify the store owner (ADMIN_EMAIL) that someone signed up — a permanent
+   record in their inbox, independent of the server's (ephemeral) disk. */
+async function notifyAdminOfSignup(user) {
+  const to = process.env.ADMIN_EMAIL || '';
+  if (!mailer.CONFIGURED || !to || !user) return;
+  const full = ((user.firstName || '') + ' ' + (user.lastName || '')).trim() || '(no name)';
+  const when = user.createdAt || new Date().toISOString();
+  const subject = `New signup: ${full}`;
+  const text = `A new account was created on Ever Nova Life:\n\n` +
+    `Name:  ${full}\nEmail: ${user.email}\nWhen:  ${when}\n`;
+  const html = `<div style="font-family:Arial,sans-serif;color:#1f2937">
+    <h3 style="color:#6d28d9">New Ever Nova Life signup</h3>
+    <table style="border-collapse:collapse">
+      <tr><td style="padding:2px 12px 2px 0;color:#6b7280">Name</td><td><strong>${escapeHtmlSrv(full)}</strong></td></tr>
+      <tr><td style="padding:2px 12px 2px 0;color:#6b7280">Email</td><td>${escapeHtmlSrv(user.email)}</td></tr>
+      <tr><td style="padding:2px 12px 2px 0;color:#6b7280">When</td><td>${escapeHtmlSrv(when)}</td></tr>
+    </table>
+  </div>`;
+  return mailer.sendMail({ to, subject, text, html });
+}
 
 /* Send a friendly "thanks for signing up" email to a new account. */
 async function sendWelcomeEmail(user) {
@@ -128,6 +149,21 @@ app.post('/api/auth/login', async (req, res) => {
 /* ---- who am I? (used to hydrate the account page) ---- */
 app.get('/api/auth/me', auth.requireAuth, (req, res) => {
   res.json({ success: true, user: req.user });
+});
+
+/* ---- ADMIN: list everyone who has signed up ----
+   Protected by ADMIN_KEY (sent as the "x-admin-key" header or ?key=…).
+   Returns public fields only — never password hashes. */
+const ADMIN_KEY = process.env.ADMIN_KEY || '';
+function requireAdmin(req, res, next) {
+  if (!ADMIN_KEY) return res.status(503).json({ error: 'Admin view is not set up yet (set ADMIN_KEY in the server env).' });
+  const key = req.get('x-admin-key') || req.query.key || '';
+  if (key !== ADMIN_KEY) return res.status(401).json({ error: 'Invalid admin key.' });
+  next();
+}
+app.get('/api/admin/users', requireAdmin, (req, res) => {
+  const users = auth.listUsers();
+  res.json({ success: true, count: users.length, users });
 });
 
 /* ---- forgot password: email a reset link ----

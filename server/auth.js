@@ -130,6 +130,13 @@ function getUserById(id) {
   return u ? publicUser(u) : null;
 }
 
+/* All accounts (public fields only), newest first — for the admin view. */
+function listUsers() {
+  return loadUsers()
+    .map(publicUser)
+    .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+}
+
 /* ---- password reset ----
    We store only a HASH of the reset token (like a password), so a leaked
    user store can't be used to reset accounts. The plaintext token goes out
@@ -203,6 +210,7 @@ module.exports = {
   registerUser,
   authenticate,
   getUserById,
+  listUsers,
   createResetToken,
   resetPassword,
   verifyToken,
