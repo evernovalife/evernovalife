@@ -1,0 +1,1606 @@
+/* ============================================================
+   EVER NOVA LIFE — Global Stylesheet
+   Dark ambient theme · Glassmorphism · Brand gradient
+   ============================================================ */
+
+/* ---------- Design Tokens ---------- */
+:root {
+  /* Brand */
+  --primary: #4f46e5;          /* Indigo */
+  --primary-dark: #4338ca;
+  --accent-purple: #a855f7;
+  --accent-coral: #fb7185;
+  --accent-amber: #fb923c;
+  --accent-mint: #34d399;
+  --accent-cyan: #06b6d4;
+
+  /* Surfaces */
+  --dark-bg: #1e1b4b;          /* Deep indigo body bg */
+  --dark-surface: #232051;
+  --dark-text: #e2e8f0;
+  --dark-text-muted: #cbd5e1;
+  --dark-text-faint: #94a3b8;
+
+  /* Glass */
+  --glass-bg: rgba(255, 255, 255, 0.05);
+  --glass-bg-hover: rgba(255, 255, 255, 0.08);
+  --glass-border: rgba(255, 255, 255, 0.10);
+  --glass-border-strong: rgba(255, 255, 255, 0.18);
+
+  /* Gradients */
+  --gradient-primary: linear-gradient(135deg, #4f46e5 0%, #a855f7 50%, #fb7185 100%);
+  --gradient-soft: linear-gradient(135deg, rgba(79,70,229,0.15) 0%, rgba(168,85,247,0.15) 50%, rgba(251,113,133,0.15) 100%);
+
+  /* Misc */
+  --radius-sm: 0.5rem;
+  --radius: 1rem;
+  --radius-lg: 1.5rem;
+  --radius-pill: 9999px;
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --shadow-glass: 0 8px 32px rgba(0, 0, 0, 0.25);
+  --shadow-glow: 0 25px 50px rgba(79, 70, 229, 0.35);
+  --maxw: 1200px;
+  --header-h: 72px;
+}
+
+/* ---------- Reset ---------- */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  background: var(--dark-bg);
+  background-image:
+    radial-gradient(at 27% 15%, rgba(168, 85, 247, 0.18) 0px, transparent 50%),
+    radial-gradient(at 75% 30%, rgba(251, 113, 133, 0.15) 0px, transparent 50%),
+    radial-gradient(at 50% 75%, rgba(79, 70, 229, 0.18) 0px, transparent 50%),
+    radial-gradient(at 85% 90%, rgba(6, 182, 212, 0.12) 0px, transparent 50%);
+  background-attachment: fixed;
+  color: var(--dark-text);
+  line-height: 1.6;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+a { color: inherit; text-decoration: none; }
+img, svg { display: block; max-width: 100%; }
+button { font-family: inherit; cursor: pointer; border: none; background: none; color: inherit; }
+input, textarea, select { font-family: inherit; }
+ul { list-style: none; }
+
+h1, h2, h3, h4 { line-height: 1.2; font-weight: 700; letter-spacing: -0.02em; }
+
+/* ---------- Utilities ---------- */
+.container { width: 100%; max-width: var(--maxw); margin: 0 auto; padding: 0 1.5rem; }
+.gradient-text {
+  background: var(--gradient-primary);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+.text-muted { color: var(--dark-text-muted); }
+.text-center { text-align: center; }
+.section { padding: 5rem 0; position: relative; }
+.section-sm { padding: 3rem 0; }
+.section-head { text-align: center; max-width: 640px; margin: 0 auto 3rem; }
+.section-head h2 { font-size: clamp(1.8rem, 4vw, 2.6rem); margin-bottom: 0.75rem; }
+.section-head p { color: var(--dark-text-muted); font-size: 1.05rem; }
+.eyebrow {
+  display: inline-block;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--accent-purple);
+  margin-bottom: 0.75rem;
+}
+.hidden { display: none !important; }
+
+/* ---------- Buttons ---------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: var(--radius-pill);
+  padding: 0.875rem 1.75rem;
+  font-weight: 600;
+  font-size: 0.95rem;
+  transition: all 0.3s var(--ease);
+  position: relative;
+  overflow: hidden;
+  white-space: nowrap;
+  line-height: 1;
+}
+.btn-primary {
+  background: var(--gradient-primary);
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(79, 70, 229, 0.4);
+}
+.btn-primary::after {
+  content: '';
+  position: absolute;
+  top: 0; left: -120%;
+  width: 80%; height: 100%;
+  background: linear-gradient(120deg, transparent, rgba(255,255,255,0.45), transparent);
+  transform: skewX(-20deg);
+  transition: left 0.6s var(--ease);
+}
+.btn-primary:hover { transform: translateY(-2px); box-shadow: 0 10px 28px rgba(79, 70, 229, 0.55); }
+.btn-primary:hover::after { left: 130%; }
+.btn-ghost {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border-strong);
+  color: var(--dark-text);
+  backdrop-filter: blur(12px);
+}
+.btn-ghost:hover { background: var(--glass-bg-hover); border-color: var(--accent-purple); transform: translateY(-2px); }
+.btn-block { width: 100%; }
+.btn-sm { padding: 0.55rem 1.1rem; font-size: 0.85rem; }
+.btn-lg { padding: 1.05rem 2.25rem; font-size: 1.05rem; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ---------- Glass card primitive ---------- */
+.glass {
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-glass);
+}
+.glass-hover { transition: all 0.4s var(--ease); }
+.glass-hover:hover {
+  transform: translateY(-6px);
+  box-shadow: var(--shadow-glow);
+  border-color: rgba(168, 85, 247, 0.4);
+  background: var(--glass-bg-hover);
+}
+
+/* ============================================================
+   HEADER
+   ============================================================ */
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: rgba(30, 27, 75, 0.72);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--glass-border);
+}
+.header-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--header-h);
+  gap: 1.5rem;
+}
+.logo { display: flex; align-items: center; gap: 0.6rem; flex-shrink: 0; }
+.logo svg { width: 38px; height: 38px; }
+.logo-text {
+  font-family: 'Century Gothic', 'Futura', 'Trebuchet MS', system-ui, sans-serif;
+  font-size: 1.12rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  background: var(--gradient-primary);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.main-nav { display: flex; gap: 0.35rem; }
+.main-nav a {
+  padding: 0.5rem 0.95rem;
+  border-radius: var(--radius-pill);
+  font-weight: 500;
+  font-size: 0.95rem;
+  color: var(--dark-text-muted);
+  transition: all 0.25s var(--ease);
+}
+.main-nav a:hover, .main-nav a.active { color: #fff; background: var(--glass-bg); }
+.header-actions { display: flex; align-items: center; gap: 0.4rem; }
+.icon-btn {
+  position: relative;
+  width: 42px; height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-pill);
+  color: var(--dark-text-muted);
+  transition: all 0.25s var(--ease);
+}
+.icon-btn:hover { background: var(--glass-bg); color: #fff; }
+.icon-btn svg { width: 22px; height: 22px; }
+.cart-badge {
+  position: absolute;
+  top: 2px; right: 2px;
+  min-width: 18px; height: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-coral);
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(251,113,133,0.5);
+}
+.hamburger { display: none; }
+
+/* Search overlay */
+.search-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(15, 12, 41, 0.8);
+  backdrop-filter: blur(8px);
+  display: none;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 18vh;
+}
+.search-overlay.open { display: flex; }
+.search-box {
+  width: min(620px, 90vw);
+  display: flex;
+  gap: 0.5rem;
+}
+.search-box input {
+  flex: 1;
+  padding: 1rem 1.4rem;
+  border-radius: var(--radius-pill);
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border-strong);
+  color: #fff;
+  font-size: 1.1rem;
+  backdrop-filter: blur(20px);
+}
+.search-box input:focus { outline: none; border-color: var(--accent-purple); }
+
+/* ============================================================
+   HERO
+   ============================================================ */
+.hero { padding: 5rem 0 4rem; position: relative; overflow: hidden; }
+.hero-grid {
+  display: grid;
+  grid-template-columns: 1.1fr 0.9fr;
+  gap: 3rem;
+  align-items: center;
+}
+.hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 1rem;
+  border-radius: var(--radius-pill);
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border-strong);
+  font-size: 0.85rem;
+  font-weight: 500;
+  margin-bottom: 1.5rem;
+  backdrop-filter: blur(12px);
+}
+.pulse-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--accent-mint);
+  box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.7);
+  animation: pulse 2s infinite;
+}
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.6); }
+  70% { box-shadow: 0 0 0 10px rgba(52, 211, 153, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); }
+}
+.hero h1 {
+  font-size: clamp(2.5rem, 6vw, 4rem);
+  font-weight: 800;
+  margin-bottom: 1.25rem;
+}
+.hero p.lead {
+  font-size: 1.15rem;
+  color: var(--dark-text-muted);
+  max-width: 30rem;
+  margin-bottom: 2rem;
+}
+.hero-cta { display: flex; gap: 1rem; flex-wrap: wrap; }
+
+/* Hero visual: molecule rings + stats card */
+.hero-visual { position: relative; display: flex; justify-content: center; align-items: center; min-height: 420px; }
+.molecule-rings { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+.ring {
+  position: absolute;
+  border-radius: 50%;
+  border: 1.5px dashed rgba(168, 85, 247, 0.35);
+}
+.ring::before {
+  content: '';
+  position: absolute;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: var(--gradient-primary);
+  top: -7px; left: 50%;
+  transform: translateX(-50%);
+  box-shadow: 0 0 14px rgba(168,85,247,0.8);
+}
+.ring-1 { width: 380px; height: 380px; animation: spin 24s linear infinite; }
+.ring-2 { width: 280px; height: 280px; border-color: rgba(251, 113, 133, 0.35); animation: spin 16s linear infinite reverse; }
+.ring-3 { width: 180px; height: 180px; border-color: rgba(6, 182, 212, 0.35); animation: spin 10s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.stats-card {
+  position: relative;
+  z-index: 2;
+  padding: 1.75rem;
+  width: 240px;
+  text-align: center;
+}
+.stats-card .stat { padding: 0.65rem 0; }
+.stats-card .stat + .stat { border-top: 1px solid var(--glass-border); }
+.stats-card .stat-value { font-size: 1.8rem; font-weight: 800; }
+.stats-card .stat-label { font-size: 0.8rem; color: var(--dark-text-faint); text-transform: uppercase; letter-spacing: 0.08em; }
+
+/* ============================================================
+   FEATURES
+   ============================================================ */
+.features-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1.5rem;
+}
+.feature-card { padding: 2rem 1.5rem; text-align: center; }
+.feature-icon {
+  width: 60px; height: 60px;
+  margin: 0 auto 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius);
+  background: var(--gradient-soft);
+  border: 1px solid var(--glass-border-strong);
+}
+.feature-icon svg { width: 30px; height: 30px; color: var(--accent-purple); }
+.feature-card h3 { font-size: 1.15rem; margin-bottom: 0.5rem; }
+.feature-card p { font-size: 0.92rem; color: var(--dark-text-muted); }
+
+/* ============================================================
+   PRODUCT GRID & CARDS
+   ============================================================ */
+.products-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 1.75rem;
+}
+.product-card {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+.product-media {
+  position: relative;
+  background: var(--glass-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem 1rem;
+  min-height: 230px;
+}
+/* photoreal vial = transparent photo + Ever Nova Life label overlay */
+.vial-photo { position: relative; display: inline-block; height: 220px; aspect-ratio: 256 / 595; }
+.vial-photo-img { width: 100%; height: 100%; object-fit: contain; display: block; filter: drop-shadow(0 14px 20px rgba(0,0,0,0.42)); }
+.vial-photo-label { position: absolute; left: 9%; top: 31%; width: 82%; height: 62%; pointer-events: none; }
+.product-media .vial-photo { height: 220px; transition: transform 0.4s var(--ease); }
+.product-card:hover .product-media .vial-photo { transform: translateY(-6px) scale(1.03); }
+.product-badge {
+  position: absolute;
+  top: 0.9rem; left: 0.9rem;
+  padding: 0.3rem 0.75rem;
+  border-radius: var(--radius-pill);
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  background: var(--gradient-primary);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(79,70,229,0.4);
+}
+.product-badge.badge-sale { background: linear-gradient(135deg, #fb7185, #fb923c); }
+.product-badge.badge-new { background: linear-gradient(135deg, #34d399, #06b6d4); }
+.product-info { padding: 1.25rem; display: flex; flex-direction: column; gap: 0.45rem; flex: 1; }
+.product-cat { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--accent-purple); font-weight: 700; }
+.product-name { font-size: 1.12rem; font-weight: 700; }
+.product-name a:hover { color: var(--accent-purple); }
+.product-meta { display: flex; gap: 0.75rem; font-size: 0.8rem; color: var(--dark-text-faint); }
+.product-desc { font-size: 0.88rem; color: var(--dark-text-muted); flex: 1; }
+.product-price-row { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.4rem; }
+.product-price { font-size: 1.35rem; font-weight: 800; }
+.product-price-old { font-size: 0.95rem; color: var(--dark-text-faint); text-decoration: line-through; }
+.product-actions { display: flex; gap: 0.6rem; margin-top: 0.75rem; }
+.product-actions .btn { flex: 1; }
+.stock-pill {
+  display: inline-flex; align-items: center; gap: 0.35rem;
+  font-size: 0.76rem; font-weight: 600;
+}
+.stock-pill::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--accent-mint); }
+.stock-pill.out { color: var(--accent-coral); }
+.stock-pill.out::before { background: var(--accent-coral); }
+
+/* ============================================================
+   CATEGORIES
+   ============================================================ */
+.categories-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.5rem;
+}
+.category-card {
+  padding: 2rem 1.5rem;
+  text-align: center;
+  cursor: pointer;
+}
+.category-emoji { font-size: 2.6rem; margin-bottom: 0.85rem; }
+.category-card h3 { font-size: 1.15rem; margin-bottom: 0.3rem; }
+.category-card p { font-size: 0.85rem; color: var(--dark-text-muted); }
+.category-count { font-size: 0.78rem; color: var(--accent-purple); font-weight: 700; margin-top: 0.5rem; }
+
+/* ============================================================
+   TRUST SECTION
+   ============================================================ */
+.trust-section {
+  background: linear-gradient(135deg, rgba(15,12,41,0.9), rgba(30,27,75,0.9));
+  border-top: 1px solid var(--glass-border);
+  border-bottom: 1px solid var(--glass-border);
+}
+.trust-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1.5rem;
+}
+.trust-item { display: flex; flex-direction: column; align-items: center; gap: 0.65rem; text-align: center; }
+.trust-item svg { width: 38px; height: 38px; color: var(--accent-mint); }
+.trust-item h4 { font-size: 1rem; }
+.trust-item p { font-size: 0.82rem; color: var(--dark-text-muted); }
+
+/* ============================================================
+   NEWSLETTER
+   ============================================================ */
+.newsletter-card {
+  padding: 3rem;
+  text-align: center;
+  background: var(--gradient-soft);
+  border: 1px solid var(--glass-border-strong);
+}
+.newsletter-card h2 { font-size: clamp(1.6rem, 4vw, 2.2rem); margin-bottom: 0.6rem; }
+.newsletter-card p { color: var(--dark-text-muted); margin-bottom: 1.75rem; }
+.newsletter-form {
+  display: flex;
+  gap: 0.5rem;
+  max-width: 480px;
+  margin: 0 auto;
+  background: rgba(0,0,0,0.25);
+  border: 1px solid var(--glass-border-strong);
+  border-radius: var(--radius-pill);
+  padding: 0.4rem;
+}
+.newsletter-form input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  padding: 0.65rem 1.25rem;
+  color: #fff;
+  font-size: 0.95rem;
+}
+.newsletter-form input:focus { outline: none; }
+.newsletter-msg { margin-top: 1rem; font-size: 0.9rem; color: var(--accent-mint); min-height: 1.2em; }
+
+/* ============================================================
+   FOOTER
+   ============================================================ */
+.site-footer {
+  margin-top: 4rem;
+  background: rgba(15, 12, 41, 0.6);
+  border-top: 1px solid var(--glass-border);
+  backdrop-filter: blur(20px);
+}
+.footer-grid {
+  display: grid;
+  grid-template-columns: 1.6fr 1fr 1fr 1fr;
+  gap: 2.5rem;
+  padding: 3.5rem 0 2.5rem;
+}
+.footer-brand .logo { margin-bottom: 1rem; }
+.footer-brand p { font-size: 0.9rem; color: var(--dark-text-muted); max-width: 22rem; }
+.footer-col h4 { font-size: 0.95rem; margin-bottom: 1rem; color: #fff; }
+.footer-col ul { display: flex; flex-direction: column; gap: 0.6rem; }
+.footer-col a { font-size: 0.88rem; color: var(--dark-text-muted); transition: color 0.2s var(--ease); }
+.footer-col a:hover { color: var(--accent-purple); }
+.footer-bottom {
+  border-top: 1px solid var(--glass-border);
+  padding: 1.75rem 0;
+  text-align: center;
+  font-size: 0.82rem;
+  color: var(--dark-text-faint);
+}
+.footer-bottom .disclaimer {
+  max-width: 640px;
+  margin: 0.5rem auto 0;
+  font-size: 0.78rem;
+  color: var(--dark-text-faint);
+  font-style: italic;
+}
+
+/* ============================================================
+   PAGE HEADER (sub pages)
+   ============================================================ */
+.page-head {
+  padding: 3.5rem 0 2.5rem;
+  text-align: center;
+}
+.page-head h1 { font-size: clamp(2rem, 5vw, 3rem); margin-bottom: 0.6rem; }
+.page-head p { color: var(--dark-text-muted); font-size: 1.05rem; max-width: 600px; margin: 0 auto; }
+.breadcrumb { display: flex; gap: 0.5rem; justify-content: center; font-size: 0.85rem; color: var(--dark-text-faint); margin-bottom: 1rem; }
+.breadcrumb a:hover { color: var(--accent-purple); }
+
+/* ============================================================
+   PRODUCTS PAGE (catalog + filters)
+   ============================================================ */
+.catalog-layout {
+  display: grid;
+  grid-template-columns: 250px 1fr;
+  gap: 2rem;
+  align-items: start;
+}
+.filters-sidebar { padding: 1.5rem; position: sticky; top: calc(var(--header-h) + 1rem); }
+.filter-group { margin-bottom: 1.75rem; }
+.filter-group:last-child { margin-bottom: 0; }
+.filter-group h4 { font-size: 0.95rem; margin-bottom: 0.9rem; }
+.filter-option {
+  display: flex; align-items: center; gap: 0.6rem;
+  padding: 0.4rem 0;
+  font-size: 0.9rem; color: var(--dark-text-muted);
+  cursor: pointer;
+}
+.filter-option input { accent-color: var(--accent-purple); width: 16px; height: 16px; }
+.filter-option:hover { color: #fff; }
+.price-range { width: 100%; accent-color: var(--accent-purple); margin-top: 0.5rem; }
+.catalog-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+  flex-wrap: wrap;
+}
+.catalog-toolbar .result-count { color: var(--dark-text-muted); font-size: 0.92rem; }
+.select-field {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border-strong);
+  color: var(--dark-text);
+  padding: 0.6rem 1rem;
+  border-radius: var(--radius-pill);
+  font-size: 0.9rem;
+  backdrop-filter: blur(12px);
+}
+.select-field:focus { outline: none; border-color: var(--accent-purple); }
+.filter-toggle-btn { display: none; }
+
+/* ============================================================
+   PRODUCT DETAIL
+   ============================================================ */
+.product-detail { display: grid; grid-template-columns: 1fr 1fr; gap: 3rem; align-items: start; }
+.product-detail-media {
+  padding: 2.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 460px;
+  position: sticky;
+  top: calc(var(--header-h) + 1rem);
+}
+.product-detail-media .vial-photo { height: 400px; }
+.product-detail-info .product-cat { font-size: 0.8rem; }
+.product-detail-info h1 { font-size: clamp(1.8rem, 4vw, 2.6rem); margin: 0.5rem 0 1rem; }
+.detail-price-row { display: flex; align-items: center; gap: 0.9rem; margin: 1.25rem 0; }
+.detail-price { font-size: 2.2rem; font-weight: 800; }
+.detail-price-old { font-size: 1.2rem; color: var(--dark-text-faint); text-decoration: line-through; }
+.detail-desc { color: var(--dark-text-muted); margin-bottom: 1.75rem; }
+.specs-table { width: 100%; border-collapse: collapse; margin: 1.5rem 0; }
+.specs-table td { padding: 0.7rem 0; border-bottom: 1px solid var(--glass-border); font-size: 0.92rem; }
+.specs-table td:first-child { color: var(--dark-text-faint); width: 45%; }
+.specs-table td:last-child { color: #fff; font-weight: 500; }
+.qty-selector { display: flex; align-items: center; gap: 0.75rem; margin: 1.5rem 0; }
+.qty-control {
+  display: flex; align-items: center;
+  border: 1px solid var(--glass-border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--glass-bg);
+  overflow: hidden;
+}
+.qty-control button { width: 42px; height: 42px; font-size: 1.2rem; color: var(--dark-text); transition: background 0.2s; }
+.qty-control button:hover { background: var(--glass-bg-hover); color: #fff; }
+.qty-control input { width: 48px; text-align: center; background: transparent; border: none; color: #fff; font-size: 1rem; font-weight: 600; }
+.detail-cta { display: flex; gap: 0.75rem; margin-top: 1rem; }
+.detail-cta .btn { flex: 1; }
+.trust-badges-inline { display: flex; gap: 1.25rem; flex-wrap: wrap; margin-top: 1.75rem; padding-top: 1.5rem; border-top: 1px solid var(--glass-border); }
+.trust-badges-inline span { display: flex; align-items: center; gap: 0.4rem; font-size: 0.82rem; color: var(--dark-text-muted); }
+.trust-badges-inline svg { width: 18px; height: 18px; color: var(--accent-mint); }
+
+/* ============================================================
+   CART
+   ============================================================ */
+.cart-layout { display: grid; grid-template-columns: 1fr 360px; gap: 2rem; align-items: start; }
+.cart-items { display: flex; flex-direction: column; gap: 1rem; }
+.cart-row {
+  display: grid;
+  grid-template-columns: 90px 1fr auto;
+  gap: 1.25rem;
+  align-items: center;
+  padding: 1.25rem;
+}
+.cart-row-media {
+  background: linear-gradient(160deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02));
+  border-radius: var(--radius-sm);
+  display: flex; align-items: center; justify-content: center;
+  padding: 0.5rem;
+}
+.cart-row-media .vial-photo { height: 86px; }
+.cart-row-info h4 { font-size: 1.02rem; margin-bottom: 0.25rem; }
+.cart-row-info .product-cat { font-size: 0.72rem; }
+.cart-row-info .cart-price { font-weight: 700; margin-top: 0.35rem; }
+.cart-row-controls { display: flex; flex-direction: column; align-items: flex-end; gap: 0.6rem; }
+.cart-remove { color: var(--dark-text-faint); font-size: 0.82rem; transition: color 0.2s; display: inline-flex; align-items: center; gap: 0.3rem; }
+.cart-remove:hover { color: var(--accent-coral); }
+.order-summary { padding: 1.75rem; position: sticky; top: calc(var(--header-h) + 1rem); }
+.order-summary h3 { font-size: 1.25rem; margin-bottom: 1.25rem; }
+.summary-row { display: flex; justify-content: space-between; padding: 0.55rem 0; font-size: 0.95rem; color: var(--dark-text-muted); }
+.summary-row.total {
+  border-top: 1px solid var(--glass-border);
+  margin-top: 0.75rem; padding-top: 1rem;
+  font-size: 1.25rem; font-weight: 800; color: #fff;
+}
+.summary-note { font-size: 0.8rem; color: var(--dark-text-faint); margin-top: 0.75rem; text-align: center; }
+.empty-state { text-align: center; padding: 4rem 1.5rem; }
+.empty-state .empty-icon { font-size: 3.5rem; margin-bottom: 1rem; }
+.empty-state h3 { font-size: 1.4rem; margin-bottom: 0.5rem; }
+.empty-state p { color: var(--dark-text-muted); margin-bottom: 1.5rem; }
+.promo-row { display: flex; gap: 0.5rem; margin: 1rem 0; }
+.promo-row input {
+  flex: 1; background: var(--glass-bg); border: 1px solid var(--glass-border-strong);
+  border-radius: var(--radius-pill); padding: 0.6rem 1rem; color: #fff; font-size: 0.88rem;
+}
+.promo-row input:focus { outline: none; border-color: var(--accent-purple); }
+
+/* ============================================================
+   FORMS (checkout, contact, auth)
+   ============================================================ */
+.form-card { padding: 2rem; }
+.form-section { margin-bottom: 2rem; }
+.form-section-title { font-size: 1.15rem; margin-bottom: 1.25rem; display: flex; align-items: center; gap: 0.6rem; }
+.form-section-num {
+  width: 28px; height: 28px; border-radius: 50%;
+  background: var(--gradient-primary); color: #fff;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 0.85rem; font-weight: 700;
+}
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.1rem; }
+.form-field { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 1.1rem; }
+.form-field.full { grid-column: 1 / -1; }
+.form-field label { font-size: 0.85rem; font-weight: 500; color: var(--dark-text-muted); }
+.form-field input, .form-field textarea, .form-field select {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border-strong);
+  border-radius: var(--radius-sm);
+  padding: 0.8rem 1rem;
+  color: #fff;
+  font-size: 0.95rem;
+  transition: border-color 0.2s var(--ease);
+  width: 100%;
+}
+.form-field input:focus, .form-field textarea:focus, .form-field select:focus {
+  outline: none; border-color: var(--accent-purple);
+  box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.15);
+}
+.form-field textarea { resize: vertical; min-height: 120px; }
+.form-field option { background: var(--dark-bg); color: #fff; }
+.form-hint { font-size: 0.78rem; color: var(--dark-text-faint); }
+.checkout-layout { display: grid; grid-template-columns: 1fr 360px; gap: 2rem; align-items: start; }
+.form-msg { font-size: 0.9rem; margin-top: 1rem; min-height: 1.2em; }
+.form-msg.success { color: var(--accent-mint); }
+.form-msg.error { color: var(--accent-coral); }
+
+/* Braintree Drop-in (cards / PayPal / Venmo) renders its own themed UI */
+#dropin-container { margin-top: 0.5rem; }
+
+/* Auth pages */
+.auth-wrap { display: flex; align-items: center; justify-content: center; min-height: calc(100vh - var(--header-h) - 200px); padding: 3rem 1.5rem; }
+.auth-card { width: 100%; max-width: 440px; padding: 2.5rem; }
+.auth-card h1 { font-size: 1.8rem; margin-bottom: 0.4rem; text-align: center; }
+.auth-card .sub { text-align: center; color: var(--dark-text-muted); margin-bottom: 2rem; font-size: 0.92rem; }
+.oauth-btn {
+  display: flex; align-items: center; justify-content: center; gap: 0.75rem;
+  width: 100%; padding: 0.8rem;
+  border-radius: var(--radius-pill);
+  background: #fff; color: #1f2937; font-weight: 600;
+  transition: transform 0.2s var(--ease), box-shadow 0.2s;
+}
+.oauth-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(0,0,0,0.3); }
+.oauth-btn svg { width: 20px; height: 20px; }
+.divider { display: flex; align-items: center; gap: 1rem; margin: 1.5rem 0; color: var(--dark-text-faint); font-size: 0.82rem; }
+.divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: var(--glass-border); }
+.auth-foot { text-align: center; margin-top: 1.5rem; font-size: 0.9rem; color: var(--dark-text-muted); }
+.auth-foot a { color: var(--accent-purple); font-weight: 600; }
+.form-check { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: var(--dark-text-muted); }
+.form-check input { accent-color: var(--accent-purple); width: 16px; height: 16px; }
+.form-row-between { display: flex; align-items: center; justify-content: space-between; margin: 1rem 0; }
+
+/* ============================================================
+   ACCOUNT DASHBOARD
+   ============================================================ */
+.account-layout { display: grid; grid-template-columns: 240px 1fr; gap: 2rem; align-items: start; }
+.account-nav { padding: 1.25rem; }
+.account-nav a {
+  display: flex; align-items: center; gap: 0.7rem;
+  padding: 0.7rem 0.9rem; border-radius: var(--radius-sm);
+  color: var(--dark-text-muted); font-size: 0.92rem; font-weight: 500;
+  transition: all 0.2s var(--ease);
+}
+.account-nav a:hover, .account-nav a.active { background: var(--glass-bg); color: #fff; }
+.account-nav a svg { width: 18px; height: 18px; }
+.account-card { padding: 1.75rem; margin-bottom: 1.5rem; }
+.account-greeting { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; }
+.avatar {
+  width: 56px; height: 56px; border-radius: 50%;
+  background: var(--gradient-primary); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.4rem; font-weight: 700;
+}
+.stat-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-bottom: 1.5rem; }
+.stat-tile { padding: 1.25rem; text-align: center; }
+.stat-tile .num { font-size: 1.8rem; font-weight: 800; }
+.stat-tile .lbl { font-size: 0.8rem; color: var(--dark-text-faint); }
+.order-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 1rem 0; border-bottom: 1px solid var(--glass-border); font-size: 0.9rem;
+}
+.order-row:last-child { border-bottom: none; }
+.order-status { padding: 0.25rem 0.7rem; border-radius: var(--radius-pill); font-size: 0.72rem; font-weight: 700; }
+.order-status.delivered { background: rgba(52,211,153,0.18); color: var(--accent-mint); }
+.order-status.shipped { background: rgba(6,182,212,0.18); color: var(--accent-cyan); }
+.order-status.processing { background: rgba(251,146,60,0.18); color: var(--accent-amber); }
+
+/* ============================================================
+   FAQ ACCORDION
+   ============================================================ */
+.faq-list { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 1rem; }
+.faq-item { overflow: hidden; }
+.faq-q {
+  width: 100%; text-align: left;
+  padding: 1.25rem 1.5rem;
+  display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  font-size: 1.02rem; font-weight: 600; color: #fff;
+}
+.faq-q .chevron { transition: transform 0.3s var(--ease); flex-shrink: 0; }
+.faq-q svg { width: 20px; height: 20px; color: var(--accent-purple); }
+.faq-item.open .chevron { transform: rotate(180deg); }
+.faq-a {
+  max-height: 0; overflow: hidden;
+  transition: max-height 0.35s var(--ease), padding 0.35s var(--ease);
+  padding: 0 1.5rem;
+  color: var(--dark-text-muted);
+  font-size: 0.94rem;
+}
+.faq-item.open .faq-a { max-height: 400px; padding: 0 1.5rem 1.4rem; }
+
+/* ============================================================
+   STATIC CONTENT (legal, about, shipping)
+   ============================================================ */
+.content-card { padding: 2.5rem; max-width: 860px; margin: 0 auto; }
+.content-card h2 { font-size: 1.4rem; margin: 2rem 0 0.75rem; }
+.content-card h2:first-child { margin-top: 0; }
+.content-card h3 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; }
+.content-card p { color: var(--dark-text-muted); margin-bottom: 1rem; }
+.content-card ul.bullets { margin: 0 0 1rem 1.25rem; list-style: disc; color: var(--dark-text-muted); }
+.content-card ul.bullets li { margin-bottom: 0.5rem; }
+.content-card .updated { font-size: 0.82rem; color: var(--dark-text-faint); margin-bottom: 2rem; }
+.about-stats { display: grid; grid-template-columns: repeat(4,1fr); gap: 1.5rem; margin: 2.5rem 0; }
+.about-stat { text-align: center; padding: 1.5rem; }
+.about-stat .num { font-size: 2.2rem; font-weight: 800; }
+.about-stat .lbl { font-size: 0.85rem; color: var(--dark-text-muted); }
+.value-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 1.5rem; }
+.value-card { padding: 1.75rem; }
+.value-card .v-icon { font-size: 2rem; margin-bottom: 0.75rem; }
+.value-card h3 { margin-bottom: 0.5rem; }
+.value-card p { font-size: 0.9rem; color: var(--dark-text-muted); }
+
+/* Shipping table */
+.rate-table { width: 100%; border-collapse: collapse; margin: 1.5rem 0; }
+.rate-table th, .rate-table td { padding: 0.9rem 1rem; text-align: left; border-bottom: 1px solid var(--glass-border); font-size: 0.92rem; }
+.rate-table th { color: #fff; font-weight: 700; background: var(--glass-bg); }
+.rate-table td { color: var(--dark-text-muted); }
+.rate-table tr:hover td { background: rgba(255,255,255,0.02); }
+
+/* Contact */
+.contact-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 2.5rem; align-items: start; }
+.contact-info-item { display: flex; gap: 1rem; margin-bottom: 1.75rem; }
+.contact-info-item .ci-icon {
+  width: 48px; height: 48px; flex-shrink: 0;
+  border-radius: var(--radius); background: var(--gradient-soft);
+  border: 1px solid var(--glass-border-strong);
+  display: flex; align-items: center; justify-content: center;
+}
+.contact-info-item .ci-icon svg { width: 22px; height: 22px; color: var(--accent-purple); }
+.contact-info-item h4 { font-size: 1rem; margin-bottom: 0.2rem; }
+.contact-info-item p { font-size: 0.9rem; color: var(--dark-text-muted); }
+
+/* ============================================================
+   TOAST NOTIFICATION
+   ============================================================ */
+.toast {
+  position: fixed;
+  bottom: 1.5rem; right: 1.5rem;
+  z-index: 999;
+  display: flex; align-items: center; gap: 0.75rem;
+  padding: 1rem 1.4rem;
+  border-radius: var(--radius);
+  background: linear-gradient(135deg, #059669, #34d399);
+  color: #fff;
+  font-weight: 600; font-size: 0.92rem;
+  box-shadow: 0 12px 30px rgba(5,150,105,0.4);
+  transform: translateX(calc(100% + 2rem));
+  transition: transform 0.45s var(--ease);
+  max-width: 340px;
+}
+.toast.show { transform: translateX(0); }
+.toast svg { width: 22px; height: 22px; flex-shrink: 0; }
+
+/* ============================================================
+   LABELS GALLERY (labels.html)
+   ============================================================ */
+.label-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 2rem; }
+.label-demo-card { padding: 1.5rem; }
+.label-demo-card h3 { font-size: 1.05rem; margin-bottom: 0.3rem; }
+.label-demo-card .label-spec { font-size: 0.8rem; color: var(--dark-text-faint); margin-bottom: 1.25rem; }
+.label-canvas {
+  background: #fff;
+  border-radius: var(--radius-sm);
+  padding: 1rem;
+  display: flex; align-items: center; justify-content: center;
+  min-height: 150px;
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,0.1);
+}
+
+/* ============================================================
+   WISHLIST — heart button on cards + header icon
+   ============================================================ */
+.wish-btn {
+  position: absolute;
+  top: 0.7rem; right: 0.7rem;
+  z-index: 3;
+  width: 36px; height: 36px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-pill);
+  background: rgba(15, 12, 41, 0.55);
+  border: 1px solid var(--glass-border-strong);
+  backdrop-filter: blur(8px);
+  color: var(--dark-text-muted);
+  transition: all 0.25s var(--ease);
+}
+.wish-btn svg { width: 18px; height: 18px; transition: transform 0.25s var(--ease); }
+.wish-btn:hover { color: var(--accent-coral); transform: scale(1.08); border-color: var(--accent-coral); }
+.wish-btn.active { color: var(--accent-coral); }
+.wish-btn.active svg { fill: var(--accent-coral); }
+.wishlist-badge {
+  position: absolute; top: 2px; right: 2px;
+  min-width: 18px; height: 18px; padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-purple); color: #fff;
+  font-size: 0.7rem; font-weight: 700;
+  display: none; align-items: center; justify-content: center;
+  box-shadow: 0 2px 6px rgba(168,85,247,0.5);
+}
+
+/* ============================================================
+   MINI-CART DROPDOWN (header)
+   ============================================================ */
+.mini-cart-wrap { position: relative; display: inline-flex; }
+.mini-cart {
+  position: absolute;
+  top: calc(100% + 10px); right: 0;
+  width: 320px; max-width: 90vw;
+  padding: 1rem;
+  opacity: 0; visibility: hidden; transform: translateY(-8px);
+  transition: opacity 0.22s var(--ease), transform 0.22s var(--ease), visibility 0.22s;
+  z-index: 120;
+}
+.mini-cart-wrap.open .mini-cart { opacity: 1; visibility: visible; transform: translateY(0); }
+.mini-cart-items { max-height: 280px; overflow-y: auto; display: flex; flex-direction: column; gap: 0.5rem; }
+.mini-cart-row {
+  display: flex; align-items: center; gap: 0.75rem;
+  padding: 0.5rem; border-radius: var(--radius-sm);
+  transition: background 0.2s var(--ease);
+}
+.mini-cart-row:hover { background: var(--glass-bg-hover); }
+.mini-cart-thumb {
+  width: 44px; height: 44px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(160deg, rgba(255,255,255,0.07), rgba(255,255,255,0.02));
+  border-radius: var(--radius-sm); overflow: hidden;
+}
+.mini-cart-thumb .vial-photo { height: 48px; }
+.mini-cart-info { display: flex; flex-direction: column; min-width: 0; }
+.mini-cart-info strong { font-size: 0.85rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mini-cart-info small { font-size: 0.78rem; color: var(--dark-text-faint); }
+.mini-cart-foot { border-top: 1px solid var(--glass-border); margin-top: 0.75rem; padding-top: 0.75rem; }
+.mini-cart-subtotal { display: flex; justify-content: space-between; font-weight: 700; margin-bottom: 0.6rem; font-size: 0.95rem; }
+.mini-cart-empty { text-align: center; color: var(--dark-text-muted); padding: 0.75rem 0 1rem; font-size: 0.9rem; }
+
+/* ============================================================
+   FORM VALIDATION states
+   ============================================================ */
+.form-field.invalid input,
+.form-field.invalid select,
+.form-field.invalid textarea {
+  border-color: var(--accent-coral) !important;
+  box-shadow: 0 0 0 3px rgba(251, 113, 133, 0.15);
+}
+.field-error { font-size: 0.78rem; color: var(--accent-coral); margin-top: 0.1rem; }
+.form-check.invalid { color: var(--accent-coral); }
+.form-check.invalid input { outline: 2px solid var(--accent-coral); outline-offset: 2px; }
+
+/* ============================================================
+   PERFORMANCE — glassmorphism is GPU-heavy (ui-ux-pro-max ⚠).
+   Lighten blur + drop fixed bg on small screens; degrade
+   gracefully where backdrop-filter is unsupported.
+   ============================================================ */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass, .site-header, .stats-card, .newsletter-card, .mini-cart { background: rgba(30, 27, 75, 0.92); }
+}
+@media (max-width: 768px) {
+  body { background-attachment: scroll; }
+  .glass, .glass-hover { backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+  .site-header { backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+  .wish-btn { backdrop-filter: none; -webkit-backdrop-filter: none; }
+}
+
+/* ============================================================
+   ACCESSIBILITY  (surfaced by ui-ux-pro-max quality checklist)
+   ============================================================ */
+/* Visible keyboard focus — never trap keyboard users on glass */
+:focus-visible {
+  outline: 2px solid #c4b5fd;
+  outline-offset: 2px;
+}
+a:focus-visible, .btn:focus-visible, .icon-btn:focus-visible,
+button:focus-visible, .faq-q:focus-visible {
+  outline: 2px solid #c4b5fd;
+  outline-offset: 3px;
+  border-radius: var(--radius-pill);
+}
+input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--accent-purple);
+  outline-offset: 1px;
+}
+/* Respect users who ask for less motion: kill the rings, pulse, shine, etc. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+  .ring-1, .ring-2, .ring-3, .pulse-dot { animation: none !important; }
+  .btn-primary:hover::after { transition: none !important; }
+}
+
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
+@media (max-width: 1024px) {
+  .features-grid { grid-template-columns: repeat(2, 1fr); }
+  .trust-grid { grid-template-columns: repeat(2, 1fr); }
+  .footer-grid { grid-template-columns: 1fr 1fr; gap: 2rem; }
+  .hero-grid { grid-template-columns: 1fr; }
+  .hero-visual { min-height: 340px; }
+  .catalog-layout { grid-template-columns: 1fr; }
+  .filters-sidebar { position: static; }
+  .filter-toggle-btn { display: inline-flex; }
+  .filters-sidebar.collapsed { display: none; }
+  .product-detail { grid-template-columns: 1fr; gap: 2rem; }
+  .product-detail-media { position: static; min-height: auto; }
+  /* once stacked, the bottle's mirror reflection (no layout height) bled past
+     the media panel and overlapped the title/badges below — drop it here.
+     Extra selector specificity so this beats the base reflection rule that
+     is defined later in the file. */
+  .product-detail .product-detail-media .vial-photo { -webkit-box-reflect: none; }
+  .cart-layout { grid-template-columns: 1fr; }
+  .checkout-layout { grid-template-columns: 1fr; }
+  .order-summary { position: static; }
+  .account-layout { grid-template-columns: 1fr; }
+  .about-stats { grid-template-columns: repeat(2,1fr); }
+}
+
+@media (max-width: 768px) {
+  .main-nav { display: none; }
+  .hamburger {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 42px; height: 42px; border-radius: var(--radius-pill); color: var(--dark-text-muted);
+  }
+  .hamburger:hover { background: var(--glass-bg); color: #fff; }
+  .main-nav.mobile-open {
+    display: flex; flex-direction: column;
+    position: absolute; top: var(--header-h); left: 0; right: 0;
+    background: rgba(30, 27, 75, 0.97);
+    backdrop-filter: blur(20px);
+    padding: 1rem 1.5rem;
+    gap: 0.25rem;
+    border-bottom: 1px solid var(--glass-border);
+  }
+  .categories-grid { grid-template-columns: repeat(2, 1fr); }
+  .value-grid { grid-template-columns: 1fr; }
+  .contact-layout { grid-template-columns: 1fr; }
+  .form-grid { grid-template-columns: 1fr; }
+  .section { padding: 3.5rem 0; }
+  .newsletter-card { padding: 2rem 1.5rem; }
+  .content-card { padding: 1.75rem; }
+}
+
+@media (max-width: 480px) {
+  .container { padding: 0 1rem; }
+  .features-grid, .trust-grid, .categories-grid, .footer-grid, .about-stats, .stat-tiles { grid-template-columns: 1fr; }
+  .hero-cta { flex-direction: column; }
+  .hero-cta .btn { width: 100%; }
+  .newsletter-form { flex-direction: column; border-radius: var(--radius); background: transparent; border: none; padding: 0; gap: 0.6rem; }
+  .newsletter-form input { background: var(--glass-bg); border: 1px solid var(--glass-border-strong); border-radius: var(--radius-pill); }
+  .cart-row { grid-template-columns: 70px 1fr; }
+  .cart-row-controls { grid-column: 1 / -1; flex-direction: row; justify-content: space-between; }
+  .logo-text { font-size: 0.92rem; letter-spacing: 0.12em; }
+  .detail-cta { flex-direction: column; }
+}
+
+/* ============================================================
+   PRODUCT SHOWCASE — "SPOTLIGHT PEDESTAL"
+   (designed via ui-ux-pro-max + multi-agent design workflow)
+   brand halo + key light + vignette behind the bottle · breathing
+   contact shadow · dual drop-shadow · gentle float · webkit mirror
+   reflection · hover glow-ring (+focus-within) · mobile/reduced-motion safe.
+   Scoped to .product-media / .product-detail-media so cart & mini-cart
+   thumbnails stay flat and cheap.
+   ============================================================ */
+
+/* ---- Stage: brand spotlight + top-down key light + lower vignette over the original tint ---- */
+.product-media{
+  /* neutral stage — no purple wash; faint top light + soft dark floor vignette */
+  background:
+    radial-gradient(80% 55% at 50% -4%, rgba(255,255,255,0.09), transparent 70%),
+    radial-gradient(150% 120% at 50% 122%, rgba(8,6,24,0.42), transparent 70%),
+    var(--glass-bg);
+  overflow:hidden;
+  isolation:isolate;
+  border-radius:var(--radius) var(--radius) 0 0;
+  transition:background .4s var(--ease);
+}
+
+/* keep brand label + badge ABOVE the glow at all times (base CSS gives badge no z-index) */
+.product-media .vial-photo-label{ z-index:3; }
+.product-media .product-badge{ z-index:4; }
+
+/* --- ::before = soft brand halo (BEHIND the bottle) --- */
+.product-media::before{
+  content:"";
+  position:absolute; z-index:0;
+  left:50%; top:24%;
+  width:60%; height:120px;
+  transform:translate(-50%,-50%);
+  border-radius:50%;
+  background:none;                 /* purple cap-halo removed */
+  display:none;
+  filter:blur(6px);
+  opacity:0.9;
+  pointer-events:none;
+  transition:opacity .35s var(--ease), transform .35s var(--ease);
+}
+
+/* --- ::after = crisp elliptical contact shadow; breathes with the float, tightens on hover --- */
+.product-media::after{
+  content:"";
+  position:absolute; z-index:1;
+  left:50%; bottom:11%;
+  width:54%; height:24px;
+  transform:translateX(-50%) scaleX(1);
+  border-radius:50%;
+  background:radial-gradient(closest-side,
+    rgba(0,0,0,0.55), rgba(0,0,0,0.28) 55%, transparent 78%);
+  filter:blur(4px);
+  opacity:0.9;
+  pointer-events:none;
+  animation:pn-ground 6s ease-in-out infinite;
+  will-change:transform, opacity;
+  transition:width .35s var(--ease), opacity .35s var(--ease), filter .35s var(--ease);
+}
+
+/* --- The HERO: above glow & shadow, gentle float, dual depth shadow, webkit mirror reflection --- */
+.product-media .vial-photo{
+  position:relative; z-index:2;
+  animation:pn-float 6s ease-in-out infinite;
+  will-change:transform;
+  -webkit-box-reflect:below 4px linear-gradient(transparent 62%, rgba(0,0,0,0.16));
+}
+.product-media .vial-photo .vial-photo-img{
+  filter:drop-shadow(0 16px 22px rgba(0,0,0,0.48));
+  transition:filter .4s var(--ease);
+}
+
+/* ---- HOVER / FOCUS-WITHIN — light blooms, glow ring ignites, shadow tightens ---- */
+.product-card:hover .product-media,
+.product-card:focus-within .product-media{
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,0.14),
+             inset 0 0 26px 0 rgba(255,255,255,0.06);
+}
+.product-card:hover .product-media::before,
+.product-card:focus-within .product-media::before{
+  opacity:1; transform:translate(-50%,-54%) scale(1.06);
+}
+.product-card:hover .product-media::after,
+.product-card:focus-within .product-media::after{
+  animation-play-state:paused;
+  width:46%; opacity:0.85; filter:blur(5px);
+}
+.product-card:hover .product-media .vial-photo,
+.product-card:focus-within .product-media .vial-photo{
+  animation-play-state:paused;
+}
+.product-card:hover .product-media .vial-photo .vial-photo-img,
+.product-card:focus-within .product-media .vial-photo .vial-photo-img{
+  filter:drop-shadow(0 22px 30px rgba(0,0,0,0.58));
+}
+
+/* ---- KEYFRAMES — translateY-only float + synced breathing ground shadow ---- */
+@keyframes pn-float{
+  0%,100%{ transform:translateY(0); }
+  50%    { transform:translateY(-7px); }
+}
+@keyframes pn-ground{
+  0%,100%{ transform:translateX(-50%) scaleX(1);    opacity:0.90; }
+  50%    { transform:translateX(-50%) scaleX(0.82); opacity:0.60; }
+}
+
+/* ---- DETAIL PAGE — same language, scaled up ---- */
+/* (1) STAGE CARD — vignette + top key wash + cursor-follow spotlight baked into the
+   card background (over the glass tint); --mx/--my default to the top-center key origin. */
+.product-detail-media{
+  position:relative;
+  overflow:hidden;
+  isolation:isolate;
+  --pn-tx:0deg; --pn-ty:0deg;
+  --mx:50%; --my:34%;
+  perspective:900px;
+  /* no purple panel behind the bottle — let it float cleanly on the page */
+  background:transparent;
+  border:none;
+  box-shadow:none;
+  backdrop-filter:none;
+  -webkit-backdrop-filter:none;
+}
+/* (2) ::before — formerly the blob -> a TIGHT FLOOR LIGHT-POOL at the base */
+.product-detail-media::before{
+  content:""; position:absolute; z-index:0;
+  left:50%; bottom:34px;
+  width:46%; height:120px;
+  transform:translateX(-50%);
+  background:radial-gradient(50% 100% at 50% 100%,
+    rgba(255,255,255,0.12) 0%,
+    rgba(255,255,255,0.05) 42%,
+    transparent 74%);
+  filter:blur(7px);
+  opacity:0.9;
+  pointer-events:none;
+  transition:width .3s var(--ease), opacity .3s var(--ease), filter .3s var(--ease);
+}
+/* (3) ::after — refined breathing contact shadow */
+.product-detail-media::after{
+  content:""; position:absolute; z-index:1;
+  left:50%; bottom:26px; width:42%; height:30px;
+  transform:translateX(-50%) scaleX(1);
+  border-radius:50%;
+  background:radial-gradient(closest-side,
+    rgba(0,0,0,0.55), rgba(0,0,0,0.28) 52%, transparent 80%);
+  filter:blur(7px);
+  opacity:0.9;
+  pointer-events:none;
+  animation:pn-ground 7s ease-in-out infinite;
+  will-change:transform, opacity;
+  transition:width .3s var(--ease), opacity .3s var(--ease), filter .3s var(--ease);
+}
+/* (4) HERO wrapper — float + reflection (unchanged) */
+.product-detail-media .vial-photo{
+  position:relative; z-index:2;
+  animation:pn-float 7s ease-in-out infinite;
+  will-change:transform;
+  -webkit-box-reflect:below 6px linear-gradient(transparent 60%, rgba(0,0,0,0.18));
+}
+/* (5) SILHOUETTE RIM-GLOW on the inner img (depth kept + indigo rim + warm-white key) */
+.product-detail-media .vial-photo .vial-photo-img{
+  filter:drop-shadow(0 18px 26px rgba(0,0,0,0.5));
+  transition:filter .3s var(--ease);
+}
+/* ---- HOVER — rim saturates + swells, floor pool blooms, vignette deepens, shadow tightens ---- */
+.product-detail-media:hover::before{
+  width:54%; opacity:1; filter:blur(8px);
+}
+.product-detail-media:hover::after{
+  animation-play-state:paused;
+  width:36%; opacity:0.92; filter:blur(6px);
+}
+.product-detail-media:hover .vial-photo .vial-photo-img{
+  filter:drop-shadow(0 24px 32px rgba(0,0,0,0.58));
+}
+
+/* ============================================================
+   HOVER LIFE — glossy SHEEN sweep + springy cursor-follow tilt
+   (harmonizes with the Spotlight Pedestal halo bloom)
+   · sheen = diagonal light streak clipped to the bottle box,
+     fired on hover/focus, sitting UNDER the brand label (z3)/badge (z4)
+   · tilt = JS writes --pn-tx/--pn-ty (deg) on .product-media;
+     consumed only while the float is paused (hover/focus) so it
+     never fights pn-float. GPU-cheap (transform/opacity only).
+   ============================================================ */
+
+/* tilt defaults — 0deg until JS pointermove writes them; springy reset via transition */
+.product-media{ --pn-tx:0deg; --pn-ty:0deg; }
+
+/* --- glossy sheen streak, clipped to the bottle bounding box --- */
+.product-media .vial-photo::after{
+  content:"";
+  position:absolute; z-index:2;            /* above bottle img, below label(3)/badge(4) */
+  inset:0;
+  pointer-events:none;
+  border-radius:14px;
+  background:linear-gradient(105deg,
+    transparent 38%,
+    rgba(255,255,255,0.10) 46%,
+    rgba(255,255,255,0.42) 50%,
+    rgba(168,85,247,0.22) 54%,
+    transparent 62%);
+  background-size:260% 100%;
+  background-position:160% 0;               /* parked off to the right */
+  opacity:0;
+  mix-blend-mode:screen;
+  will-change:background-position, opacity;
+}
+/* fire the sweep on hover / keyboard focus (touch :active handled below) */
+.product-card:hover  .product-media .vial-photo::after,
+.product-card:focus-within .product-media .vial-photo::after,
+.product-media .vial-photo:active::after{
+  opacity:1;
+  background-position:-60% 0;
+  transition:background-position .62s var(--ease), opacity .2s var(--ease);
+}
+
+/* --- springy cursor-follow tilt --- applied on the HERO while float is paused */
+.product-card:hover .product-media .vial-photo,
+.product-card:focus-within .product-media .vial-photo{
+  transform:translateY(-7px) scale(1.035)
+            rotateX(var(--pn-ty)) rotateY(var(--pn-tx)) !important;
+  transition:transform .18s var(--ease);    /* snappy follow + springy reset */
+}
+/* perspective so the small rotateX/Y reads as depth, not skew */
+.product-media{ perspective:620px; }
+
+/* detail-page sheen (vial is NOT a link → full sweep on hover AND click) */
+.product-detail-media .vial-photo::after{
+  content:"";
+  position:absolute; z-index:2;
+  inset:0; pointer-events:none; border-radius:18px;
+  background:linear-gradient(105deg,
+    transparent 38%,
+    rgba(255,255,255,0.10) 46%,
+    rgba(255,255,255,0.40) 50%,
+    rgba(255,255,255,0.18) 54%,
+    transparent 62%);
+  background-size:260% 100%;
+  background-position:160% 0;
+  opacity:0; mix-blend-mode:screen;
+  will-change:background-position, opacity;
+}
+.product-detail-media:hover .vial-photo::after,
+.product-detail-media .vial-photo:active::after{
+  opacity:1;
+  background-position:-60% 0;
+  transition:background-position .68s var(--ease), opacity .2s var(--ease);
+}
+
+/* keep the detail brand label ABOVE the sheen streak (sheen is z2) */
+.product-detail-media .vial-photo-label{ position:absolute; z-index:3; }
+
+/* detail-page tilt — same vars, float paused on hover so transform wins */
+.product-detail-media{ --pn-tx:0deg; --pn-ty:0deg; perspective:900px; }
+.product-detail-media:hover .vial-photo{
+  animation-play-state:paused;
+  transform:translateY(-6px) rotateX(var(--pn-ty)) rotateY(var(--pn-tx)) !important;
+  transition:transform .18s var(--ease);
+}
+
+/* ---- reduced-motion: explicitly null the float/breathing (global rule only clamps duration) ---- */
+@media (prefers-reduced-motion: reduce){
+  .product-media .vial-photo,
+  .product-media::after,
+  .product-detail-media .vial-photo{ animation:none !important; }
+  /* HOVER LIFE: no sheen travel, no tilt — keep a flat opacity tick only */
+  .product-media .vial-photo::after,
+  .product-detail-media .vial-photo::after{ transition:opacity .001ms; background-position:-60% 0; }
+  .product-card:hover .product-media .vial-photo,
+  .product-card:focus-within .product-media .vial-photo{
+    transform:translateY(-6px) scale(1.03); transition:none;
+  }
+  .product-detail-media:hover .vial-photo{
+    transform:translateY(-6px); transition:none;
+  }
+}
+
+/* ---- mobile: drop float + reflection + breathing shadow; single drop-shadow (cheap on many cards) ---- */
+@media (max-width: 640px){
+  .product-media .vial-photo,
+  .product-media::after,
+  .product-detail-media .vial-photo{ animation:none; }
+  .product-media .vial-photo,
+  .product-detail-media .vial-photo{ -webkit-box-reflect:none; }
+  .product-media .vial-photo .vial-photo-img,
+  .product-detail-media .vial-photo .vial-photo-img{
+    filter:drop-shadow(0 12px 18px rgba(0,0,0,0.44));
+  }
+  /* HOVER LIFE on touch: no cursor → no tilt; keep the tap sheen flash only */
+  .product-card:hover .product-media .vial-photo,
+  .product-card:focus-within .product-media .vial-photo{
+    transform:translateY(-6px) scale(1.03);
+  }
+}
+
+/* ============================================================
+   CLICK / TAP CELEBRATION — ADD-TO-CART & WISHLIST
+   (harmonizes with the Spotlight Pedestal stage)
+   · Add-to-Cart: button press + bottle "pop/jump" + brand-gradient
+     fly-to-cart chip + cart-badge "catch" bump
+   · Wishlist: heart pop + radiating brand ring on SAVE
+   GPU-cheap (transform/opacity only) · touch-safe (:active) ·
+   reduced-motion gated (global rule only clamps duration, never nulls).
+   ============================================================ */
+
+/* ---- Add-to-Cart button: tactile press (fires on tap, not just hover) ---- */
+.btn-primary:active{ transform:translateY(0) scale(0.96); box-shadow:0 3px 10px rgba(79,70,229,0.45); }
+
+/* ---- Bottle "pop/jump" — animate the IMG, NOT .vial-photo (which owns
+        pn-float + the hover tilt). Child transform composes on top of the
+        parent float/tilt and never disturbs the reflection or label. ---- */
+.product-media .vial-photo .vial-photo-img.pn-pop,
+.product-detail-media .vial-photo .vial-photo-img.pn-pop{
+  animation:pn-cart-pop .42s var(--ease);
+  will-change:transform;
+}
+@keyframes pn-cart-pop{
+  0%  { transform:translateY(0)     scale(1); }
+  28% { transform:translateY(-14px) scale(1.06,0.96); }
+  55% { transform:translateY(2px)   scale(0.98,1.03); }
+  78% { transform:translateY(-3px)  scale(1.01,0.99); }
+  100%{ transform:translateY(0)     scale(1); }
+}
+
+/* ---- Fly-to-cart chip — brand-gradient pellet that arcs to the cart icon.
+        JS writes the --fly-* custom props (start / mid-arc / end positions). ---- */
+.pn-fly-chip{
+  position:fixed;
+  left:0; top:0;
+  width:18px; height:18px;
+  border-radius:50%;
+  background:var(--gradient-primary);
+  box-shadow:0 6px 16px rgba(124,99,255,0.55), inset 0 0 0 1px rgba(255,255,255,0.18);
+  z-index:2147483000;            /* above header / toast */
+  pointer-events:none;
+  will-change:transform, opacity;
+  transform:translate(var(--fly-x0), var(--fly-y0)) scale(1);
+  animation:pn-fly-to-cart .52s cubic-bezier(.55,.06,.62,.99) forwards;
+}
+@keyframes pn-fly-to-cart{
+  0%  { transform:translate(var(--fly-x0), var(--fly-y0)) scale(1);    opacity:1; }
+  20% { opacity:1; }
+  60% { transform:translate(var(--fly-xm), var(--fly-ym)) scale(0.8);  opacity:1; }   /* arc apex */
+  100%{ transform:translate(var(--fly-x1), var(--fly-y1)) scale(0.28); opacity:0.2; }
+}
+
+/* ---- Cart badge "catch" bump when the chip lands ---- */
+.cart-badge.pn-bump{ animation:pn-badge-bump .34s var(--ease); }
+@keyframes pn-badge-bump{
+  0%  { transform:scale(1); }
+  40% { transform:scale(1.45); }
+  70% { transform:scale(0.92); }
+  100%{ transform:scale(1); }
+}
+
+/* ---- Wishlist heart: pop the icon + radiate a brand ring on SAVE ---- */
+.wish-btn.pn-burst svg{ animation:pn-heart-pop .4s var(--ease); }
+@keyframes pn-heart-pop{
+  0%  { transform:scale(1); }
+  30% { transform:scale(0.7); }
+  60% { transform:scale(1.3); }
+  100%{ transform:scale(1); }
+}
+/* radiating ring via ::before — .wish-btn is already position:absolute, so it
+   is its own containing block; ring is centered and never shifts layout ---- */
+.wish-btn.pn-burst::before{
+  content:"";
+  position:absolute;
+  left:50%; top:50%;
+  width:36px; height:36px;
+  border-radius:50%;
+  border:2px solid var(--accent-coral);
+  transform:translate(-50%,-50%) scale(0.4);
+  opacity:0.9;
+  pointer-events:none;
+  animation:pn-heart-ring .45s var(--ease) forwards;
+}
+@keyframes pn-heart-ring{
+  0%  { transform:translate(-50%,-50%) scale(0.4); opacity:0.9; }
+  100%{ transform:translate(-50%,-50%) scale(1.9); opacity:0; }
+}
+
+/* ---- reduced-motion: null the celebration keyframes outright (global rule
+        only clamps duration to .001ms, which would flash them) ---- */
+@media (prefers-reduced-motion: reduce){
+  .product-media .vial-photo .vial-photo-img.pn-pop,
+  .product-detail-media .vial-photo .vial-photo-img.pn-pop,
+  .cart-badge.pn-bump,
+  .wish-btn.pn-burst svg,
+  .wish-btn.pn-burst::before{ animation:none !important; }
+  .pn-fly-chip{ display:none !important; }
+}
+
+/* ============================================================
+   PRESS / CLICK FEEDBACK  (completes the Spotlight Pedestal set)
+   1) instant :active press on the card vial + every .btn + heart
+      (tap-safe; shows during mousedown before a card-vial link
+       navigates, so it never blocks navigation)
+   2) re-triggerable click-to-play "poke" (wobble + shine) on the
+      large NON-LINK detail-page vial
+   transform/opacity only · never touches .vial-photo-label /
+   .product-badge · presses the INNER .vial-photo-img so the
+   transform-based pn-float on the wrapper is never disturbed ·
+   the shine uses .vial-photo::before (Set 1 owns ::after).
+   ============================================================ */
+
+/* ---- 1a) CARD VIAL PRESS — inner img only (wrapper owns pn-float) ----
+   Card vial sits inside <a href> → :active fires on mousedown/tap and the
+   transform is shed the instant navigation starts, so the link still works.
+   Extend the existing `transition:filter .4s` (line ~1129) with transform. */
+.product-media .vial-photo .vial-photo-img{
+  transition:filter .4s var(--ease), transform .15s var(--ease);
+  transform-origin:50% 88%;            /* pivot near the contact point */
+}
+.product-media a:active .vial-photo-img{
+  transform:scale(0.955);
+}
+/* contact-shadow + halo react in sympathy with the press (evergreen :has()) */
+.product-card:has(.product-media a:active) .product-media::after{
+  width:42%; opacity:0.72; filter:blur(5px);
+}
+.product-card:has(.product-media a:active) .product-media::before{
+  transform:translate(-50%,-52%) scale(1.02);
+}
+
+/* ---- 1b) BUTTON PRESS (tap-safe, every .btn) ----
+   .btn-primary:active (scale .96 + shadow) is already defined above; this
+   adds the same press travel to ghost/secondary buttons (View, etc.). ---- */
+.btn:active{
+  transform:translateY(0) scale(0.96);
+  transition-duration:.12s;            /* snap down faster than the .3s hover */
+}
+/* wishlist heart press — must sit AFTER .wish-btn:hover(scale 1.08) to win */
+.wish-btn:active{
+  transform:scale(0.9);
+  transition-duration:.12s;
+}
+
+/* ---- 2) DETAIL VIAL CLICK-TO-PLAY — wobble (img) + shine (::before) ----
+   The wrapper keeps pn-float; the one-shot wobble runs on the inner image so
+   the two transforms never collide. JS toggles .pn-poke on the wrapper and
+   strips it on animationend. Set 1's sheen lives on ::after, so the click
+   shine uses the still-free ::before (clipped to the box, pointer-events:none
+   → never blocks the click; the SVG label at z-index:3 stays on top). */
+.product-detail-media .vial-photo{ cursor:pointer; }   /* affords the click */
+.product-detail-media .vial-photo .vial-photo-img{ transform-origin:50% 90%; }
+
+.product-detail-media .vial-photo.pn-poke .vial-photo-img{
+  animation:pn-poke .42s var(--ease);
+  will-change:transform;
+}
+.product-detail-media .vial-photo::before{
+  content:"";
+  position:absolute; inset:0; z-index:2;   /* above img, below label(3) */
+  border-radius:18px;
+  background:linear-gradient(115deg,
+    transparent 38%,
+    rgba(255,255,255,0.50) 50%,
+    transparent 62%);
+  transform:translateX(-130%);
+  opacity:0;
+  pointer-events:none;
+  mix-blend-mode:screen;
+}
+.product-detail-media .vial-photo.pn-poke::before{
+  animation:pn-shine .42s var(--ease);
+}
+
+@keyframes pn-poke{
+  0%   { transform:scale(0.965) rotate(0deg); }
+  35%  { transform:scale(1.045) rotate(-2.4deg); }
+  62%  { transform:scale(1.0)   rotate(1.6deg); }
+  82%  { transform:scale(1.012) rotate(-0.7deg); }
+  100% { transform:scale(1)     rotate(0deg); }
+}
+@keyframes pn-shine{
+  0%   { transform:translateX(-130%); opacity:0; }
+  18%  { opacity:1; }
+  100% { transform:translateX(130%);  opacity:0; }
+}
+
+/* ---- 3) REDUCED-MOTION — null the keyframe play + soften press travel.
+        Global rule only clamps DURATION (would flash), so disable outright;
+        :active keeps a faint instant cue without motion. ---- */
+@media (prefers-reduced-motion: reduce){
+  .product-detail-media .vial-photo.pn-poke .vial-photo-img,
+  .product-detail-media .vial-photo.pn-poke::before{ animation:none !important; }
+  .product-media a:active .vial-photo-img{ transform:scale(0.985); }
+  .btn:active{ transform:scale(0.99); }
+  .wish-btn:active{ transform:scale(0.96); }
+}
+
+/* ---- DETAIL STUDIO LIGHTING — reduced-motion: freeze breathing shadow + pin cursor light
+        (pool/vignette/rim are static gradients, so the scene stays fully lit). ---- */
+@media (prefers-reduced-motion: reduce){
+  .product-detail-media::after{ animation:none !important; }
+  .product-detail-media{ --mx:50%; --my:34%; }
+}
+/* ---- DETAIL STUDIO LIGHTING — mobile (<=640px): no cursor light, cheaper fill-rate ---- */
+@media (max-width: 640px){
+  .product-detail-media::after{ animation:none; }
+  .product-detail-media{ --mx:50%; --my:34%; padding:1.5rem 1rem 2rem; }
+  .product-detail-media .vial-photo{ height:320px; }
+  .product-detail-media .vial-photo .vial-photo-img{
+    filter:drop-shadow(0 12px 18px rgba(0,0,0,0.46));
+  }
+}
+
+/* ============================================================
+   FLOATING PRODUCTS — no panel/box behind the bottle.
+   The vial floats on the page; only its own drop-shadow + the
+   product info sit there (catalog cards, related, wishlist).
+   ============================================================ */
+.product-media{ background:transparent !important; backdrop-filter:none !important; -webkit-backdrop-filter:none !important; }
+.product-card.glass{
+  background:transparent !important;
+  border:none !important;
+  box-shadow:none !important;
+  backdrop-filter:none !important;
+  -webkit-backdrop-filter:none !important;
+}
+.product-card.glass-hover:hover,
+.product-card.glass:hover{
+  background:transparent !important;
+  border-color:transparent !important;
+  box-shadow:none !important;
+  transform:none !important;
+  backdrop-filter:none !important;
+  -webkit-backdrop-filter:none !important;
+}
+/* no glow-ring around the (now invisible) panel */
+.product-card:hover .product-media,
+.product-card:focus-within .product-media{ box-shadow:none !important; background:transparent !important; }
+
+/* THE BOX: the hover "sheen" (::after, inset:0, rounded, screen-blend) lit up the bottle's
+   whole bounding box — incl. the transparent margins around the vial — reading as a rounded
+   lighter/purple rectangle on hover. Remove it entirely. */
+.product-media .vial-photo::after,
+.product-detail-media .vial-photo::after{ display:none !important; }

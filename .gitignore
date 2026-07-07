@@ -1,0 +1,17 @@
+# Dependencies — installed by the host (e.g. Render runs `npm install`)
+node_modules/
+server/node_modules/
+
+# Secrets & runtime data — NEVER commit these
+.env
+server/.env
+server/data/
+
+# Logs / OS cruft
+*.log
+.DS_Store
+Thumbs.db
+
+# Local deployment notes — these have real secrets filled in; keep off GitHub
+DEPLOY-GODADDY.md
+DEPLOY-RENDER.md

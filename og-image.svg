@@ -1,0 +1,45 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Ever Nova Life — Where Science Comes Home">
+  <defs>
+    <linearGradient id="brand" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4f46e5"/><stop offset="50%" stop-color="#a855f7"/><stop offset="100%" stop-color="#fb7185"/>
+    </linearGradient>
+    <radialGradient id="blob1" cx="20%" cy="20%" r="60%">
+      <stop offset="0%" stop-color="#a855f7" stop-opacity="0.30"/><stop offset="100%" stop-color="#a855f7" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="blob2" cx="85%" cy="80%" r="60%">
+      <stop offset="0%" stop-color="#fb7185" stop-opacity="0.25"/><stop offset="100%" stop-color="#fb7185" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="blob3" cx="70%" cy="15%" r="55%">
+      <stop offset="0%" stop-color="#06b6d4" stop-opacity="0.20"/><stop offset="100%" stop-color="#06b6d4" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- background -->
+  <rect width="1200" height="630" fill="#1e1b4b"/>
+  <rect width="1200" height="630" fill="url(#blob1)"/>
+  <rect width="1200" height="630" fill="url(#blob2)"/>
+  <rect width="1200" height="630" fill="url(#blob3)"/>
+
+  <!-- big compass logo -->
+  <svg x="110" y="180" width="280" height="280" viewBox="0 0 100 100">
+    <defs><linearGradient id="ogStarDark" gradientUnits="userSpaceOnUse" x1="50" y1="2" x2="50" y2="98"><stop offset="0%" stop-color="#7c3aed"/><stop offset="50%" stop-color="#a21caf"/><stop offset="100%" stop-color="#d6308a"/></linearGradient><linearGradient id="ogStarLight" gradientUnits="userSpaceOnUse" x1="50" y1="2" x2="50" y2="98"><stop offset="0%" stop-color="#ede9fe"/><stop offset="50%" stop-color="#ffffff"/><stop offset="100%" stop-color="#fce7f3"/></linearGradient></defs>
+    <path d="M50.0 50.0 L50.00 0.00 L54.97 37.99 Z" fill="url(#ogStarDark)"/><path d="M50.0 50.0 L70.51 29.49 L62.01 45.03 Z" fill="url(#ogStarDark)"/><path d="M50.0 50.0 L100.00 50.00 L62.01 54.97 Z" fill="url(#ogStarDark)"/><path d="M50.0 50.0 L70.51 70.51 L54.97 62.01 Z" fill="url(#ogStarDark)"/><path d="M50.0 50.0 L50.00 100.00 L45.03 62.01 Z" fill="url(#ogStarDark)"/><path d="M50.0 50.0 L29.49 70.51 L37.99 54.97 Z" fill="url(#ogStarDark)"/><path d="M50.0 50.0 L0.00 50.00 L37.99 45.03 Z" fill="url(#ogStarDark)"/><path d="M50.0 50.0 L29.49 29.49 L45.03 37.99 Z" fill="url(#ogStarDark)"/><path d="M50.0 50.0 L45.03 37.99 L50.00 0.00 Z" fill="url(#ogStarLight)"/><path d="M50.0 50.0 L54.97 37.99 L70.51 29.49 Z" fill="url(#ogStarLight)"/><path d="M50.0 50.0 L62.01 45.03 L100.00 50.00 Z" fill="url(#ogStarLight)"/><path d="M50.0 50.0 L62.01 54.97 L70.51 70.51 Z" fill="url(#ogStarLight)"/><path d="M50.0 50.0 L54.97 62.01 L50.00 100.00 Z" fill="url(#ogStarLight)"/><path d="M50.0 50.0 L45.03 62.01 L29.49 70.51 Z" fill="url(#ogStarLight)"/><path d="M50.0 50.0 L37.99 54.97 L0.00 50.00 Z" fill="url(#ogStarLight)"/><path d="M50.0 50.0 L37.99 45.03 L29.49 29.49 Z" fill="url(#ogStarLight)"/><circle cx="50" cy="50" r="6" fill="url(#ogStarDark)"/><circle cx="50" cy="50" r="2.6" fill="#f5f3ff"/>
+  </svg>
+
+  <!-- wordmark + copy -->
+  <text x="430" y="248" font-family="'Century Gothic', 'Futura', 'Trebuchet MS', Arial, sans-serif" font-weight="700" font-size="60" letter-spacing="5" fill="url(#brand)">EVER NOVA LIFE</text>
+  <text x="432" y="320" font-family="Inter, Arial, sans-serif" font-weight="700" font-size="40" fill="#e2e8f0">Where Science Comes Home</text>
+  <text x="432" y="372" font-family="Inter, Arial, sans-serif" font-weight="500" font-size="26" fill="#cbd5e1">Premium research peptides · 99%+ HPLC purity · COA included</text>
+
+  <!-- pill badges -->
+  <g font-family="Inter, Arial, sans-serif" font-weight="700" font-size="22" fill="#fff">
+    <rect x="432" y="420" width="190" height="56" rx="28" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.18)"/>
+    <text x="527" y="456" text-anchor="middle">99%+ Purity</text>
+    <rect x="640" y="420" width="190" height="56" rx="28" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.18)"/>
+    <text x="735" y="456" text-anchor="middle">HPLC Verified</text>
+    <rect x="848" y="420" width="190" height="56" rx="28" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.18)"/>
+    <text x="943" y="456" text-anchor="middle">24h Shipping</text>
+  </g>
+
+  <text x="432" y="540" font-family="Inter, Arial, sans-serif" font-weight="500" font-size="20" fill="#94a3b8">evernovalife.com · For in-vitro research use only</text>
+</svg>

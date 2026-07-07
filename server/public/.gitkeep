@@ -1,0 +1,4 @@
+# Passenger requires a public/ directory in the app root to use as the
+# web document root. It stays empty on purpose: the Express app serves the
+# real static site (../index.html, ../css, ../js, ../assets) itself, and
+# Passenger forwards any path it doesn't find here to the Node app.

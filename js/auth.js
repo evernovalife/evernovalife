@@ -1,0 +1,243 @@
+/* ============================================================
+   EVER NOVA LIFE — client authentication (email + password)
+   · Talks to the Node API at /api/auth/*
+   · Stores the login token + user in localStorage
+   · Wires the login / register / account pages
+   · Keeps the header account icon pointing to the right place
+   Set window.PEPTIDE_API_BASE if the site and API are on
+   different origins (same pattern as checkout in main.js).
+   ============================================================ */
+(function () {
+  const API_BASE = (typeof window !== 'undefined' && window.PEPTIDE_API_BASE) || '';
+  const TOKEN_KEY = 'enl_token';
+  const USER_KEY = 'enl_user';
+
+  const Auth = {
+    getToken() { try { return localStorage.getItem(TOKEN_KEY) || ''; } catch (e) { return ''; } },
+    getUser() { try { return JSON.parse(localStorage.getItem(USER_KEY) || 'null'); } catch (e) { return null; } },
+    isLoggedIn() { return !!this.getToken(); },
+
+    _save(token, user) {
+      try {
+        if (token) localStorage.setItem(TOKEN_KEY, token);
+        if (user) localStorage.setItem(USER_KEY, JSON.stringify(user));
+      } catch (e) { /* private mode / storage disabled */ }
+    },
+
+    logout() {
+      try { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY); } catch (e) {}
+    },
+
+    async _post(path, body) {
+      const url = (API_BASE || '') + path;
+      let res;
+      try {
+        res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+      } catch (netErr) {
+        throw new Error('Can\'t reach the server' + (API_BASE ? ' at ' + API_BASE : '') +
+          '. Make sure the backend (Node app) is running.');
+      }
+      // Read the body once, as text, so we can handle JSON *and* stray HTML/error pages.
+      const raw = await res.text().catch(() => '');
+      let data = {};
+      try { data = raw ? JSON.parse(raw) : {}; } catch (e) { data = null; } // null = not JSON
+
+      if (!res.ok) {
+        if (data && data.error) throw new Error(data.error);
+        // Non-JSON error response → the API endpoint isn't answering correctly.
+        // Surface the status so it's diagnosable (404 = endpoint/route not found,
+        // 503 = app not started, 500 = server crash, 405 = wrong method, etc.).
+        throw new Error('The sign-in service isn\'t responding correctly (HTTP ' + res.status +
+          ' from ' + url + '). The backend Node app may not be running or reachable there.');
+      }
+      if (!data) throw new Error('The server sent an unexpected response. Is the backend running?');
+      return data;
+    },
+
+    async register(payload) {
+      const data = await this._post('/api/auth/register', payload);
+      this._save(data.token, data.user);
+      return data;
+    },
+
+    async login(payload) {
+      const data = await this._post('/api/auth/login', payload);
+      this._save(data.token, data.user);
+      return data;
+    },
+
+    /* Confirm the stored token is still valid and refresh the cached user.
+       Returns the user, or null if not signed in / token rejected. */
+    async fetchMe() {
+      const token = this.getToken();
+      if (!token) return null;
+      let res;
+      try {
+        res = await fetch(API_BASE + '/api/auth/me', { headers: { Authorization: 'Bearer ' + token } });
+      } catch (e) {
+        return this.getUser();   // offline → trust the cached copy
+      }
+      if (res.status === 401) { this.logout(); return null; }
+      const data = await res.json().catch(() => ({}));
+      if (data.user) this._save(null, data.user);
+      return data.user || null;
+    }
+  };
+  window.Auth = Auth;
+
+  /* ---------- small helpers ---------- */
+  function setMsg(el, text, kind) {
+    if (!el) return;
+    el.className = 'form-msg' + (kind ? ' ' + kind : '');
+    el.textContent = text || '';
+  }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
+      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+    ));
+  }
+  function initials(first, last) {
+    return ((first || '').charAt(0) + (last || '').charAt(0)).toUpperCase() || '👤';
+  }
+
+  /* ============================================================
+     LOGIN PAGE
+     ============================================================ */
+  function initLoginPage() {
+    const form = document.getElementById('loginForm');
+    if (!form) return;
+    const msg = form.querySelector('.form-msg');
+    const btn = form.querySelector('button[type="submit"]');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const email = (form.elements.email.value || '').trim();
+      const password = form.elements.password.value || '';
+      setMsg(msg, '', '');
+      if (!email || !password) { setMsg(msg, 'Please enter your email and password.', 'error'); return; }
+
+      const label = btn.textContent;
+      btn.disabled = true; btn.textContent = 'Signing in…';
+      try {
+        await Auth.login({ email, password });
+        setMsg(msg, '✅ Signed in! Redirecting…', 'success');
+        location.href = 'account.html';
+      } catch (err) {
+        setMsg(msg, err.message, 'error');
+        btn.disabled = false; btn.textContent = label;
+      }
+    });
+  }
+
+  /* ============================================================
+     REGISTER PAGE
+     ============================================================ */
+  function initRegisterPage() {
+    const form = document.getElementById('registerForm');
+    if (!form) return;
+    const msg = form.querySelector('.form-msg');
+    const btn = form.querySelector('button[type="submit"]');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const firstName = (form.elements.firstName.value || '').trim();
+      const lastName = (form.elements.lastName.value || '').trim();
+      const email = (form.elements.email.value || '').trim();
+      const password = form.elements.password.value || '';
+      const confirm = form.elements.confirmPassword.value || '';
+      const agree = form.elements.agree && form.elements.agree.checked;
+      setMsg(msg, '', '');
+
+      if (!firstName || !lastName || !email || !password) {
+        setMsg(msg, 'Please complete all the fields.', 'error'); return;
+      }
+      if (password.length < 8) { setMsg(msg, 'Password must be at least 8 characters.', 'error'); return; }
+      if (password !== confirm) { setMsg(msg, 'Those passwords don\'t match.', 'error'); return; }
+      if (!agree) { setMsg(msg, 'Please agree to the Terms & Privacy Policy.', 'error'); return; }
+
+      const label = btn.textContent;
+      btn.disabled = true; btn.textContent = 'Creating account…';
+      try {
+        await Auth.register({ firstName, lastName, email, password });
+        setMsg(msg, '🎉 Account created! Redirecting…', 'success');
+        location.href = 'account.html';
+      } catch (err) {
+        setMsg(msg, err.message, 'error');
+        btn.disabled = false; btn.textContent = label;
+      }
+    });
+  }
+
+  /* ============================================================
+     ACCOUNT PAGE — gate + hydrate with the real user
+     ============================================================ */
+  async function initAccountPage() {
+    if (!document.querySelector('.account-layout')) return;
+
+    // gate: not signed in → go to login (remember where we wanted to be)
+    if (!Auth.isLoggedIn()) { location.replace('login.html'); return; }
+    const user = await Auth.fetchMe();
+    if (!user) { location.replace('login.html'); return; }
+
+    const fullName = ((user.firstName || '') + ' ' + (user.lastName || '')).trim();
+    const year = (user.createdAt && new Date(user.createdAt).getFullYear()) || new Date().getFullYear();
+
+    const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+    const setVal = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
+
+    set('acctAvatar', initials(user.firstName, user.lastName));
+    set('acctGreeting', `Welcome back, ${user.firstName || 'there'} 👋`);
+    const sub = document.getElementById('acctSubtitle');
+    if (sub) sub.innerHTML = `${esc(user.email)} · Member since ${year}`;
+    setVal('acctName', fullName);
+    setVal('acctEmail', user.email || '');
+
+    // wire Sign Out
+    const signOut = document.getElementById('signOutBtn');
+    if (signOut) {
+      signOut.addEventListener('click', (e) => {
+        e.preventDefault();
+        Auth.logout();
+        location.href = 'login.html';
+      });
+    }
+  }
+
+  /* ============================================================
+     GOOGLE buttons — not wired to a provider yet. Rather than a
+     dead button, point people to email sign-in for now.
+     ============================================================ */
+  function wireGoogleButtons() {
+    document.querySelectorAll('.oauth-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const card = btn.closest('.auth-card') || document;
+        const msg = card.querySelector('.form-msg');
+        setMsg(msg, 'Google sign-in isn\'t set up yet — please use your email below.', 'error');
+        const email = card.querySelector('input[type="email"]');
+        if (email) email.focus();
+      });
+    });
+  }
+
+  /* ============================================================
+     HEADER — if signed out, the account icon should lead to login
+     ============================================================ */
+  function syncHeaderAccount() {
+    const icon = document.querySelector('.header-actions a[href="account.html"]');
+    if (icon && !Auth.isLoggedIn()) icon.setAttribute('href', 'login.html');
+  }
+
+  /* ---------- boot ---------- */
+  document.addEventListener('DOMContentLoaded', () => {
+    const page = (location.pathname.split('/').pop() || '').toLowerCase();
+    if (page === 'login.html') initLoginPage();
+    else if (page === 'register.html') initRegisterPage();
+    else if (page === 'account.html') initAccountPage();
+    wireGoogleButtons();
+    syncHeaderAccount();
+  });
+})();
