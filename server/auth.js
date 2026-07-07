@@ -20,6 +20,7 @@ const USERS_FILE = path.join(DATA_DIR, 'users.json');
 
 const TOKEN_TTL = process.env.JWT_TTL || '30d';
 const BCRYPT_ROUNDS = 10;
+const RESET_TTL_MS = 60 * 60 * 1000;   // password-reset links valid for 1 hour
 
 /* ---- signing secret ----
    Prefer an explicit JWT_SECRET. If it's missing we fall back to a
@@ -129,6 +130,51 @@ function getUserById(id) {
   return u ? publicUser(u) : null;
 }
 
+/* ---- password reset ----
+   We store only a HASH of the reset token (like a password), so a leaked
+   user store can't be used to reset accounts. The plaintext token goes out
+   in the email link only. */
+const hashToken = t => crypto.createHash('sha256').update(String(t)).digest('hex');
+
+/* Create a reset token for an email. Returns { token, user } if the account
+   exists, or null if it doesn't — the caller responds identically either way
+   so we never reveal which emails are registered. */
+async function createResetToken(email) {
+  email = normEmail(email);
+  const users = loadUsers();
+  const user = users.find(u => u.email === email);
+  if (!user) return null;
+
+  const token = crypto.randomBytes(32).toString('hex');
+  user.resetTokenHash = hashToken(token);
+  user.resetTokenExpires = new Date(Date.now() + RESET_TTL_MS).toISOString();
+  saveUsers(users);
+  return { token, user: publicUser(user) };
+}
+
+/* Complete a reset: validate the token (exists + not expired), set the new
+   password, and clear the token so it can't be reused. */
+async function resetPassword(token, newPassword) {
+  newPassword = String(newPassword || '');
+  if (!token) throw httpError(400, 'Missing reset token.');
+  if (newPassword.length < 8) throw httpError(400, 'Password must be at least 8 characters.');
+
+  const wanted = hashToken(token);
+  const users = loadUsers();
+  const user = users.find(u => u.resetTokenHash === wanted);
+  const expired = user && (!user.resetTokenExpires ||
+    new Date(user.resetTokenExpires).getTime() < Date.now());
+  if (!user || expired) {
+    throw httpError(400, 'This reset link is invalid or has expired. Please request a new one.');
+  }
+
+  user.passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
+  delete user.resetTokenHash;
+  delete user.resetTokenExpires;
+  saveUsers(users);
+  return { user: publicUser(user) };
+}
+
 function verifyToken(token) {
   try {
     return jwt.verify(token, SECRET);
@@ -157,6 +203,8 @@ module.exports = {
   registerUser,
   authenticate,
   getUserById,
+  createResetToken,
+  resetPassword,
   verifyToken,
   requireAuth
 };

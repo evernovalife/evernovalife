@@ -18,6 +18,7 @@ const { buildOrder } = require('./pricing.js');
 const braintree = require('./braintree.js');
 const btcpay = require('./btcpay.js');
 const auth = require('./auth.js');
+const email = require('./email.js');
 
 const app = express();
 const PORT = process.env.PORT || 4242;
@@ -59,7 +60,8 @@ app.get('/api/health', (req, res) => res.json({
   env: braintree.ENV,
   card: braintree.CONFIGURED,     // Braintree (cards / PayPal / Venmo) ready?
   crypto: btcpay.CONFIGURED,      // BTCPay (Bitcoin / Lightning) ready?
-  auth: true                      // email/password accounts always available
+  auth: true,                     // email/password accounts always available
+  email: email.CONFIGURED         // password-reset emails (Gmail SMTP) ready?
 }));
 
 /* ============================================================
@@ -93,6 +95,58 @@ app.post('/api/auth/login', async (req, res) => {
 /* ---- who am I? (used to hydrate the account page) ---- */
 app.get('/api/auth/me', auth.requireAuth, (req, res) => {
   res.json({ success: true, user: req.user });
+});
+
+/* ---- forgot password: email a reset link ----
+   Always responds the same way whether or not the email exists, so this
+   can't be used to discover which emails are registered. */
+app.post('/api/auth/forgot', async (req, res) => {
+  const generic = { success: true, message: 'If that email has an account, a reset link is on its way. Check your inbox (and spam).' };
+  try {
+    const addr = (req.body && req.body.email) || '';
+    const result = await auth.createResetToken(addr);
+    if (result) {
+      const base = (process.env.SITE_URL || req.headers.origin || '').replace(/\/+$/, '');
+      const link = `${base}/reset-password.html?token=${result.token}`;
+      const subject = 'Reset your Ever Nova Life password';
+      const text = `We received a request to reset your Ever Nova Life password.\n\n` +
+        `Open this link to choose a new password (valid for 1 hour):\n${link}\n\n` +
+        `If you didn't request this, you can safely ignore this email — your password won't change.`;
+      const html = `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;color:#1f2937">
+        <h2 style="color:#6d28d9">Reset your password</h2>
+        <p>We received a request to reset your <strong>Ever Nova Life</strong> password.</p>
+        <p><a href="${link}" style="display:inline-block;background:#6d28d9;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600">Choose a new password</a></p>
+        <p style="color:#6b7280;font-size:13px">This link is valid for 1 hour. If you didn't request this, you can safely ignore this email — your password won't change.</p>
+        <p style="color:#9ca3af;font-size:12px;word-break:break-all">Or paste this into your browser:<br>${link}</p>
+      </div>`;
+
+      if (email.CONFIGURED) {
+        try {
+          await email.sendMail({ to: result.user.email, subject, text, html });
+        } catch (mailErr) {
+          console.error('[forgot] email send failed:', mailErr.message);
+        }
+      } else {
+        // No SMTP set up yet — log the link so resets still work in dev/testing.
+        console.warn(`[forgot] EMAIL NOT CONFIGURED — reset link for ${result.user.email}:\n  ${link}`);
+      }
+    }
+    res.json(generic);
+  } catch (err) {
+    console.error('[forgot] failed:', err.message);
+    res.json(generic);   // never leak details on this endpoint
+  }
+});
+
+/* ---- reset password: consume the token + set the new password ---- */
+app.post('/api/auth/reset', async (req, res) => {
+  try {
+    const { token, password } = req.body || {};
+    await auth.resetPassword(token, password);
+    res.json({ success: true, message: 'Your password has been reset. You can now sign in.' });
+  } catch (err) {
+    res.status(err.status || 400).json({ error: err.message });
+  }
 });
 
 /* ---- checkout: price it HERE (never trust the browser's total), then sell ---- */

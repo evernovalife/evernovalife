@@ -26,8 +26,11 @@
 
   var l = location;
   if (l.protocol === 'file:') { window.PEPTIDE_API_BASE = 'http://localhost:4242'; return; }
-  if (/^(localhost|127\.0\.0\.1)$/.test(l.hostname) && l.port !== '4242') {
-    window.PEPTIDE_API_BASE = 'http://localhost:4242'; return;
+  if (/^(localhost|127\.0\.0\.1)$/.test(l.hostname)) {
+    // localhost:4242 = the Node server is also serving this page → same origin.
+    // Any other local port (Live Server, etc.) → talk to the Node server on 4242.
+    window.PEPTIDE_API_BASE = (l.port === '4242') ? '' : 'http://localhost:4242';
+    return;
   }
-  window.PEPTIDE_API_BASE = PROD_API_BASE;   // production: '' (same origin) or your API URL
+  window.PEPTIDE_API_BASE = PROD_API_BASE;   // production (your live domain) → your API URL
 })();

@@ -85,7 +85,11 @@
       const data = await res.json().catch(() => ({}));
       if (data.user) this._save(null, data.user);
       return data.user || null;
-    }
+    },
+
+    // password reset
+    forgot(email) { return this._post('/api/auth/forgot', { email }); },
+    reset(token, password) { return this._post('/api/auth/reset', { token, password }); }
   };
   window.Auth = Auth;
 
@@ -208,6 +212,72 @@
   }
 
   /* ============================================================
+     FORGOT PASSWORD PAGE — request a reset link
+     ============================================================ */
+  function initForgotPage() {
+    const form = document.getElementById('forgotForm');
+    if (!form) return;
+    const msg = form.querySelector('.form-msg');
+    const btn = form.querySelector('button[type="submit"]');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const email = (form.elements.email.value || '').trim();
+      setMsg(msg, '', '');
+      if (!email) { setMsg(msg, 'Please enter your email.', 'error'); return; }
+
+      const label = btn.textContent;
+      btn.disabled = true; btn.textContent = 'Sending…';
+      try {
+        const data = await Auth.forgot(email);
+        setMsg(msg, (data && data.message) || 'If that email has an account, a reset link is on its way.', 'success');
+        form.reset();
+      } catch (err) {
+        setMsg(msg, err.message, 'error');
+      } finally {
+        btn.disabled = false; btn.textContent = label;
+      }
+    });
+  }
+
+  /* ============================================================
+     RESET PASSWORD PAGE — set a new password using the emailed token
+     ============================================================ */
+  function initResetPage() {
+    const form = document.getElementById('resetForm');
+    if (!form) return;
+    const msg = form.querySelector('.form-msg');
+    const btn = form.querySelector('button[type="submit"]');
+    const token = new URLSearchParams(location.search).get('token') || '';
+
+    if (!token) {
+      setMsg(msg, 'This reset link is missing its token. Please use the link from your email, or request a new one.', 'error');
+      if (btn) btn.disabled = true;
+      return;
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const password = form.elements.password.value || '';
+      const confirm = form.elements.confirmPassword.value || '';
+      setMsg(msg, '', '');
+      if (password.length < 8) { setMsg(msg, 'Password must be at least 8 characters.', 'error'); return; }
+      if (password !== confirm) { setMsg(msg, 'Those passwords don\'t match.', 'error'); return; }
+
+      const label = btn.textContent;
+      btn.disabled = true; btn.textContent = 'Saving…';
+      try {
+        await Auth.reset(token, password);
+        setMsg(msg, '✅ Password reset! Redirecting to sign in…', 'success');
+        setTimeout(() => { location.href = 'login.html'; }, 1200);
+      } catch (err) {
+        setMsg(msg, err.message, 'error');
+        btn.disabled = false; btn.textContent = label;
+      }
+    });
+  }
+
+  /* ============================================================
      GOOGLE buttons — not wired to a provider yet. Rather than a
      dead button, point people to email sign-in for now.
      ============================================================ */
@@ -237,6 +307,8 @@
     if (page === 'login.html') initLoginPage();
     else if (page === 'register.html') initRegisterPage();
     else if (page === 'account.html') initAccountPage();
+    else if (page === 'forgot-password.html') initForgotPage();
+    else if (page === 'reset-password.html') initResetPage();
     wireGoogleButtons();
     syncHeaderAccount();
   });
