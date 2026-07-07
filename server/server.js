@@ -18,7 +18,7 @@ const { buildOrder } = require('./pricing.js');
 const braintree = require('./braintree.js');
 const btcpay = require('./btcpay.js');
 const auth = require('./auth.js');
-const email = require('./email.js');
+const mailer = require('./email.js');
 
 const app = express();
 const PORT = process.env.PORT || 4242;
@@ -61,7 +61,7 @@ app.get('/api/health', (req, res) => res.json({
   card: braintree.CONFIGURED,     // Braintree (cards / PayPal / Venmo) ready?
   crypto: btcpay.CONFIGURED,      // BTCPay (Bitcoin / Lightning) ready?
   auth: true,                     // email/password accounts always available
-  email: email.CONFIGURED         // password-reset emails (Gmail SMTP) ready?
+  email: mailer.CONFIGURED        // reset + welcome emails (Gmail SMTP) ready?
 }));
 
 /* ============================================================
@@ -76,10 +76,43 @@ app.post('/api/auth/register', async (req, res) => {
     const { firstName, lastName, email, password } = req.body || {};
     const result = await auth.registerUser({ firstName, lastName, email, password });
     res.status(201).json({ success: true, ...result });
+
+    // Welcome email — fire-and-forget after responding, so it never delays or
+    // fails signup. Only sends when SMTP is configured.
+    sendWelcomeEmail(result.user).catch(err => console.error('[welcome] failed:', err.message));
   } catch (err) {
     res.status(err.status || 400).json({ error: err.message });
   }
 });
+
+/* Send a friendly "thanks for signing up" email to a new account. */
+async function sendWelcomeEmail(user) {
+  if (!mailer.CONFIGURED || !user || !user.email) return;
+  const site = (process.env.SITE_URL || 'https://evernovalife.com').replace(/\/+$/, '');
+  const name = user.firstName || 'there';
+  const subject = 'Welcome to Ever Nova Life 🎉';
+  const text = `Hi ${name},\n\n` +
+    `Thank you for creating your Ever Nova Life account — welcome to the Nest!\n\n` +
+    `You can now track orders, save a wishlist, and check out faster. Browse our ` +
+    `lab-verified research peptides here:\n${site}/products.html\n\n` +
+    `All products are for in-vitro research and laboratory use only.\n\n` +
+    `— The Ever Nova Life team`;
+  const html = `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;color:#1f2937">
+    <h2 style="color:#6d28d9;margin-bottom:4px">Welcome to the Nest, ${escapeHtmlSrv(name)}! 🎉</h2>
+    <p>Thank you for creating your <strong>Ever Nova Life</strong> account.</p>
+    <p>You can now track orders, save a wishlist, and check out faster.</p>
+    <p><a href="${site}/products.html" style="display:inline-block;background:#6d28d9;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600">Browse products</a></p>
+    <p style="color:#9ca3af;font-size:12px;margin-top:24px">All products are sold strictly for in-vitro research and laboratory use only. Not for human consumption.</p>
+  </div>`;
+  return mailer.sendMail({ to: user.email, subject, text, html });
+}
+
+/* tiny HTML escaper for values interpolated into email markup */
+function escapeHtmlSrv(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
 
 /* ---- sign in ---- */
 app.post('/api/auth/login', async (req, res) => {
@@ -120,9 +153,9 @@ app.post('/api/auth/forgot', async (req, res) => {
         <p style="color:#9ca3af;font-size:12px;word-break:break-all">Or paste this into your browser:<br>${link}</p>
       </div>`;
 
-      if (email.CONFIGURED) {
+      if (mailer.CONFIGURED) {
         try {
-          await email.sendMail({ to: result.user.email, subject, text, html });
+          await mailer.sendMail({ to: result.user.email, subject, text, html });
         } catch (mailErr) {
           console.error('[forgot] email send failed:', mailErr.message);
         }
