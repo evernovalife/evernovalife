@@ -35,4 +35,17 @@ async function sendMail({ to, subject, text, html }) {
   return t.sendMail({ from: FROM, to, subject, text, html });
 }
 
-module.exports = { CONFIGURED, sendMail, FROM };
+/* Test the SMTP connection + login. Resolves on success, rejects with the
+   exact SMTP error on failure (used by the /api/admin/email-test diagnostic). */
+async function verify() {
+  const t = getTransporter();
+  if (!t) throw new Error('Email is not configured (set SMTP_USER / SMTP_PASS).');
+  return t.verify();
+}
+
+/* Non-secret summary of the current config (never returns the password). */
+function config() {
+  return { configured: CONFIGURED, host: HOST, port: PORT, secure: PORT === 465, user: USER, from: FROM };
+}
+
+module.exports = { CONFIGURED, sendMail, verify, config, FROM };

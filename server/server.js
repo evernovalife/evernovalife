@@ -166,6 +166,37 @@ app.get('/api/admin/users', requireAdmin, (req, res) => {
   res.json({ success: true, count: users.length, users });
 });
 
+/* ---- ADMIN: diagnose email (SMTP) ----
+   GET /api/admin/email-test?key=…&to=you@example.com
+   Reports the SMTP config, whether connect+login works (or the exact error),
+   and (if ?to= given) whether a test message actually sends. */
+app.get('/api/admin/email-test', requireAdmin, async (req, res) => {
+  const out = { config: mailer.config() };
+  try {
+    await mailer.verify();
+    out.verify = 'ok';
+  } catch (e) {
+    out.verify = 'FAILED';
+    out.verifyError = e.message;
+    return res.json(out);
+  }
+  if (req.query.to) {
+    try {
+      await mailer.sendMail({
+        to: String(req.query.to),
+        subject: 'Ever Nova Life — email test',
+        text: 'Test email from your Ever Nova Life server. If you got this, sending works.',
+        html: '<p>Test email from your Ever Nova Life server. If you got this, <strong>sending works</strong>.</p>'
+      });
+      out.testSend = 'sent to ' + req.query.to;
+    } catch (e) {
+      out.testSend = 'FAILED';
+      out.sendError = e.message;
+    }
+  }
+  res.json(out);
+});
+
 /* ---- forgot password: email a reset link ----
    Always responds the same way whether or not the email exists, so this
    can't be used to discover which emails are registered. */
