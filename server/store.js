@@ -75,6 +75,21 @@ function clearCart(userId) {
   return saveCart(userId, []);
 }
 
+/* Remove a user's cart AND orders entirely — used when an admin deletes the
+   account, so no orphaned data lingers under a deleted user id. */
+function deleteUserData(userId) {
+  const carts = loadMap(CARTS_FILE);
+  if (Object.prototype.hasOwnProperty.call(carts, userId)) {
+    delete carts[userId];
+    saveMap(CARTS_FILE, carts);
+  }
+  const orders = loadMap(ORDERS_FILE);
+  if (Object.prototype.hasOwnProperty.call(orders, userId)) {
+    delete orders[userId];
+    saveMap(ORDERS_FILE, orders);
+  }
+}
+
 /* ============================================================
    ORDERS
    ============================================================ */
@@ -116,6 +131,7 @@ module.exports = {
   getCart,
   saveCart,
   clearCart,
+  deleteUserData,
   listOrders,
   addOrder,
   updateOrderStatus,

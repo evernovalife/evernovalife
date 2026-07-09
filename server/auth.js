@@ -62,13 +62,24 @@ function saveUsers(users) {
 
 const normEmail = e => String(e || '').trim().toLowerCase();
 
+/* ---- admin accounts ----
+   The "boss" accounts are designated by email via ADMIN_EMAILS (a comma-
+   separated list), falling back to the single ADMIN_EMAIL already used for
+   signup notifications. Whoever signs in with one of these emails is an admin
+   and can manage/delete users. */
+const ADMIN_EMAILS = String(process.env.ADMIN_EMAILS || process.env.ADMIN_EMAIL || '')
+  .split(',').map(e => normEmail(e)).filter(Boolean);
+const ADMIN_ENABLED = ADMIN_EMAILS.length > 0;
+function isAdminEmail(email) { return ADMIN_EMAILS.includes(normEmail(email)); }
+
 function publicUser(u) {
   return {
     id: u.id,
     firstName: u.firstName,
     lastName: u.lastName,
     email: u.email,
-    createdAt: u.createdAt
+    createdAt: u.createdAt,
+    isAdmin: isAdminEmail(u.email)   // lets the UI show admin tools for this account
   };
 }
 
@@ -135,6 +146,18 @@ function listUsers() {
   return loadUsers()
     .map(publicUser)
     .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+}
+
+/* Permanently delete an account by id. Returns the deleted (public) user,
+   or null if no account had that id. The caller is responsible for cleaning
+   up related data (cart/orders). */
+function deleteUser(id) {
+  const users = loadUsers();
+  const idx = users.findIndex(u => u.id === id);
+  if (idx === -1) return null;
+  const [removed] = users.splice(idx, 1);
+  saveUsers(users);
+  return publicUser(removed);
 }
 
 /* ---- password reset ----
@@ -207,10 +230,13 @@ function requireAuth(req, res, next) {
 
 module.exports = {
   CONFIGURED,
+  ADMIN_ENABLED,
+  isAdminEmail,
   registerUser,
   authenticate,
   getUserById,
   listUsers,
+  deleteUser,
   createResetToken,
   resetPassword,
   verifyToken,

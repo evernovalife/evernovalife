@@ -49,25 +49,31 @@
   <section class="page-head">
     <div class="container">
       <div class="breadcrumb"><a href="index.html">Home</a> <span>/</span> <span>Admin</span></div>
-      <h1>Sign<span class="gradient-text">ups</span></h1>
-      <p>Everyone who has created an account. Enter your admin key to view.</p>
+      <h1>Manage <span class="gradient-text">Users</span></h1>
+      <p>Everyone who has created an account. Sign in with your admin account to view and remove users.</p>
     </div>
   </section>
 
   <section class="section" style="padding-top:0">
     <div class="container">
       <div class="account-card glass">
-        <form id="adminForm" novalidate>
-          <div class="admin-actions">
-            <div class="form-field">
-              <label for="adminKey">Admin key</label>
-              <input type="password" id="adminKey" name="key" placeholder="Paste your admin key" autocomplete="off">
-            </div>
-            <button class="btn btn-primary" type="submit">View signups</button>
-          </div>
-          <div class="form-msg" id="adminMsg"></div>
-        </form>
+        <div id="adminStatus" class="form-msg"></div>
         <div id="adminResults" class="admin-table-wrap"></div>
+
+        <!-- Fallback for tools / if you're not signed in: use the admin key -->
+        <details id="adminKeyBox" style="margin-top:1.25rem">
+          <summary style="cursor:pointer;color:var(--text-muted)">Use an admin key instead</summary>
+          <form id="adminForm" novalidate style="margin-top:0.75rem">
+            <div class="admin-actions">
+              <div class="form-field">
+                <label for="adminKey">Admin key</label>
+                <input type="password" id="adminKey" name="key" placeholder="Paste your admin key" autocomplete="off">
+              </div>
+              <button class="btn btn-primary" type="submit">View with key</button>
+            </div>
+            <div class="form-msg" id="adminMsg"></div>
+          </form>
+        </details>
       </div>
     </div>
   </section>
@@ -81,8 +87,9 @@
       var keyInput = document.getElementById('adminKey');
       var msg = document.getElementById('adminMsg');
       var results = document.getElementById('adminResults');
-
-      try { keyInput.value = localStorage.getItem(STORE_KEY) || ''; } catch (e) {}
+      var statusEl = document.getElementById('adminStatus');
+      var keyBox = document.getElementById('adminKeyBox');
+      var lastKey = '';   // a working admin key, reused for delete calls
 
       function esc(s) {
         return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -91,35 +98,106 @@
       }
       function fmtDate(iso) { try { return new Date(iso).toLocaleString(); } catch (e) { return iso || ''; } }
       function setMsg(text, kind) { msg.className = 'form-msg' + (kind ? ' ' + kind : ''); msg.textContent = text || ''; }
+      function setStatus(html, kind) { statusEl.className = 'form-msg' + (kind ? ' ' + kind : ''); statusEl.innerHTML = html || ''; }
+      function token() { try { return localStorage.getItem('enl_token') || ''; } catch (e) { return ''; } }
+      function currentUser() { try { return JSON.parse(localStorage.getItem('enl_user') || 'null'); } catch (e) { return null; } }
 
-      async function load(key) {
-        setMsg('Loading…', '');
+      function headers(key) {
+        var h = {};
+        var t = token(); if (t) h['Authorization'] = 'Bearer ' + t;
+        if (key) h['x-admin-key'] = key;
+        return h;
+      }
+
+      async function load(opts) {
+        opts = opts || {};
+        setStatus('Loading…', '');
         results.innerHTML = '';
         var res;
         try {
-          res = await fetch(API + '/api/admin/users', { headers: { 'x-admin-key': key } });
-        } catch (e) { setMsg("Can't reach the server. Is the backend awake?", 'error'); return; }
+          res = await fetch(API + '/api/admin/users', { headers: headers(opts.key) });
+        } catch (e) { setStatus("Can't reach the server. Is the backend awake?", 'error'); return; }
         var data = await res.json().catch(function () { return {}; });
-        if (!res.ok) { setMsg(data.error || 'Could not load signups.', 'error'); return; }
-        try { localStorage.setItem(STORE_KEY, key); } catch (e) {}
-        setMsg(data.count + ' signup' + (data.count === 1 ? '' : 's'), 'success');
-        if (!data.users || !data.users.length) { results.innerHTML = '<p class="text-muted" style="margin-top:1rem">No signups yet.</p>'; return; }
+
+        if (res.status === 401) {
+          if (opts.key) setMsg('That admin key was rejected.', 'error');
+          var u = currentUser();
+          if (u) {
+            setStatus('You are signed in as <strong>' + esc(u.email) + '</strong>, which is not an admin account. ' +
+              'Sign in with the admin account, or use an admin key below.', 'error');
+          } else {
+            setStatus('Please <a href="login.html" style="color:var(--accent-purple)">sign in with the admin account</a> to manage users, or use an admin key below.', 'error');
+          }
+          if (keyBox) keyBox.open = true;
+          return;
+        }
+        if (!res.ok) { setStatus(esc(data.error || 'Could not load users.'), 'error'); return; }
+
+        if (opts.key) { lastKey = opts.key; try { localStorage.setItem(STORE_KEY, opts.key); } catch (e) {} }
+        render(data);
+      }
+
+      function render(data) {
+        var me = currentUser();
+        var who = (me && me.email) ? ' · signed in as ' + esc(me.email) : '';
+        setStatus((data.count || 0) + ' user' + (data.count === 1 ? '' : 's') + who, 'success');
+        if (!data.users || !data.users.length) {
+          results.innerHTML = '<p class="text-muted" style="margin-top:1rem">No users yet.</p>';
+          return;
+        }
         var rows = data.users.map(function (u, i) {
           var name = ((u.firstName || '') + ' ' + (u.lastName || '')).trim() || '—';
-          return '<tr><td>' + (i + 1) + '</td><td>' + esc(name) + '</td><td>' + esc(u.email) + '</td><td>' + esc(fmtDate(u.createdAt)) + '</td></tr>';
+          var isMe = me && me.id === u.id;
+          var adminBadge = u.isAdmin ? ' <span class="order-status paid" style="font-size:0.62rem;padding:2px 8px">admin</span>' : '';
+          var action = isMe
+            ? '<span class="text-muted" style="font-size:0.8rem">You</span>'
+            : '<button class="btn btn-ghost btn-sm admin-del" data-id="' + esc(u.id) + '" data-name="' + esc(name) + '">Delete</button>';
+          return '<tr><td>' + (i + 1) + '</td><td>' + esc(name) + adminBadge + '</td><td>' + esc(u.email) +
+            '</td><td>' + esc(fmtDate(u.createdAt)) + '</td><td>' + action + '</td></tr>';
         }).join('');
-        results.innerHTML = '<table class="admin-table"><thead><tr><th>#</th><th>Name</th><th>Email</th><th>Signed up</th></tr></thead><tbody>' + rows + '</tbody></table>';
+        results.innerHTML = '<table class="admin-table"><thead><tr><th>#</th><th>Name</th><th>Email</th><th>Signed up</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>';
+        Array.prototype.forEach.call(results.querySelectorAll('.admin-del'), function (b) {
+          b.addEventListener('click', function () { del(b.getAttribute('data-id'), b.getAttribute('data-name'), b); });
+        });
+      }
+
+      async function del(id, name, btn) {
+        if (!window.confirm('Delete ' + name + '?\n\nThis permanently removes their account, saved cart and orders. This cannot be undone.')) return;
+        if (btn) { btn.disabled = true; btn.textContent = 'Deleting…'; }
+        var res;
+        try {
+          res = await fetch(API + '/api/admin/users/' + encodeURIComponent(id), { method: 'DELETE', headers: headers(lastKey) });
+        } catch (e) {
+          window.alert("Can't reach the server."); if (btn) { btn.disabled = false; btn.textContent = 'Delete'; } return;
+        }
+        var data = await res.json().catch(function () { return {}; });
+        if (!res.ok) {
+          window.alert(data.error || 'Could not delete this user.');
+          if (btn) { btn.disabled = false; btn.textContent = 'Delete'; } return;
+        }
+        load({ key: lastKey || undefined });   // refresh the list
       }
 
       form.addEventListener('submit', function (e) {
         e.preventDefault();
         var k = keyInput.value.trim();
         if (!k) { setMsg('Enter your admin key.', 'error'); return; }
-        load(k);
+        load({ key: k });
       });
 
-      // auto-load if a key was saved from last time
-      if (keyInput.value) load(keyInput.value);
+      // preload a saved key (into the fallback field) and remember it for deletes
+      try { keyInput.value = localStorage.getItem(STORE_KEY) || ''; } catch (e) {}
+      if (keyInput.value) lastKey = keyInput.value;
+
+      // Auto-load: prefer the signed-in admin account; else a saved key; else prompt.
+      if (token()) {
+        load({});
+      } else if (keyInput.value) {
+        if (keyBox) keyBox.open = true;
+        load({ key: keyInput.value });
+      } else {
+        setStatus('Sign in with the admin account to manage users, or open “Use an admin key” below.', '');
+      }
     })();
   </script>
 </body>

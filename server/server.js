@@ -195,15 +195,45 @@ app.get('/api/orders', auth.requireAuth, (req, res) => {
    Protected by ADMIN_KEY (sent as the "x-admin-key" header or ?key=…).
    Returns public fields only — never password hashes. */
 const ADMIN_KEY = process.env.ADMIN_KEY || '';
+/* Admin access is granted two ways:
+     1. Signed in as an admin account (email in ADMIN_EMAILS/ADMIN_EMAIL) — the
+        "main account" flow; attaches req.user.
+     2. The admin key (x-admin-key header or ?key=) — kept for tools/back-compat.
+   Either one is sufficient. */
 function requireAdmin(req, res, next) {
-  if (!ADMIN_KEY) return res.status(503).json({ error: 'Admin view is not set up yet (set ADMIN_KEY in the server env).' });
+  // 1) admin account via Bearer token
+  const m = /^Bearer\s+(.+)$/i.exec(req.get('authorization') || '');
+  const payload = m && auth.verifyToken(m[1]);
+  if (payload) {
+    const user = auth.getUserById(payload.sub);
+    if (user && user.isAdmin) { req.user = user; return next(); }
+  }
+  // 2) admin key
   const key = req.get('x-admin-key') || req.query.key || '';
-  if (key !== ADMIN_KEY) return res.status(401).json({ error: 'Invalid admin key.' });
-  next();
+  if (ADMIN_KEY && key && key === ADMIN_KEY) return next();
+
+  if (!ADMIN_KEY && !auth.ADMIN_ENABLED) {
+    return res.status(503).json({ error: 'Admin is not set up yet (set ADMIN_EMAIL/ADMIN_EMAILS or ADMIN_KEY in the server env).' });
+  }
+  return res.status(401).json({ error: 'Admin access required. Sign in with the admin account, or provide the admin key.' });
 }
 app.get('/api/admin/users', requireAdmin, (req, res) => {
   const users = auth.listUsers();
   res.json({ success: true, count: users.length, users });
+});
+
+/* ---- ADMIN: delete a user account ----
+   Removes the account and cascades to their saved cart + orders. An admin
+   signed in with their account can't delete themselves (avoids self-lockout). */
+app.delete('/api/admin/users/:id', requireAdmin, (req, res) => {
+  const id = req.params.id;
+  if (req.user && req.user.id === id) {
+    return res.status(400).json({ error: "You can't delete the account you're currently signed in with." });
+  }
+  const removed = auth.deleteUser(id);
+  if (!removed) return res.status(404).json({ error: 'No account with that id.' });
+  try { store.deleteUserData(id); } catch (e) { console.error('[admin delete] cleanup failed:', e.message); }
+  res.json({ success: true, deleted: removed });
 });
 
 /* ---- ADMIN: diagnose email (SMTP) ----
