@@ -215,6 +215,27 @@ h1, h2, h3, h4 { line-height: 1.2; font-weight: 700; letter-spacing: -0.02em; }
 }
 .icon-btn:hover { background: var(--glass-bg); color: #fff; }
 .icon-btn svg { width: 22px; height: 22px; }
+
+/* signed-in user's name + admin button in the header (injected by main.js) */
+.header-user {
+  color: #fff; font-weight: 600; font-size: 0.9rem;
+  padding: 0 0.35rem; white-space: nowrap; display: inline-flex; align-items: center;
+}
+.header-user:hover { color: var(--accent-purple); }
+.header-admin-btn {
+  display: inline-flex; align-items: center; gap: 0.35rem;
+  height: 34px; padding: 0 0.75rem; border-radius: var(--radius-pill);
+  font-size: 0.82rem; font-weight: 700; color: #fff; white-space: nowrap;
+  background: var(--glass-bg); border: 1px solid var(--glass-border-strong);
+  transition: all 0.25s var(--ease);
+}
+.header-admin-btn:hover { background: var(--glass-bg-hover); border-color: var(--accent-purple); color: #fff; }
+.header-admin-btn svg { width: 16px; height: 16px; }
+@media (max-width: 640px) {
+  .header-user { display: none; }             /* keep the small-screen header tidy */
+  .header-admin-btn span { display: none; }   /* admin becomes icon-only */
+  .header-admin-btn { padding: 0 0.55rem; }
+}
 .cart-badge {
   position: absolute;
   top: 2px; right: 2px;

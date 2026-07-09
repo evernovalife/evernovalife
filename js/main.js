@@ -815,6 +815,78 @@ function renderOrderSummary(el, withCheckoutBtn) {
    ============================================================ */
 const API_BASE = (typeof window !== 'undefined' && window.PEPTIDE_API_BASE) || '';
 
+/* ============================================================
+   HEADER AUTH — show the signed-in user's name in the top bar,
+   plus an Admin button when the account is an admin. Runs on
+   every page (main.js is loaded everywhere) and reads the user
+   auth.js caches in localStorage, then refreshes it in the
+   background so name/admin status stay current without re-login.
+   ============================================================ */
+function readEnlUser() {
+  try { return JSON.parse(localStorage.getItem('enl_user') || 'null'); } catch (e) { return null; }
+}
+function readEnlToken() {
+  try { return localStorage.getItem('enl_token') || ''; } catch (e) { return ''; }
+}
+
+function renderHeaderAuth() {
+  const actions = document.querySelector('.header-actions');
+  if (!actions) return;
+  const user = readEnlUser();
+  const token = readEnlToken();
+  const acctLink = actions.querySelector('a[aria-label="Account"]');
+
+  // remove anything we injected before, so re-running never duplicates
+  actions.querySelectorAll('.header-user, .header-admin-btn').forEach(el => el.remove());
+
+  if (!token || !user) {
+    if (acctLink) acctLink.setAttribute('href', 'login.html');   // signed out → sign in
+    return;
+  }
+  if (acctLink) acctLink.setAttribute('href', 'account.html');
+
+  const name = (user.firstName || '').trim() || String(user.email || '').split('@')[0] || 'Account';
+  const nameLink = document.createElement('a');
+  nameLink.className = 'header-user';
+  nameLink.href = 'account.html';
+  nameLink.title = 'My account';
+  nameLink.textContent = 'Hi, ' + name;
+  if (acctLink) actions.insertBefore(nameLink, acctLink);
+  else actions.insertBefore(nameLink, actions.firstChild);
+
+  if (user.isAdmin) {
+    const admin = document.createElement('a');
+    admin.className = 'header-admin-btn';
+    admin.href = 'admin.html';
+    admin.title = 'Admin — manage users';
+    admin.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 5v6c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V5l-8-3Z"/><path d="M9 12l2 2 4-4"/></svg><span>Admin</span>';
+    actions.insertBefore(admin, nameLink);
+  }
+}
+
+/* Confirm the token with the backend and refresh the cached user, so the
+   header (name + admin button) reflects the truth without a re-login. */
+function refreshHeaderUser() {
+  const token = readEnlToken();
+  if (!token || typeof fetch === 'undefined') return;
+  fetch(API_BASE + '/api/auth/me', { headers: { Authorization: 'Bearer ' + token } })
+    .then(res => {
+      if (res.status === 401) {   // token expired/invalid → drop it, show signed-out
+        try { localStorage.removeItem('enl_token'); localStorage.removeItem('enl_user'); } catch (e) {}
+        renderHeaderAuth();
+        return null;
+      }
+      return res.ok ? res.json() : null;
+    })
+    .then(data => {
+      if (data && data.user) {
+        try { localStorage.setItem('enl_user', JSON.stringify(data.user)); } catch (e) {}
+        renderHeaderAuth();
+      }
+    })
+    .catch(() => { /* offline → keep whatever the cache showed */ });
+}
+
 /* The login token auth.js stores, so a signed-in buyer's order gets tied
    to their account. Empty for guests (guest checkout still works). Read
    from localStorage directly since auth.js isn't loaded on checkout.html. */
@@ -1346,6 +1418,8 @@ function initVialTilt() {
 document.addEventListener('DOMContentLoaded', () => {
   initHeader();
   initHeaderExtras();
+  renderHeaderAuth();     // paint name/admin from cache instantly…
+  refreshHeaderUser();    // …then confirm with the server in the background
   displayFeaturedProducts();
   displayCategories();
   initNewsletter();
