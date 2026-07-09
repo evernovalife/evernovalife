@@ -815,6 +815,15 @@ function renderOrderSummary(el, withCheckoutBtn) {
    ============================================================ */
 const API_BASE = (typeof window !== 'undefined' && window.PEPTIDE_API_BASE) || '';
 
+/* The login token auth.js stores, so a signed-in buyer's order gets tied
+   to their account. Empty for guests (guest checkout still works). Read
+   from localStorage directly since auth.js isn't loaded on checkout.html. */
+function authHeader() {
+  let token = '';
+  try { token = localStorage.getItem('enl_token') || ''; } catch (e) {}
+  return token ? { Authorization: 'Bearer ' + token } : {};
+}
+
 function checkoutSetMsg(text, kind) {
   const msg = document.getElementById('checkoutMsg');
   if (!msg) return;
@@ -899,7 +908,7 @@ async function submitCryptoOrder(form, btn) {
     const checkout = collectCheckout(form);
     const res = await fetch(API_BASE + '/api/crypto/checkout', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeader() },
       body: JSON.stringify({
         items: cart.items.map(i => ({ id: i.id, quantity: i.quantity })),
         shipping: checkout,
@@ -924,7 +933,7 @@ async function submitOrder(form, payload) {
   const checkout = collectCheckout(form);
   const res = await fetch(API_BASE + '/api/checkout', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
     body: JSON.stringify({
       items: cart.items.map(i => ({ id: i.id, quantity: i.quantity })),
       shipping: checkout,
@@ -1353,6 +1362,22 @@ document.addEventListener('DOMContentLoaded', () => {
     case 'contact.html': initContactForm(); break;
     case 'wishlist.html': renderWishlistPage(); break;
   }
+
+  // When the cart finishes syncing with the account (server), repaint any
+  // cart-driven view so it reflects the reconciled items.
+  window.addEventListener('cart:updated', () => {
+    if (currentPage === 'cart.html') {
+      renderCartPage();
+    } else if (currentPage === 'checkout.html') {
+      const summary = document.getElementById('checkoutSummary');
+      if (summary) renderOrderSummary(summary, false);
+      const lineItems = document.getElementById('checkoutItems');
+      if (lineItems && cart.items.length) {
+        lineItems.innerHTML = cart.items.map(i =>
+          `<div class="summary-row"><span>${escapeHtml(i.name)} × ${i.quantity}</span><span>${formatPrice(i.price * i.quantity)}</span></div>`).join('');
+      }
+    }
+  });
 });
 
 if (typeof window !== 'undefined') {

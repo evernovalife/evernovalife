@@ -18,6 +18,7 @@ const { buildOrder } = require('./pricing.js');
 const braintree = require('./braintree.js');
 const btcpay = require('./btcpay.js');
 const auth = require('./auth.js');
+const store = require('./store.js');
 const mailer = require('./email.js');
 
 const app = express();
@@ -151,6 +152,45 @@ app.get('/api/auth/me', auth.requireAuth, (req, res) => {
   res.json({ success: true, user: req.user });
 });
 
+/* Like requireAuth, but never rejects: if a valid token is present it
+   attaches req.user, otherwise it just continues as a guest. Used on
+   checkout so signed-in orders get tied to an account while guest
+   checkout still works. */
+function optionalAuth(req, _res, next) {
+  const m = /^Bearer\s+(.+)$/i.exec(req.get('authorization') || '');
+  const payload = m && auth.verifyToken(m[1]);
+  if (payload) {
+    const user = auth.getUserById(payload.sub);
+    if (user) req.user = user;
+  }
+  next();
+}
+
+/* A short, human-friendly order reference. */
+function newOrderId() {
+  return 'ENL-' + Date.now().toString(36).toUpperCase();
+}
+
+/* ============================================================
+   CART — a signed-in user's cart, saved server-side so it
+   follows them across devices/browsers.
+   ============================================================ */
+app.get('/api/cart', auth.requireAuth, (req, res) => {
+  res.json({ success: true, items: store.getCart(req.user.id) });
+});
+
+app.put('/api/cart', auth.requireAuth, (req, res) => {
+  const items = store.saveCart(req.user.id, (req.body && req.body.items) || []);
+  res.json({ success: true, items });
+});
+
+/* ============================================================
+   ORDERS — the signed-in user's order history.
+   ============================================================ */
+app.get('/api/orders', auth.requireAuth, (req, res) => {
+  res.json({ success: true, orders: store.listOrders(req.user.id) });
+});
+
 /* ---- ADMIN: list everyone who has signed up ----
    Protected by ADMIN_KEY (sent as the "x-admin-key" header or ?key=…).
    Returns public fields only — never password hashes. */
@@ -250,7 +290,7 @@ app.post('/api/auth/reset', async (req, res) => {
 });
 
 /* ---- checkout: price it HERE (never trust the browser's total), then sell ---- */
-app.post('/api/checkout', async (req, res) => {
+app.post('/api/checkout', optionalAuth, async (req, res) => {
   try {
     const body = req.body || {};
     const order = buildOrder(body.items);                 // authoritative price
@@ -261,8 +301,26 @@ app.post('/api/checkout', async (req, res) => {
       shipping: body.shipping,
       email: body.email
     });
+
+    const orderId = newOrderId();
+
+    // Signed in? Record the order on their account and empty their saved cart.
+    if (req.user) {
+      try {
+        store.addOrder(req.user.id, buildOrderRecord({
+          orderId, order, method: 'card', status: 'paid',
+          email: body.email, shipping: body.shipping,
+          transactionId: transaction.id
+        }));
+        store.clearCart(req.user.id);
+      } catch (e) {
+        console.error('[checkout] could not save order:', e.message);
+      }
+    }
+
     res.status(201).json({
       success: true,
+      orderId,
       transactionId: transaction.id,
       status: transaction.status,                          // e.g. "submitted_for_settlement"
       amount: transaction.amount,
@@ -274,6 +332,28 @@ app.post('/api/checkout', async (req, res) => {
   }
 });
 
+/* Shape a stored order record from a priced order + payment details.
+   `order.shipping` is the shipping COST (from pricing.js); the delivery
+   address arrives separately as `shipping`, stored as shippingAddress so
+   the two never collide. */
+function buildOrderRecord({ orderId, order, method, status, email, shipping, transactionId, invoiceId }) {
+  return {
+    orderId,
+    createdAt: new Date().toISOString(),
+    status,
+    method,
+    items: order.items,          // [{ id, name, unitPrice, quantity, lineTotal }]
+    subtotal: order.subtotal,
+    shippingCost: order.shipping,
+    tax: order.tax,
+    total: order.total,
+    email: email || '',
+    shippingAddress: shipping || null,
+    ...(transactionId ? { transactionId } : {}),
+    ...(invoiceId ? { invoiceId } : {})
+  };
+}
+
 /* ============================================================
    CRYPTO CHECKOUT — Bitcoin / Lightning via BTCPay Server
    Same rule as cards: price the cart HERE, never trust the
@@ -282,14 +362,14 @@ app.post('/api/checkout', async (req, res) => {
    ============================================================ */
 
 /* ---- open a BTCPay invoice for the (server-priced) cart ---- */
-app.post('/api/crypto/checkout', async (req, res) => {
+app.post('/api/crypto/checkout', optionalAuth, async (req, res) => {
   if (!btcpay.CONFIGURED) {
     return res.status(500).json({ error: 'Crypto payments are not set up yet (missing BTCPay keys in server/.env).' });
   }
   try {
     const body = req.body || {};
     const order = buildOrder(body.items);                       // authoritative price
-    const orderId = 'ENL-' + Date.now().toString(36).toUpperCase();
+    const orderId = newOrderId();
 
     // Build a same-site return URL so BTCPay can send the buyer back to us.
     // Prefer an explicit SITE_URL; otherwise use the caller's Origin (a
@@ -305,6 +385,22 @@ app.post('/api/crypto/checkout', async (req, res) => {
       orderId,
       redirectUrl
     });
+
+    // Signed in? Record the order as pending now; the webhook flips it to
+    // paid once BTCPay confirms the on-chain payment. Empty their saved cart
+    // so the same items don't linger after they've committed to buying.
+    if (req.user) {
+      try {
+        store.addOrder(req.user.id, buildOrderRecord({
+          orderId, order, method: 'crypto', status: 'pending',
+          email: body.email, shipping: body.shipping,
+          invoiceId: invoice.id
+        }));
+        store.clearCart(req.user.id);
+      } catch (e) {
+        console.error('[crypto checkout] could not save order:', e.message);
+      }
+    }
 
     res.status(201).json({
       success: true,
@@ -336,9 +432,15 @@ app.post('/api/crypto/webhook', (req, res) => {
   // InvoiceInvalid. See https://docs.btcpayserver.org/API/Greenfield/v1/#webhooks
   console.log(`[crypto webhook] ${evt.type} · invoice ${evt.invoiceId || '—'} · order ${orderId || '—'}`);
 
-  // TODO(fulfilment): when evt.type === 'InvoiceSettled', mark the order paid
-  // and trigger shipping / a confirmation email. This app has no order DB yet,
-  // so for now we simply acknowledge so BTCPay stops retrying.
+  // Move the stored order to its final state. Only signed-in orders were
+  // recorded (guest orders have no owner to attach to), so updateOrderStatus
+  // simply no-ops when the order isn't found.
+  if (evt.type === 'InvoiceSettled') {
+    store.updateOrderStatus(orderId, 'paid', { paidAt: new Date().toISOString() });
+  } else if (evt.type === 'InvoiceExpired' || evt.type === 'InvoiceInvalid') {
+    store.updateOrderStatus(orderId, 'cancelled');
+  }
+
   res.json({ ok: true });
 });
 
