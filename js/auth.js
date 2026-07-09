@@ -362,22 +362,6 @@
   }
 
   /* ============================================================
-     GOOGLE buttons — not wired to a provider yet. Rather than a
-     dead button, point people to email sign-in for now.
-     ============================================================ */
-  function wireGoogleButtons() {
-    document.querySelectorAll('.oauth-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const card = btn.closest('.auth-card') || document;
-        const msg = card.querySelector('.form-msg');
-        setMsg(msg, 'Google sign-in isn\'t set up yet — please use your email below.', 'error');
-        const email = card.querySelector('input[type="email"]');
-        if (email) email.focus();
-      });
-    });
-  }
-
-  /* ============================================================
      HEADER — if signed out, the account icon should lead to login
      ============================================================ */
   function syncHeaderAccount() {
@@ -393,7 +377,6 @@
     else if (page === 'account.html') initAccountPage();
     else if (page === 'forgot-password.html') initForgotPage();
     else if (page === 'reset-password.html') initResetPage();
-    wireGoogleButtons();
     syncHeaderAccount();
   });
 })();
