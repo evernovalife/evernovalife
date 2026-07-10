@@ -19,6 +19,7 @@ const braintree = require('./braintree.js');
 const btcpay = require('./btcpay.js');
 const auth = require('./auth.js');
 const store = require('./store.js');
+const productStore = require('./products.js');
 const mailer = require('./email.js');
 
 const app = express();
@@ -37,8 +38,9 @@ app.use(cors({
 
 // Keep the raw request body around (needed to verify the BTCPay webhook's
 // HMAC signature, which is computed over the exact bytes BTCPay sent).
+// Limit is generous (8mb) so admins can upload a product image as a data URL.
 app.use(express.json({
-  limit: '32kb',
+  limit: '8mb',
   verify: (req, _res, buf) => { req.rawBody = buf; }
 }));
 
@@ -189,6 +191,40 @@ app.put('/api/cart', auth.requireAuth, (req, res) => {
    ============================================================ */
 app.get('/api/orders', auth.requireAuth, (req, res) => {
   res.json({ success: true, orders: store.listOrders(req.user.id) });
+});
+
+/* ============================================================
+   PRODUCTS — admin-managed catalog.
+   GET is public (the storefront reads it). Add/edit/delete are
+   admin-only (same requireAdmin as the user tools).
+   ============================================================ */
+app.get('/api/products', (req, res) => {
+  res.json({ success: true, products: productStore.listProducts(), categories: productStore.CATEGORIES });
+});
+
+app.post('/api/products', requireAdmin, (req, res) => {
+  try {
+    const product = productStore.addProduct(req.body || {});
+    res.status(201).json({ success: true, product });
+  } catch (err) {
+    res.status(err.status || 400).json({ error: err.message });
+  }
+});
+
+app.put('/api/products/:id', requireAdmin, (req, res) => {
+  try {
+    const product = productStore.updateProduct(req.params.id, req.body || {});
+    if (!product) return res.status(404).json({ error: 'No product with that id.' });
+    res.json({ success: true, product });
+  } catch (err) {
+    res.status(err.status || 400).json({ error: err.message });
+  }
+});
+
+app.delete('/api/products/:id', requireAdmin, (req, res) => {
+  const removed = productStore.deleteProduct(req.params.id);
+  if (!removed) return res.status(404).json({ error: 'No product with that id.' });
+  res.json({ success: true, deleted: removed });
 });
 
 /* ---- ADMIN: list everyone who has signed up ----

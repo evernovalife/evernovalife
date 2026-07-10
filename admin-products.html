@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Products — Ever Nova Life Admin</title>
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="theme-color" content="#1e1b4b">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/styles.css?v=8">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Cpath d='M20.00 1.00 L21.91 15.38 L27.78 12.22 L24.62 18.09 L39.00 20.00 L24.62 21.91 L27.78 27.78 L21.91 24.62 L20.00 39.00 L18.09 24.62 L12.22 27.78 L15.38 21.91 L1.00 20.00 L15.38 18.09 L12.22 12.22 L18.09 15.38 Z' fill='%23a855f7'/%3E%3C/svg%3E">
+  <style>
+    .admin-table { width:100%; border-collapse:collapse; margin-top:1rem; font-size:0.92rem; }
+    .admin-table th, .admin-table td { text-align:left; padding:9px 12px; border-bottom:1px solid rgba(148,163,184,0.25); vertical-align:middle; }
+    .admin-table th { color:#a78bfa; font-weight:600; font-size:0.78rem; text-transform:uppercase; letter-spacing:0.04em; }
+    .admin-table tbody tr:hover { background:rgba(148,163,184,0.08); }
+    .admin-table-wrap { overflow-x:auto; }
+    .p-thumb { width:44px; height:44px; border-radius:8px; object-fit:cover; background:rgba(255,255,255,0.06); }
+    .pform-grid { display:grid; grid-template-columns:1fr 1fr; gap:1rem; }
+    .pform-grid .full { grid-column:1 / -1; }
+    @media (max-width:640px){ .pform-grid { grid-template-columns:1fr; } }
+    .spec-row { display:flex; gap:0.5rem; margin-bottom:0.5rem; }
+    .spec-row input { flex:1; }
+    .img-preview { width:120px; height:120px; border-radius:10px; object-fit:cover; border:1px solid var(--glass-border-strong); background:rgba(255,255,255,0.05); display:none; }
+    .row-actions { display:flex; gap:0.4rem; }
+    .tabs { display:flex; gap:0.5rem; margin-bottom:1rem; }
+    .muted-sm { font-size:0.8rem; color:#94a3b8; }
+  </style>
+</head>
+<body>
+
+  <!-- ===== HEADER ===== -->
+  <header class="site-header">
+    <div class="container header-inner">
+      <a href="index.html" class="logo">
+        <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="nsD" gradientUnits="userSpaceOnUse" x1="50" y1="2" x2="50" y2="98"><stop offset="0%" stop-color="#6d28d9"/><stop offset="50%" stop-color="#a21caf"/><stop offset="100%" stop-color="#c0267e"/></linearGradient><linearGradient id="nsL" gradientUnits="userSpaceOnUse" x1="50" y1="2" x2="50" y2="98"><stop offset="0%" stop-color="#ede9fe"/><stop offset="50%" stop-color="#ffffff"/><stop offset="100%" stop-color="#fce7f3"/></linearGradient></defs><path d="M50 50 L50 0 L54.97 37.99 Z" fill="url(#nsD)"/><path d="M50 50 L100 50 L62.01 54.97 Z" fill="url(#nsD)"/><path d="M50 50 L50 100 L45.03 62.01 Z" fill="url(#nsD)"/><path d="M50 50 L0 50 L37.99 45.03 Z" fill="url(#nsD)"/><circle cx="50" cy="50" r="6" fill="url(#nsD)"/><circle cx="50" cy="50" r="2.6" fill="#f5f3ff"/></svg>
+        <span class="logo-text">Ever Nova Life</span>
+      </a>
+      <nav class="main-nav" id="mainNav">
+        <a href="index.html">Home</a>
+        <a href="products.html">Products</a>
+        <a href="admin.html">Users</a>
+        <a href="admin-products.html" class="active">Products (Admin)</a>
+      </nav>
+      <div class="header-actions">
+        <a href="index.html" class="icon-btn" aria-label="Home">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12l9-9 9 9"/><path d="M9 21V12h6v9"/></svg>
+        </a>
+        <button class="hamburger" id="hamburger" aria-label="Menu">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <section class="page-head">
+    <div class="container">
+      <div class="breadcrumb"><a href="index.html">Home</a> <span>/</span> <a href="admin.html">Admin</a> <span>/</span> <span>Products</span></div>
+      <h1>Manage <span class="gradient-text">Products</span></h1>
+      <p>Add products to sell, or edit any existing one — image, price, labels and all details.</p>
+    </div>
+  </section>
+
+  <section class="section" style="padding-top:0">
+    <div class="container">
+      <div class="tabs">
+        <a class="btn btn-ghost btn-sm" href="admin.html">👤 Users</a>
+        <a class="btn btn-primary btn-sm" href="admin-products.html">📦 Products</a>
+      </div>
+
+      <div id="adminStatus" class="form-msg"></div>
+
+      <!-- ADD / EDIT FORM -->
+      <div class="account-card glass" id="formCard">
+        <h3 id="formTitle">Add a product</h3>
+        <form id="productForm" novalidate>
+          <div class="pform-grid">
+            <div class="form-field full">
+              <label for="pName">Product name *</label>
+              <input type="text" id="pName" placeholder="e.g. BPC-157" required>
+            </div>
+
+            <div class="form-field">
+              <label for="pCategory">Category</label>
+              <select id="pCategory"></select>
+            </div>
+            <div class="form-field">
+              <label for="pBadge">Label / badge <span class="muted-sm">(optional)</span></label>
+              <input type="text" id="pBadge" placeholder="e.g. Bestseller, New, Sale">
+            </div>
+
+            <div class="form-field">
+              <label for="pPrice">Price (USD) *</label>
+              <input type="number" id="pPrice" min="0" step="0.01" placeholder="49.99" required>
+            </div>
+            <div class="form-field">
+              <label for="pOriginal">Original price <span class="muted-sm">(optional, for a strikethrough)</span></label>
+              <input type="number" id="pOriginal" min="0" step="0.01" placeholder="59.99">
+            </div>
+
+            <div class="form-field">
+              <label for="pPurity">Purity</label>
+              <input type="text" id="pPurity" placeholder="e.g. 99.0%">
+            </div>
+            <div class="form-field">
+              <label for="pQuantity">Size / quantity</label>
+              <input type="text" id="pQuantity" placeholder="e.g. 10mg">
+            </div>
+
+            <div class="form-field">
+              <label for="pLot">Lot #</label>
+              <input type="text" id="pLot" placeholder="e.g. ENL-24010">
+            </div>
+            <div class="form-field">
+              <label>Options</label>
+              <label class="form-check" style="margin-top:6px"><input type="checkbox" id="pInStock" checked> <span>In stock</span></label>
+              <label class="form-check"><input type="checkbox" id="pFeatured"> <span>Featured (show on home page)</span></label>
+            </div>
+
+            <div class="form-field full">
+              <label for="pDescription">Description</label>
+              <textarea id="pDescription" rows="3" placeholder="Short research description…"></textarea>
+            </div>
+
+            <div class="form-field full">
+              <label>Specifications <span class="muted-sm">(e.g. Molecular Weight → 403.9 g/mol)</span></label>
+              <div id="specRows"></div>
+              <button type="button" class="btn btn-ghost btn-sm" id="addSpecBtn">+ Add spec row</button>
+            </div>
+
+            <div class="form-field full">
+              <label for="pImage">Product image <span class="muted-sm">(uploaded from your computer; auto-shrunk)</span></label>
+              <input type="file" id="pImage" accept="image/*">
+              <div style="display:flex;align-items:center;gap:1rem;margin-top:0.6rem">
+                <img id="imgPreview" class="img-preview" alt="preview">
+                <span class="muted-sm" id="imgHint">Leave empty to keep the current image (research vials use a generated label if none).</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="form-msg" id="formMsg"></div>
+          <div style="display:flex;gap:0.6rem;margin-top:0.75rem;flex-wrap:wrap">
+            <button class="btn btn-primary" type="submit" id="saveBtn">Add product</button>
+            <button class="btn btn-ghost" type="button" id="cancelBtn" style="display:none">Cancel edit</button>
+          </div>
+        </form>
+      </div>
+
+      <!-- PRODUCT LIST -->
+      <div class="account-card glass" style="margin-top:1.5rem">
+        <h3>All products (<span id="pCount">0</span>)</h3>
+        <div id="productList" class="admin-table-wrap"></div>
+      </div>
+
+      <!-- admin key fallback -->
+      <details id="adminKeyBox" style="margin-top:1rem">
+        <summary style="cursor:pointer;color:#94a3b8">Not signed in as admin? Use an admin key</summary>
+        <form id="keyForm" style="margin-top:0.75rem;max-width:420px">
+          <div class="form-field"><label for="adminKey">Admin key</label><input type="password" id="adminKey" autocomplete="off"></div>
+          <button class="btn btn-primary btn-sm" type="submit">Use key</button>
+        </form>
+      </details>
+    </div>
+  </section>
+
+  <script src="js/config.js?v=8"></script>
+  <script>
+  (function () {
+    var API = (window.PEPTIDE_API_BASE || '');
+    var STORE_KEY = 'enl_admin_key';
+    var lastKey = '';
+    var products = [];
+    var categories = [];
+    var newImageData = '';   // set when the admin picks a new image file
+
+    var $ = function (id) { return document.getElementById(id); };
+    var form = $('productForm');
+    var statusEl = $('adminStatus');
+    var listEl = $('productList');
+    var msgEl = $('formMsg');
+
+    function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]; }); }
+    function money(n) { return '$' + (Number(n) || 0).toFixed(2); }
+    function token() { try { return localStorage.getItem('enl_token') || ''; } catch (e) { return ''; } }
+    function setStatus(html, kind) { statusEl.className = 'form-msg' + (kind ? ' ' + kind : ''); statusEl.innerHTML = html || ''; }
+    function setMsg(text, kind) { msgEl.className = 'form-msg' + (kind ? ' ' + kind : ''); msgEl.textContent = text || ''; }
+    function headers(withJson) {
+      var h = {};
+      if (withJson) h['Content-Type'] = 'application/json';
+      var t = token(); if (t) h['Authorization'] = 'Bearer ' + t;
+      if (lastKey) h['x-admin-key'] = lastKey;
+      return h;
+    }
+
+    /* ---- categories dropdown ---- */
+    function fillCategories() {
+      var sel = $('pCategory');
+      sel.innerHTML = categories.map(function (c) { return '<option value="' + esc(c.key) + '">' + esc(c.name) + '</option>'; }).join('');
+    }
+
+    /* ---- spec rows ---- */
+    function addSpecRow(key, val) {
+      var wrap = document.createElement('div');
+      wrap.className = 'spec-row';
+      wrap.innerHTML = '<input class="spec-key" placeholder="Label (e.g. Molecular Weight)" value="' + esc(key || '') + '">' +
+                       '<input class="spec-val" placeholder="Value" value="' + esc(val || '') + '">' +
+                       '<button type="button" class="btn btn-ghost btn-sm spec-del">✕</button>';
+      wrap.querySelector('.spec-del').addEventListener('click', function () { wrap.remove(); });
+      $('specRows').appendChild(wrap);
+    }
+    function collectSpecs() {
+      var specs = {};
+      Array.prototype.forEach.call(document.querySelectorAll('#specRows .spec-row'), function (row) {
+        var k = row.querySelector('.spec-key').value.trim();
+        var v = row.querySelector('.spec-val').value.trim();
+        if (k) specs[k] = v;
+      });
+      return specs;
+    }
+
+    /* ---- image: downscale to a reasonable data URL ---- */
+    function shrinkImage(file, maxDim, cb) {
+      var reader = new FileReader();
+      reader.onload = function (e) {
+        var img = new Image();
+        img.onload = function () {
+          var scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+          var w = Math.max(1, Math.round(img.width * scale));
+          var h = Math.max(1, Math.round(img.height * scale));
+          var canvas = document.createElement('canvas');
+          canvas.width = w; canvas.height = h;
+          var ctx = canvas.getContext('2d');
+          ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, w, h);   // flatten transparency for JPEG
+          ctx.drawImage(img, 0, 0, w, h);
+          try { cb(canvas.toDataURL('image/jpeg', 0.82)); } catch (err) { cb(null); }
+        };
+        img.onerror = function () { cb(null); };
+        img.src = e.target.result;
+      };
+      reader.onerror = function () { cb(null); };
+      reader.readAsDataURL(file);
+    }
+
+    $('pImage').addEventListener('change', function () {
+      var file = this.files && this.files[0];
+      if (!file) return;
+      shrinkImage(file, 900, function (dataUrl) {
+        if (!dataUrl) { setMsg('Could not read that image.', 'error'); return; }
+        newImageData = dataUrl;
+        var pv = $('imgPreview'); pv.src = dataUrl; pv.style.display = 'block';
+        $('imgHint').textContent = Math.round(dataUrl.length / 1024) + ' KB (shrunk). Save to apply.';
+      });
+    });
+
+    $('addSpecBtn').addEventListener('click', function () { addSpecRow('', ''); });
+
+    /* ---- load + render the catalog ---- */
+    function loadCatalog() {
+      setStatus('Loading…', '');
+      fetch(API + '/api/products', { headers: headers(false) })
+        .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { return { status: r.status, ok: r.ok, d: d }; }); })
+        .then(function (res) {
+          if (!res.ok) { setStatus(esc(res.d.error || 'Could not load products.'), 'error'); return; }
+          products = res.d.products || [];
+          categories = res.d.categories || [];
+          fillCategories();
+          renderList();
+          setStatus(products.length + ' product' + (products.length === 1 ? '' : 's') + ' in the catalog.', 'success');
+        })
+        .catch(function () { setStatus("Can't reach the server. Is the backend awake?", 'error'); });
+    }
+
+    function renderList() {
+      $('pCount').textContent = products.length;
+      if (!products.length) { listEl.innerHTML = '<p class="muted-sm" style="margin-top:1rem">No products yet.</p>'; return; }
+      var rows = products.map(function (p) {
+        var img = p.image || ('assets/vials/' + p.id + '.png');
+        return '<tr>' +
+          '<td><img class="p-thumb" src="' + esc(img) + '" alt="" onerror="this.style.visibility=\'hidden\'"></td>' +
+          '<td><strong>' + esc(p.name) + '</strong>' + (p.featured ? ' <span class="order-status paid" style="font-size:0.6rem">featured</span>' : '') + '</td>' +
+          '<td>' + esc(p.categoryName || p.category || '') + '</td>' +
+          '<td>' + money(p.price) + '</td>' +
+          '<td>' + (p.inStock === false ? '<span class="muted-sm">out</span>' : 'in stock') + '</td>' +
+          '<td class="row-actions"><button class="btn btn-ghost btn-sm p-edit" data-id="' + esc(p.id) + '">Edit</button>' +
+          '<button class="btn btn-ghost btn-sm p-del" data-id="' + esc(p.id) + '" data-name="' + esc(p.name) + '">Delete</button></td>' +
+          '</tr>';
+      }).join('');
+      listEl.innerHTML = '<table class="admin-table"><thead><tr><th></th><th>Name</th><th>Category</th><th>Price</th><th>Stock</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>';
+      Array.prototype.forEach.call(listEl.querySelectorAll('.p-edit'), function (b) { b.addEventListener('click', function () { startEdit(b.getAttribute('data-id')); }); });
+      Array.prototype.forEach.call(listEl.querySelectorAll('.p-del'), function (b) { b.addEventListener('click', function () { del(b.getAttribute('data-id'), b.getAttribute('data-name')); }); });
+    }
+
+    /* ---- form fill / reset ---- */
+    function resetForm() {
+      form.removeAttribute('data-editing');
+      form.reset();
+      $('specRows').innerHTML = '';
+      newImageData = '';
+      $('imgPreview').style.display = 'none';
+      $('imgHint').textContent = 'Leave empty to keep the current image (research vials use a generated label if none).';
+      $('formTitle').textContent = 'Add a product';
+      $('saveBtn').textContent = 'Add product';
+      $('cancelBtn').style.display = 'none';
+      $('pInStock').checked = true;
+      setMsg('');
+    }
+
+    function startEdit(id) {
+      var p = products.filter(function (x) { return String(x.id) === String(id); })[0];
+      if (!p) return;
+      form.setAttribute('data-editing', String(p.id));
+      $('pName').value = p.name || '';
+      fillCategories();
+      $('pCategory').value = p.category || '';
+      $('pBadge').value = p.badge || '';
+      $('pPrice').value = (p.price != null ? p.price : '');
+      $('pOriginal').value = (p.originalPrice != null ? p.originalPrice : '');
+      $('pPurity').value = p.purity || '';
+      $('pQuantity').value = p.quantity || '';
+      $('pLot').value = p.lot || '';
+      $('pInStock').checked = p.inStock !== false;
+      $('pFeatured').checked = !!p.featured;
+      $('pDescription').value = p.description || '';
+      $('specRows').innerHTML = '';
+      var specs = p.specs || {};
+      Object.keys(specs).forEach(function (k) { addSpecRow(k, specs[k]); });
+      newImageData = '';
+      var pv = $('imgPreview');
+      if (p.image) { pv.src = p.image; pv.style.display = 'block'; }
+      else { pv.style.display = 'none'; }
+      $('imgHint').textContent = 'Leave empty to keep the current image.';
+      $('formTitle').textContent = 'Edit: ' + p.name;
+      $('saveBtn').textContent = 'Save changes';
+      $('cancelBtn').style.display = 'inline-flex';
+      setMsg('');
+      $('formCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    $('cancelBtn').addEventListener('click', resetForm);
+
+    /* ---- save (add or update) ---- */
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      var name = $('pName').value.trim();
+      if (!name) { setMsg('Please enter a product name.', 'error'); return; }
+      if ($('pPrice').value === '' || isNaN(Number($('pPrice').value))) { setMsg('Please enter a valid price.', 'error'); return; }
+
+      var body = {
+        name: name,
+        category: $('pCategory').value,
+        badge: $('pBadge').value.trim(),
+        price: $('pPrice').value,
+        originalPrice: $('pOriginal').value,
+        purity: $('pPurity').value.trim(),
+        quantity: $('pQuantity').value.trim(),
+        lot: $('pLot').value.trim(),
+        inStock: $('pInStock').checked,
+        featured: $('pFeatured').checked,
+        description: $('pDescription').value.trim(),
+        specs: collectSpecs()
+      };
+      if (newImageData) body.image = newImageData;   // only send when a new image was chosen
+
+      var editingId = form.getAttribute('data-editing');
+      var url = API + '/api/products' + (editingId ? '/' + encodeURIComponent(editingId) : '');
+      var method = editingId ? 'PUT' : 'POST';
+
+      var btn = $('saveBtn'); var label = btn.textContent;
+      btn.disabled = true; btn.textContent = 'Saving…';
+      fetch(url, { method: method, headers: headers(true), body: JSON.stringify(body) })
+        .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { return { status: r.status, ok: r.ok, d: d }; }); })
+        .then(function (res) {
+          btn.disabled = false; btn.textContent = label;
+          if (res.status === 401) { setMsg('Admin access required — sign in with the admin account, or use an admin key below.', 'error'); if ($('adminKeyBox')) $('adminKeyBox').open = true; return; }
+          if (!res.ok) { setMsg(res.d.error || 'Could not save the product.', 'error'); return; }
+          resetForm();
+          loadCatalog();
+        })
+        .catch(function () { btn.disabled = false; btn.textContent = label; setMsg("Can't reach the server.", 'error'); });
+    });
+
+    /* ---- delete ---- */
+    function del(id, name) {
+      if (!window.confirm('Delete "' + name + '"? This removes it from the store. This cannot be undone.')) return;
+      fetch(API + '/api/products/' + encodeURIComponent(id), { method: 'DELETE', headers: headers(false) })
+        .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { return { status: r.status, ok: r.ok, d: d }; }); })
+        .then(function (res) {
+          if (res.status === 401) { setStatus('Admin access required to delete.', 'error'); return; }
+          if (!res.ok) { window.alert(res.d.error || 'Could not delete.'); return; }
+          loadCatalog();
+        })
+        .catch(function () { window.alert("Can't reach the server."); });
+    }
+
+    /* ---- admin key fallback ---- */
+    try { lastKey = localStorage.getItem(STORE_KEY) || ''; } catch (e) {}
+    $('keyForm').addEventListener('submit', function (e) {
+      e.preventDefault();
+      lastKey = $('adminKey').value.trim();
+      try { localStorage.setItem(STORE_KEY, lastKey); } catch (e2) {}
+      loadCatalog();
+    });
+    try { if (lastKey) $('adminKey').value = lastKey; } catch (e) {}
+
+    // boot
+    resetForm();
+    loadCatalog();
+  })();
+  </script>
+</body>
+</html>

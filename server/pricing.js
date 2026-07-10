@@ -6,7 +6,9 @@
      · free shipping over $100, else $9.99
      · 8% tax
    ============================================================ */
-const { getProductById } = require('../js/products-data.js');
+// Price from the admin-managed product store (seeded from the static catalog),
+// so products added or edited in the admin are priced correctly at checkout.
+const { findProductById: getProductById } = require('./products.js');
 
 const FREE_SHIP_THRESHOLD = 100;
 const SHIP_FLAT = 9.99;

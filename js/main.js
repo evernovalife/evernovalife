@@ -600,7 +600,43 @@ function initProductsPage() {
   const sidebar = document.getElementById('filtersSidebar');
   if (ftBtn && sidebar) ftBtn.addEventListener('click', () => sidebar.classList.toggle('collapsed'));
 
+  // expose the re-filter so the catalog can repaint after products load from the API
+  window._applyProductFilters = apply;
   apply();
+}
+
+/* ============================================================
+   DYNAMIC CATALOG — products are admin-managed on the server.
+   We render instantly from the built-in static catalog, then pull
+   the live catalog from the API and repaint (so admin adds/edits
+   show up). Falls back to static silently if the API is unreachable.
+   ============================================================ */
+function loadProducts() {
+  if (typeof fetch === 'undefined' || !Array.isArray(window.PRODUCTS)) return;
+  fetch(API_BASE + '/api/products')
+    .then(res => (res.ok ? res.json() : null))
+    .then(data => {
+      if (!data || !Array.isArray(data.products) || !data.products.length) return;
+      // Mutate the SAME array in place so the getProductById/getFeatured…
+      // helpers (which close over it) see the live data.
+      window.PRODUCTS.length = 0;
+      window.PRODUCTS.push(...data.products);
+      rerenderProducts();
+    })
+    .catch(() => { /* offline / cold start → keep the static catalog */ });
+}
+
+function rerenderProducts() {
+  const page = (location.pathname.split('/').pop() || 'index.html').toLowerCase();
+  if (page === '' || page === 'index.html') {
+    displayFeaturedProducts();
+    displayCategories();
+  } else if (page === 'products.html') {
+    if (typeof window._applyProductFilters === 'function') window._applyProductFilters();
+    else initProductsPage();
+  } else if (page === 'product.html') {
+    initProductDetailPage();
+  }
 }
 
 /* ============================================================
@@ -1436,6 +1472,9 @@ document.addEventListener('DOMContentLoaded', () => {
     case 'contact.html': initContactForm(); break;
     case 'wishlist.html': renderWishlistPage(); break;
   }
+
+  // pull the live (admin-managed) catalog and repaint product views
+  loadProducts();
 
   // When the cart finishes syncing with the account (server), repaint any
   // cart-driven view so it reflects the reconciled items.
