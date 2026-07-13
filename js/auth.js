@@ -271,17 +271,10 @@
     // real orders + stat tiles from the server
     renderAccountOrders();
 
-    // admin accounts get a link to the user-management page
+    // admin accounts: reveal the Admin section of the nav (Manage Users + Products)
     if (user.isAdmin) {
-      const nav = document.querySelector('.account-nav');
-      const signOut = document.getElementById('signOutBtn');
-      if (nav && !document.getElementById('adminNavLink')) {
-        const a = document.createElement('a');
-        a.id = 'adminNavLink';
-        a.href = 'admin.html';
-        a.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 5v6c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V5l-8-3Z"/><path d="M9 12l2 2 4-4"/></svg><span>Admin</span>';
-        nav.insertBefore(a, signOut || null);
-      }
+      const adminGroup = document.getElementById('adminNavGroup');
+      if (adminGroup) adminGroup.style.display = '';
     }
 
     // wire Sign Out

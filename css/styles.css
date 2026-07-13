@@ -763,15 +763,34 @@ h1, h2, h3, h4 { line-height: 1.2; font-weight: 700; letter-spacing: -0.02em; }
    ACCOUNT DASHBOARD
    ============================================================ */
 .account-layout { display: grid; grid-template-columns: 240px 1fr; gap: 2rem; align-items: start; }
-.account-nav { padding: 1.25rem; }
+.account-nav { padding: 0.9rem; display: flex; flex-direction: column; }
+.account-nav-group { display: flex; flex-direction: column; gap: 0.15rem; }
+.account-nav-group + .account-nav-group {
+  margin-top: 0.6rem; padding-top: 0.6rem; border-top: 1px solid var(--glass-border);
+}
+.account-nav-label {
+  font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.09em;
+  color: var(--accent-purple); font-weight: 700; padding: 0.3rem 0.9rem 0.35rem;
+}
 .account-nav a {
+  position: relative;
   display: flex; align-items: center; gap: 0.7rem;
   padding: 0.7rem 0.9rem; border-radius: var(--radius-sm);
   color: var(--dark-text-muted); font-size: 0.92rem; font-weight: 500;
   transition: all 0.2s var(--ease);
 }
 .account-nav a:hover, .account-nav a.active { background: var(--glass-bg); color: #fff; }
+.account-nav a.active::before {
+  content: ''; position: absolute; left: 0; top: 50%; transform: translateY(-50%);
+  width: 3px; height: 58%; border-radius: 3px;
+  background: linear-gradient(180deg, var(--accent-purple), #ec4899);
+}
 .account-nav a svg { width: 18px; height: 18px; }
+/* admin section: tint icons + a subtle hover accent */
+.account-nav .admin-only a svg { color: var(--accent-purple); }
+.account-nav .admin-only a:hover { background: rgba(168,85,247,0.12); }
+.account-nav .signout-link:hover { background: rgba(239,68,68,0.12); color: #fff; }
+.account-nav .signout-link:hover svg { color: #f87171; }
 .account-card { padding: 1.75rem; margin-bottom: 1.5rem; }
 .account-greeting { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; }
 .avatar {
