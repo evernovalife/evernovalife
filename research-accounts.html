@@ -3,19 +3,19 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Products — Ever Nova Life</title>
-  <meta name="description" content="Browse Ever Nova Life's catalog of research peptides — metabolic, growth factor, tissue repair compounds and premium blends. 99%+ purity, research use only.">
-  <link rel="canonical" href="https://evernovalife.com/products.html">
+  <title>Research Accounts — Ever Nova Life</title>
+  <meta name="description" content="Apply for a research account with Ever Nova Life. Materials are supplied for qualified in-vitro research; organizations may be asked to provide institutional or business information before ordering.">
+  <link rel="canonical" href="https://evernovalife.com/research-accounts.html">
   <meta name="theme-color" content="#1e1b4b">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Ever Nova Life">
-  <meta property="og:title" content="Products — Ever Nova Life">
-  <meta property="og:description" content="Browse Ever Nova Life's catalog of research peptides — metabolic, growth factor, tissue repair compounds and premium blends. 99%+ purity, research use only.">
-  <meta property="og:url" content="https://evernovalife.com/products.html">
+  <meta property="og:title" content="Research Accounts — Ever Nova Life">
+  <meta property="og:description" content="Apply for a research account. Materials are supplied for qualified in-vitro research organizations.">
+  <meta property="og:url" content="https://evernovalife.com/research-accounts.html">
   <meta property="og:image" content="https://evernovalife.com/og-image.svg">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="Products — Ever Nova Life">
-  <meta name="twitter:description" content="Browse Ever Nova Life's catalog of research peptides — metabolic, growth factor, tissue repair compounds and premium blends. 99%+ purity, research use only.">
+  <meta name="twitter:title" content="Research Accounts — Ever Nova Life">
+  <meta name="twitter:description" content="Apply for a research account. Materials are supplied for qualified in-vitro research organizations.">
   <meta name="twitter:image" content="https://evernovalife.com/og-image.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -66,62 +66,97 @@
     </form>
   </div>
 
-  <!-- ===== PAGE HEAD ===== -->
   <section class="page-head">
     <div class="container">
-      <div class="breadcrumb"><a href="index.html">Home</a> <span>/</span> <span>Products</span></div>
-      <h1>Research <span class="gradient-text">Catalog</span></h1>
-      <p>HPLC-verified research peptides, lab supplies and premium blends. All compounds for in-vitro research use only.</p>
+      <div class="breadcrumb"><a href="index.html">Home</a> <span>/</span> <span>Research Accounts</span></div>
+      <h1>Research <span class="gradient-text">Accounts</span></h1>
+      <p>Ever Nova Life supplies materials for qualified in-vitro research. Organizations may be asked to provide institutional or business information before ordering.</p>
     </div>
   </section>
 
+  <!-- ===== HOW APPROVAL WORKS ===== -->
   <section class="section" style="padding-top:0">
     <div class="container">
-      <div class="catalog-layout">
+      <div class="content-card glass">
+        <h2>How Approval Works</h2>
+        <p>Access is granted to qualified organizations rather than by a single checkbox at checkout.</p>
+        <ol class="bullets">
+          <li><strong>Application submitted</strong> — you complete the short form below.</li>
+          <li><strong>Organization reviewed</strong> — we review the business or institutional information provided.</li>
+          <li><strong>Account approved or declined</strong> — you receive a decision by email.</li>
+          <li><strong>Ordering access enabled</strong> — approved accounts can view ordering options after signing in.</li>
+        </ol>
+        <p style="font-size:.9rem;opacity:.85">Please do not submit confidential research protocols through this form. A general description of your intended research context is sufficient.</p>
+      </div>
+    </div>
+  </section>
 
-        <!-- FILTERS -->
-        <aside class="filters-sidebar glass" id="filtersSidebar">
-          <div class="filter-group">
-            <h4>Category</h4>
-            <label class="filter-option"><input type="checkbox" class="cat-filter" value="growth"> Growth Factors</label>
-            <label class="filter-option"><input type="checkbox" class="cat-filter" value="metabolic"> Metabolic</label>
-            <label class="filter-option"><input type="checkbox" class="cat-filter" value="repair"> Tissue Repair</label>
-            <label class="filter-option"><input type="checkbox" class="cat-filter" value="blends"> Premium Blends</label>
-            <label class="filter-option"><input type="checkbox" class="cat-filter" value="supplies"> Lab Supplies</label>
+  <!-- ===== APPLICATION FORM ===== -->
+  <section class="section" style="padding-top:0">
+    <div class="container">
+      <div class="content-card glass">
+        <h2>Apply for Research Access</h2>
+        <!-- [PLACEHOLDER — wire this form to your backend endpoint or email handler. It does not submit anywhere yet.] -->
+        <form id="researchAccountForm" onsubmit="return false" style="display:grid;gap:1rem;max-width:640px">
+          <div>
+            <label for="ra-name">Full name *</label>
+            <input id="ra-name" name="fullName" type="text" required>
           </div>
-          <div class="filter-group">
-            <h4>Max Price: <span id="priceValue" class="gradient-text">$150.00</span></h4>
-            <input type="range" class="price-range" id="priceRange" min="0" max="150" value="150" step="5">
+          <div>
+            <label for="ra-role">Professional role *</label>
+            <input id="ra-role" name="role" type="text" required>
           </div>
-          <div class="filter-group">
-            <h4>Availability</h4>
-            <label class="filter-option"><input type="checkbox" id="inStockOnly"> In stock only</label>
+          <div>
+            <label for="ra-org">Organization *</label>
+            <input id="ra-org" name="organization" type="text" required>
           </div>
-          <div class="filter-group">
-            <label class="filter-option" style="font-weight:600;color:var(--accent-purple)">
-              <input type="checkbox" onclick="document.querySelectorAll('.cat-filter').forEach(c=>{c.checked=false;c.dispatchEvent(new Event('change'))});this.checked=false"> Clear category filters
-            </label>
+          <div>
+            <label for="ra-dept">Department</label>
+            <input id="ra-dept" name="department" type="text">
           </div>
-        </aside>
+          <div>
+            <label for="ra-email">Institutional or business email *</label>
+            <input id="ra-email" name="email" type="email" required>
+          </div>
+          <div>
+            <label for="ra-website">Organization website</label>
+            <input id="ra-website" name="website" type="url" placeholder="https://">
+          </div>
+          <div>
+            <label for="ra-country-bill">Billing country *</label>
+            <input id="ra-country-bill" name="billingCountry" type="text" required>
+          </div>
+          <div>
+            <label for="ra-country-ship">Shipping country *</label>
+            <input id="ra-country-ship" name="shippingCountry" type="text" required>
+          </div>
+          <div>
+            <label for="ra-context">General intended research context *</label>
+            <textarea id="ra-context" name="researchContext" rows="4" required placeholder="A brief, general description — no confidential protocols."></textarea>
+          </div>
+          <label style="display:flex;gap:.6rem;align-items:flex-start;font-size:.95rem">
+            <input type="checkbox" name="confirmInVitro" required style="margin-top:.25rem">
+            <span>I confirm these materials are for qualified in-vitro research use only, and not for human or animal use.</span>
+          </label>
+          <label style="display:flex;gap:.6rem;align-items:flex-start;font-size:.95rem">
+            <input type="checkbox" name="acceptRestrictions" required style="margin-top:.25rem">
+            <span>I accept the purchase restrictions and <a href="terms.html">Terms of Service</a>.</span>
+          </label>
+          <label style="display:flex;gap:.6rem;align-items:flex-start;font-size:.95rem">
+            <input type="checkbox" name="authorizedBuyer" required style="margin-top:.25rem">
+            <span>I am authorized to purchase on behalf of this organization.</span>
+          </label>
+          <div class="hero-cta" style="margin-top:.5rem">
+            <button type="submit" class="btn btn-primary btn-lg">Apply for Research Access</button>
+            <a href="contact.html?subject=technical" class="btn btn-ghost btn-lg">Contact Technical Support</a>
+          </div>
+          <div class="form-msg" aria-live="polite"></div>
+        </form>
+      </div>
 
-        <!-- RESULTS -->
-        <div class="catalog-main">
-          <div class="catalog-toolbar">
-            <span class="result-count" id="resultCount">7 products</span>
-            <div style="display:flex;gap:0.6rem;align-items:center">
-              <input type="search" id="catalogSearch" class="select-field" placeholder="Search…" style="min-width:160px">
-              <button class="btn btn-ghost btn-sm filter-toggle-btn" id="filterToggle">Filters</button>
-              <select class="select-field" id="sortSelect" aria-label="Sort">
-                <option value="featured">Featured</option>
-                <option value="price-low">Price: Low to High</option>
-                <option value="price-high">Price: High to Low</option>
-                <option value="name">Name: A–Z</option>
-              </select>
-            </div>
-          </div>
-          <div class="products-grid" id="productsGrid"></div>
-        </div>
-
+      <div class="content-card glass" style="margin-top:1.5rem;border:1px solid rgba(168,85,247,.35)">
+        <h3 style="margin-top:0">Research-Use Notice</h3>
+        <p style="margin-bottom:0">For qualified in-vitro research and laboratory use only. Not for human or animal use. Purchasers must meet the eligibility requirements in our <a href="terms.html">Terms of Service</a>.</p>
       </div>
     </div>
   </section>

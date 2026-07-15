@@ -3,19 +3,19 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Products — Ever Nova Life</title>
-  <meta name="description" content="Browse Ever Nova Life's catalog of research peptides — metabolic, growth factor, tissue repair compounds and premium blends. 99%+ purity, research use only.">
-  <link rel="canonical" href="https://evernovalife.com/products.html">
+  <title>Quality &amp; Documentation — Ever Nova Life</title>
+  <meta name="description" content="Ever Nova Life quality and documentation — testing approach, lot-release process, and a searchable COA library for qualified in-vitro research organizations.">
+  <link rel="canonical" href="https://evernovalife.com/quality.html">
   <meta name="theme-color" content="#1e1b4b">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Ever Nova Life">
-  <meta property="og:title" content="Products — Ever Nova Life">
-  <meta property="og:description" content="Browse Ever Nova Life's catalog of research peptides — metabolic, growth factor, tissue repair compounds and premium blends. 99%+ purity, research use only.">
-  <meta property="og:url" content="https://evernovalife.com/products.html">
+  <meta property="og:title" content="Quality &amp; Documentation — Ever Nova Life">
+  <meta property="og:description" content="Testing approach, lot-release process, and lot-specific documentation for qualified in-vitro research organizations.">
+  <meta property="og:url" content="https://evernovalife.com/quality.html">
   <meta property="og:image" content="https://evernovalife.com/og-image.svg">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="Products — Ever Nova Life">
-  <meta name="twitter:description" content="Browse Ever Nova Life's catalog of research peptides — metabolic, growth factor, tissue repair compounds and premium blends. 99%+ purity, research use only.">
+  <meta name="twitter:title" content="Quality &amp; Documentation — Ever Nova Life">
+  <meta name="twitter:description" content="Testing approach, lot-release process, and lot-specific documentation for qualified in-vitro research organizations.">
   <meta name="twitter:image" content="https://evernovalife.com/og-image.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -66,62 +66,111 @@
     </form>
   </div>
 
-  <!-- ===== PAGE HEAD ===== -->
   <section class="page-head">
     <div class="container">
-      <div class="breadcrumb"><a href="index.html">Home</a> <span>/</span> <span>Products</span></div>
-      <h1>Research <span class="gradient-text">Catalog</span></h1>
-      <p>HPLC-verified research peptides, lab supplies and premium blends. All compounds for in-vitro research use only.</p>
+      <div class="breadcrumb"><a href="index.html">Home</a> <span>/</span> <span>Quality &amp; Documentation</span></div>
+      <h1>Quality &amp; <span class="gradient-text">Documentation</span></h1>
+      <p>Each released lot is supported by identity and purity documentation. Below is how material is tested, how a lot is released, and where to find lot-specific records.</p>
     </div>
   </section>
 
+  <!-- ===== TESTING APPROACH ===== -->
   <section class="section" style="padding-top:0">
     <div class="container">
-      <div class="catalog-layout">
+      <div class="content-card glass">
+        <h2>Our Testing Approach</h2>
+        <p>Material offered by Ever Nova Life is analyzed by an independent laboratory, and the original reports are published in the COA Library below.</p>
+        <table class="rate-table">
+          <tbody>
+            <tr><td><strong>What is tested</strong></td><td>Identity and content (mg) for every listed lot; purity (%) is reported for single-peptide lots. Blend lots are analyzed for the identity and content of each component (purity not included).</td></tr>
+            <tr><td><strong>Laboratory</strong></td><td>Janoshik Analytical (janoshik.com) — an independent third-party laboratory. Each report is verifiable by its task number at janoshik.com.</td></tr>
+          </tbody>
+        </table>
+        <p style="margin-top:1rem;font-size:.95rem;opacity:.85">The reports below are original third-party laboratory documents, provided in addition to and clearly distinguished from any internal release notes.</p>
+      </div>
+    </div>
+  </section>
 
-        <!-- FILTERS -->
-        <aside class="filters-sidebar glass" id="filtersSidebar">
-          <div class="filter-group">
-            <h4>Category</h4>
-            <label class="filter-option"><input type="checkbox" class="cat-filter" value="growth"> Growth Factors</label>
-            <label class="filter-option"><input type="checkbox" class="cat-filter" value="metabolic"> Metabolic</label>
-            <label class="filter-option"><input type="checkbox" class="cat-filter" value="repair"> Tissue Repair</label>
-            <label class="filter-option"><input type="checkbox" class="cat-filter" value="blends"> Premium Blends</label>
-            <label class="filter-option"><input type="checkbox" class="cat-filter" value="supplies"> Lab Supplies</label>
-          </div>
-          <div class="filter-group">
-            <h4>Max Price: <span id="priceValue" class="gradient-text">$150.00</span></h4>
-            <input type="range" class="price-range" id="priceRange" min="0" max="150" value="150" step="5">
-          </div>
-          <div class="filter-group">
-            <h4>Availability</h4>
-            <label class="filter-option"><input type="checkbox" id="inStockOnly"> In stock only</label>
-          </div>
-          <div class="filter-group">
-            <label class="filter-option" style="font-weight:600;color:var(--accent-purple)">
-              <input type="checkbox" onclick="document.querySelectorAll('.cat-filter').forEach(c=>{c.checked=false;c.dispatchEvent(new Event('change'))});this.checked=false"> Clear category filters
-            </label>
-          </div>
-        </aside>
-
-        <!-- RESULTS -->
-        <div class="catalog-main">
-          <div class="catalog-toolbar">
-            <span class="result-count" id="resultCount">7 products</span>
-            <div style="display:flex;gap:0.6rem;align-items:center">
-              <input type="search" id="catalogSearch" class="select-field" placeholder="Search…" style="min-width:160px">
-              <button class="btn btn-ghost btn-sm filter-toggle-btn" id="filterToggle">Filters</button>
-              <select class="select-field" id="sortSelect" aria-label="Sort">
-                <option value="featured">Featured</option>
-                <option value="price-low">Price: Low to High</option>
-                <option value="price-high">Price: High to Low</option>
-                <option value="name">Name: A–Z</option>
-              </select>
-            </div>
-          </div>
-          <div class="products-grid" id="productsGrid"></div>
+  <!-- ===== QUALITY PROCESS ===== -->
+  <section class="section" id="process" style="padding-top:0">
+    <div class="container">
+      <div class="section-head">
+        <h2>Our <span class="gradient-text">Lot-Release Process</span></h2>
+        <p>Four steps every item passes through before it becomes available.</p>
+      </div>
+      <div class="features-grid">
+        <div class="feature-card glass">
+          <div class="feature-icon"><span style="font-size:1.5rem;font-weight:700">1</span></div>
+          <h3>Material Received</h3>
+          <p>Each product is received and recorded as a numbered production batch from the manufacturing source.</p>
         </div>
+        <div class="feature-card glass">
+          <div class="feature-icon"><span style="font-size:1.5rem;font-weight:700">2</span></div>
+          <h3>Lot Identified</h3>
+          <p>The batch is identified by its manufacturer batch number (e.g. CS-mc10-0408), tying every unit to a single production run.</p>
+        </div>
+        <div class="feature-card glass">
+          <div class="feature-icon"><span style="font-size:1.5rem;font-weight:700">3</span></div>
+          <h3>Documentation Reviewed</h3>
+          <p>The batch's independent Janoshik report — identity, measured content, and purity for single-peptide lots — is checked and published in the COA Library below.</p>
+        </div>
+        <div class="feature-card glass">
+          <div class="feature-icon"><span style="font-size:1.5rem;font-weight:700">4</span></div>
+          <h3>Lot Released</h3>
+          <p>A product is listed for order once its batch is matched to a published, independently verifiable third-party report.</p>
+        </div>
+      </div>
+    </div>
+  </section>
 
+  <!-- ===== COA LIBRARY ===== -->
+  <section class="section" id="coa-library" style="padding-top:0">
+    <div class="container">
+      <div class="content-card glass">
+        <h2>COA Library</h2>
+        <p>Each lot below is matched to its original third-party laboratory report from Janoshik. Every report is independently verifiable by its task number at <a href="https://janoshik.com" target="_blank" rel="noopener">janoshik.com</a>.</p>
+        <form class="search-box" style="max-width:520px;margin:1rem 0" onsubmit="return false">
+          <input type="search" placeholder="Search by product or batch number (e.g. CS-mc10-0408)" aria-label="Search documentation">
+          <button class="btn btn-primary" type="submit">Search</button>
+        </form>
+        <p style="font-size:.9rem;opacity:.8">Test Date = sample received · Report Date = analysis conducted.</p>
+        <div style="overflow-x:auto">
+          <table class="rate-table">
+            <thead>
+              <tr>
+                <th>Product</th><th>Batch / Lot #</th><th>Report ID</th><th>Test Date</th><th>Report Date</th><th>Purity</th><th>Measured content</th><th>Laboratory</th><th>Ver.</th><th>Report</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>BPC-157 / TB-500 (blend)</td><td>CS-bb1010-0408</td><td>#151337</td><td>2026-04-20</td><td>2026-04-23</td><td>ID + content only</td><td>BPC-157 12.60 mg · TB-500 11.90 mg</td><td>Janoshik</td><td>v1</td><td><a href="https://janoshik.com" target="_blank" rel="noopener">Verify #151337</a></td>
+              </tr>
+              <tr>
+                <td>MOTS-C</td><td>CS-mc10-0408</td><td>#147077</td><td>2026-04-20</td><td>2026-04-23</td><td>99.025%</td><td>MOTS-C 11.82 mg</td><td>Janoshik</td><td>v1</td><td><a href="https://janoshik.com" target="_blank" rel="noopener">Verify #147077</a></td>
+              </tr>
+              <tr>
+                <td>GHK-Cu</td><td>CS-gu50-0309</td><td>#122571</td><td>2026-03-17</td><td>2026-03-18</td><td>99.780%</td><td>GHK-Cu 60.04 mg</td><td>Janoshik</td><td>v1</td><td><a href="https://janoshik.com" target="_blank" rel="noopener">Verify #122571</a></td>
+              </tr>
+              <tr>
+                <td>KLOW (blend)</td><td>CS-ko80-0309</td><td>#122606</td><td>2026-03-17</td><td>2026-03-18</td><td>ID + content only</td><td>GHK-Cu 60.90 mg · BPC-157 11.50 mg · TB-500 11.65 mg · KPV 12.22 mg</td><td>Janoshik</td><td>v1</td><td><a href="https://janoshik.com" target="_blank" rel="noopener">Verify #122606</a></td>
+              </tr>
+              <tr>
+                <td>Retatrutide</td><td>CS-re10-0322</td><td>#137638</td><td>2026-04-07</td><td>2026-04-10</td><td>99.786%</td><td>Retatrutide 11.86 mg</td><td>Janoshik</td><td>v1</td><td><a href="https://janoshik.com" target="_blank" rel="noopener">Verify #137638</a></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p style="margin-top:1rem;font-size:.9rem;opacity:.85">All reports are original documents issued by Janoshik, an independent laboratory. They reference batches produced by the manufacturing source (cocerpeptides.com).</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== TECHNICAL DOCUMENTS ===== -->
+  <section class="section" id="sds" style="padding-top:0">
+    <div class="container">
+      <div class="content-card glass" style="border:1px solid rgba(168,85,247,.35)">
+        <h3 style="margin-top:0">Research-Use Notice</h3>
+        <p style="margin-bottom:0">For qualified in-vitro research and laboratory use only. Not for human or animal use. Purchase may require account verification. See <a href="research-accounts.html">Research Accounts</a>.</p>
       </div>
     </div>
   </section>

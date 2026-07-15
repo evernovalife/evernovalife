@@ -16,6 +16,16 @@
     <priority>0.9</priority>
   </url>
   <url>
+    <loc>https://evernovalife.com/quality.html</loc>
+    <lastmod>2026-07-15</lastmod>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://evernovalife.com/research-accounts.html</loc>
+    <lastmod>2026-07-15</lastmod>
+    <priority>0.8</priority>
+  </url>
+  <url>
     <loc>https://evernovalife.com/cart.html</loc>
     <lastmod>2026-06-24</lastmod>
     <priority>0.7</priority>
@@ -61,11 +71,6 @@
     <priority>0.4</priority>
   </url>
   <url>
-    <loc>https://evernovalife.com/labels.html</loc>
-    <lastmod>2026-06-24</lastmod>
-    <priority>0.7</priority>
-  </url>
-  <url>
     <loc>https://evernovalife.com/account.html</loc>
     <lastmod>2026-06-24</lastmod>
     <priority>0.7</priority>
@@ -82,11 +87,6 @@
   </url>
   <url>
     <loc>https://evernovalife.com/wishlist.html</loc>
-    <lastmod>2026-06-24</lastmod>
-    <priority>0.7</priority>
-  </url>
-  <url>
-    <loc>https://evernovalife.com/print-labels/index.html</loc>
     <lastmod>2026-06-24</lastmod>
     <priority>0.7</priority>
   </url>
