@@ -341,6 +341,15 @@ function productBadgeClass(badge) {
   return '';
 }
 
+/* Render the purity meta line. Only append "purity" when the value is an
+   actual percentage; blend/reagent labels (e.g. "ID + content") show as-is,
+   so we never imply a single purity figure that wasn't reported. */
+function purityMeta(purity) {
+  const s = String(purity == null ? '' : purity).trim();
+  if (!s) return '';
+  return /%\s*$/.test(s) ? escapeHtml(s) + ' purity' : escapeHtml(s);
+}
+
 function createProductCard(product) {
   const badge = product.badge
     ? `<span class="product-badge ${productBadgeClass(product.badge)}">${escapeHtml(product.badge)}</span>`
@@ -361,7 +370,7 @@ function createProductCard(product) {
     <div class="product-info">
       <span class="product-cat">${escapeHtml(product.categoryName)}</span>
       <h3 class="product-name"><a href="product.html?id=${product.id}">${escapeHtml(product.name)}</a></h3>
-      <div class="product-meta"><span>${escapeHtml(product.quantity)}</span><span>•</span><span>${escapeHtml(product.purity)} purity</span></div>
+      <div class="product-meta"><span>${escapeHtml(product.quantity)}</span><span>•</span><span>${purityMeta(product.purity)}</span></div>
       <p class="product-desc">${escapeHtml(product.description.slice(0, 92))}…</p>
       <div class="product-price-row">
         <span class="product-price gradient-text">${formatPrice(product.price)}</span>
@@ -685,7 +694,7 @@ function initProductDetailPage() {
     <div class="product-detail-info">
       <span class="product-cat">${escapeHtml(product.categoryName)}</span> ${badge}
       <h1>${escapeHtml(product.name)}</h1>
-      <div class="product-meta"><span>${escapeHtml(product.quantity)}</span><span>•</span><span>${escapeHtml(product.purity)} purity (HPLC)</span><span>•</span><span>Lot ${escapeHtml(product.lot)}</span></div>
+      <div class="product-meta"><span>${escapeHtml(product.quantity)}</span><span>•</span><span>${purityMeta(product.purity)}</span><span>•</span><span>Lot ${escapeHtml(product.lot)}</span></div>
       <div class="detail-price-row">
         <span class="detail-price gradient-text">${formatPrice(product.price)}</span>
         ${oldPrice}
@@ -706,10 +715,10 @@ function initProductDetailPage() {
       </div>
       <table class="specs-table"><tbody>${specsRows}</tbody></table>
       <div class="trust-badges-inline">
-        <span>${iconCheck()} COA Included</span>
-        <span>${iconShield()} 99%+ HPLC Purity</span>
-        <span>${iconTruck()} 24h Shipping</span>
-        <span>${iconBox()} Discreet Packaging</span>
+        <span>${iconCheck()} <a href="quality.html#coa-library">Lot documentation</a></span>
+        <span>${iconShield()} Third-party tested</span>
+        <span>${iconTruck()} Tracked U.S. dispatch</span>
+        <span>${iconBox()} In-vitro research use only</span>
       </div>
     </div>`;
 
@@ -1222,9 +1231,24 @@ function initContactForm() {
   if (!form) return;
   form.addEventListener('submit', e => {
     e.preventDefault();
+    const val = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+    const name = val('cf-name');
+    const email = val('cf-email');
+    const subject = val('cf-subject') || 'Website inquiry';
+    const message = val('cf-message');
+    const body = `From: ${name}${email ? ' <' + email + '>' : ''}\n\n${message}`;
+    const href = 'mailto:support@evernovalife.com'
+      + '?subject=' + encodeURIComponent(subject)
+      + '&body=' + encodeURIComponent(body);
     const msg = document.getElementById('contactMsg');
-    if (msg) { msg.className = 'form-msg success'; msg.textContent = '✅ Thanks! Our team will reply within 24 hours.'; }
-    form.reset();
+    if (msg) {
+      msg.className = 'form-msg success';
+      msg.innerHTML = 'Opening your email app to send this to <strong>support@evernovalife.com</strong>. ' +
+        'If nothing opens, please email us directly at that address.';
+    }
+    // Actually hand the message off to the user's email client — nothing is
+    // silently dropped or falsely marked as "sent".
+    window.location.href = href;
   });
 }
 

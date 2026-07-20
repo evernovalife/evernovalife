@@ -533,12 +533,19 @@ if (fs.existsSync(path.join(ROOT, 'index.html'))) {
   app.get('/', (_req, res) => res.json({ ok: true, service: 'Ever Nova Life API' }));
 }
 
-app.listen(PORT, () => {
-  console.log(`\nEver Nova Life payment server`);
-  console.log(`  env:    ${braintree.ENV}`);
-  console.log(`  card:   ${braintree.CONFIGURED ? 'Braintree ready' : 'not configured (set BRAINTREE_* in .env)'}`);
-  console.log(`  crypto: ${btcpay.CONFIGURED ? 'BTCPay ready → ' + btcpay.BASE_URL : 'not configured (set BTCPAY_* in .env)'}`);
-  console.log(`  auth:   accounts ready${auth.CONFIGURED ? '' : ' (JWT_SECRET not set — set it in .env for production)'}`);
-  console.log(`  api:    http://localhost:${PORT}/api`);
-  console.log(`  site:   http://localhost:${PORT}/  (serving ${ROOT})\n`);
-});
+// Only start listening when run directly (`node server.js`). When the app is
+// require()'d — e.g. by the authorization tests — it's exported without binding
+// a port, so tests can start it on an ephemeral port of their choosing.
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`\nEver Nova Life payment server`);
+    console.log(`  env:    ${braintree.ENV}`);
+    console.log(`  card:   ${braintree.CONFIGURED ? 'Braintree ready' : 'not configured (set BRAINTREE_* in .env)'}`);
+    console.log(`  crypto: ${btcpay.CONFIGURED ? 'BTCPay ready → ' + btcpay.BASE_URL : 'not configured (set BTCPAY_* in .env)'}`);
+    console.log(`  auth:   accounts ready${auth.CONFIGURED ? '' : ' (JWT_SECRET not set — set it in .env for production)'}`);
+    console.log(`  api:    http://localhost:${PORT}/api`);
+    console.log(`  site:   http://localhost:${PORT}/  (serving ${ROOT})\n`);
+  });
+}
+
+module.exports = app;

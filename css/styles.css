@@ -179,19 +179,24 @@ h1, h2, h3, h4 { line-height: 1.2; font-weight: 700; letter-spacing: -0.02em; }
   height: var(--header-h);
   gap: 1.5rem;
 }
-.logo { display: flex; align-items: center; gap: 0.6rem; flex-shrink: 0; }
-.logo svg { width: 38px; height: 38px; }
+.logo { display: flex; align-items: center; gap: 0.55rem; flex-shrink: 0; }
+/* glowing lavender compass star (matches the vial mark) */
+.logo svg { width: 40px; height: 40px; filter: drop-shadow(0 0 5px rgba(167,139,250,0.85)) drop-shadow(0 0 11px rgba(167,139,250,0.42)); }
+/* wordmark in the site font (Inter), white, with NOVA emphasized */
 .logo-text {
-  font-family: 'Century Gothic', 'Futura', 'Trebuchet MS', system-ui, sans-serif;
-  font-size: 1.12rem;
-  font-weight: 700;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.32em;
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font-size: 1.14rem;
+  font-weight: 800;
   letter-spacing: 0.16em;
   text-transform: uppercase;
-  background: var(--gradient-primary);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
+  color: #ffffff;
+  line-height: 1;
 }
+.logo-text .lw-e, .logo-text .lw-l { font-size: 0.72em; font-weight: 600; letter-spacing: 0.2em; color: #ece7fb; }
+.logo-text .lw-n { font-size: 1em; font-weight: 800; letter-spacing: 0.12em; }
 .main-nav { display: flex; gap: 0.35rem; }
 .main-nav a {
   padding: 0.5rem 0.95rem;
@@ -409,13 +414,15 @@ h1, h2, h3, h4 { line-height: 1.2; font-weight: 700; letter-spacing: -0.02em; }
   align-items: center;
   justify-content: center;
   padding: 1.5rem 1rem;
-  min-height: 230px;
+  min-height: 260px;
 }
-/* photoreal vial = transparent photo + Ever Nova Life label overlay */
-.vial-photo { position: relative; display: inline-block; height: 220px; aspect-ratio: 256 / 595; }
+/* photoreal vial = transparent photo + Ever Nova Life label overlay.
+   aspect-ratio matches the source PNGs (1024×1536 = 2:3) so the bottle fills
+   its box instead of being letterboxed — keeps the label text large/readable. */
+.vial-photo { position: relative; display: inline-block; height: 250px; aspect-ratio: 2 / 3; }
 .vial-photo-img { width: 100%; height: 100%; object-fit: contain; display: block; filter: drop-shadow(0 14px 20px rgba(0,0,0,0.42)); }
 .vial-photo-label { position: absolute; left: 9%; top: 31%; width: 82%; height: 62%; pointer-events: none; }
-.product-media .vial-photo { height: 220px; transition: transform 0.4s var(--ease); }
+.product-media .vial-photo { height: 250px; transition: transform 0.4s var(--ease); }
 .product-card:hover .product-media .vial-photo { transform: translateY(-6px) scale(1.03); }
 .product-badge {
   position: absolute;
@@ -623,7 +630,7 @@ h1, h2, h3, h4 { line-height: 1.2; font-weight: 700; letter-spacing: -0.02em; }
   position: sticky;
   top: calc(var(--header-h) + 1rem);
 }
-.product-detail-media .vial-photo { height: 400px; }
+.product-detail-media .vial-photo { height: 440px; }
 .product-detail-info .product-cat { font-size: 0.8rem; }
 .product-detail-info h1 { font-size: clamp(1.8rem, 4vw, 2.6rem); margin: 0.5rem 0 1rem; }
 .detail-price-row { display: flex; align-items: center; gap: 0.9rem; margin: 1.25rem 0; }
@@ -1610,7 +1617,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
 @media (max-width: 640px){
   .product-detail-media::after{ animation:none; }
   .product-detail-media{ --mx:50%; --my:34%; padding:1.5rem 1rem 2rem; }
-  .product-detail-media .vial-photo{ height:320px; }
+  .product-detail-media .vial-photo{ height:360px; }
   .product-detail-media .vial-photo .vial-photo-img{
     filter:drop-shadow(0 12px 18px rgba(0,0,0,0.46));
   }

@@ -1,4 +1,17 @@
 User-agent: *
 Allow: /
 
+# Keep account, admin, and transactional pages out of the index
+Disallow: /account.html
+Disallow: /admin.html
+Disallow: /admin-products.html
+Disallow: /login.html
+Disallow: /register.html
+Disallow: /forgot-password.html
+Disallow: /reset-password.html
+Disallow: /cart.html
+Disallow: /checkout.html
+Disallow: /wishlist.html
+Disallow: /api/
+
 Sitemap: https://evernovalife.com/sitemap.xml

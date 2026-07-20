@@ -1,16 +1,18 @@
 /* ============================================================
    EVER NOVA LIFE — Product Catalog
-   7 SKUs · Research use only
+   8 SKUs · For in-vitro research and laboratory use only
    Each product: id, name, category, categoryName, price,
    originalPrice, purity, quantity, description, specs{},
    inStock, badge, featured, lot
+   Descriptions describe each material's research context only.
+   They make no human-use, treatment, or physiological-benefit claims.
    ============================================================ */
 
 const CATEGORIES = [
-  { key: 'growth',   name: 'Growth Factors', emoji: '🧬', blurb: 'Growth hormone secretagogues & releasing peptides' },
-  { key: 'metabolic',name: 'Metabolic',      emoji: '⚡', blurb: 'Metabolic and energy research compounds' },
-  { key: 'repair',   name: 'Tissue Repair',  emoji: '🩹', blurb: 'Recovery, healing & regenerative peptides' },
-  { key: 'blends',   name: 'Premium Blends', emoji: '✨', blurb: 'Multi-peptide synergistic formulations' },
+  { key: 'growth',   name: 'Growth-Factor Peptides', emoji: '🧬', blurb: 'Growth-factor and secretagogue research peptides' },
+  { key: 'metabolic',name: 'Metabolic',      emoji: '⚡', blurb: 'Metabolic-pathway research peptides' },
+  { key: 'repair',   name: 'Tissue & Matrix', emoji: '🩹', blurb: 'Peptides used in tissue and extracellular-matrix research' },
+  { key: 'blends',   name: 'Multi-Peptide Blends', emoji: '✨', blurb: 'Multi-peptide research formulations' },
   { key: 'supplies', name: 'Lab Supplies',   emoji: '🧪', blurb: 'Reconstitution & laboratory essentials' }
 ];
 
@@ -25,7 +27,7 @@ const PRODUCTS = [
     purity: '99.2%',
     quantity: '10mg',
     lot: 'ENL-24001',
-    description: 'Triple-agonist research peptide (GLP-1 / GIP / glucagon receptor) studied for its effects on metabolic pathways and energy regulation in vitro.',
+    description: 'Triple–receptor-agonist research peptide (GLP-1 / GIP / glucagon receptor) used as a reference compound in in-vitro metabolic-pathway research. Supplied lyophilized for laboratory use.',
     specs: {
       'Molecular Formula': 'C221H342N46O68',
       'Molecular Weight': '4731.3 g/mol',
@@ -48,11 +50,11 @@ const PRODUCTS = [
     purity: '0.9% Benzyl Alcohol',
     quantity: '30mL',
     lot: 'ENL-24002',
-    description: 'Sterile water with 0.9% benzyl alcohol for safe reconstitution of lyophilized research peptides. Multi-dose, USP-grade laboratory reagent.',
+    description: 'Sterile water with 0.9% benzyl alcohol for reconstitution of lyophilized research peptides in the laboratory. Multi-dose laboratory reagent.',
     specs: {
       'Composition': 'Sterile water + 0.9% benzyl alcohol',
       'Volume': '30mL multi-dose vial',
-      'Grade': 'USP laboratory reagent',
+      'Grade': 'Laboratory reagent',
       'Form': 'Liquid',
       'Storage': 'Room temperature',
       'Use': 'Peptide reconstitution'
@@ -71,7 +73,7 @@ const PRODUCTS = [
     purity: '99.0%',
     quantity: '50mg',
     lot: 'ENL-24003',
-    description: 'Copper tripeptide-1 (glycyl-L-histidyl-L-lysine:copper) widely researched for skin remodeling, collagen synthesis and tissue regeneration in vitro.',
+    description: 'Copper tripeptide-1 (glycyl-L-histidyl-L-lysine:copper), a well-characterized copper-binding peptide used as a reference compound in in-vitro research. Supplied lyophilized for laboratory use.',
     specs: {
       'Molecular Formula': 'C14H24N6O4·Cu',
       'Molecular Weight': '403.9 g/mol',
@@ -91,17 +93,17 @@ const PRODUCTS = [
     categoryName: 'Growth Factors',
     price: 79.99,
     originalPrice: 94.99,
-    purity: '98.8%',
+    purity: 'ID + content',
     quantity: '10mg / 3mg',
     lot: 'ENL-24004',
-    description: 'Synergistic GHRH analog (Tesamorelin) paired with a selective growth hormone secretagogue (Ipamorelin) for combined growth-factor pathway research.',
+    description: 'A co-lyophilized blend of a GHRH-analog peptide (Tesamorelin) and a growth-hormone-secretagogue peptide (Ipamorelin), supplied for in-vitro growth-factor-pathway research.',
     specs: {
       'Components': 'Tesamorelin 10mg + Ipamorelin 3mg',
-      'Combined Purity': '98.8%',
+      'Analysis': 'Identity + content per component (blend)',
       'Form': 'Co-lyophilized powder',
       'Storage': '-20°C, desiccated',
       'Reconstitution': 'Bacteriostatic water',
-      'Lot Tested': 'HPLC + MS verified'
+      'Documentation': 'Pending — see Quality & Documentation'
     },
     inStock: true,
     badge: 'New',
@@ -117,7 +119,7 @@ const PRODUCTS = [
     purity: '99.1%',
     quantity: '10mg',
     lot: 'ENL-24005',
-    description: 'Mitochondrial-derived peptide investigated for its role in metabolic homeostasis, insulin sensitivity and cellular energy regulation in research models.',
+    description: 'A mitochondrial-derived peptide used as a reference compound in in-vitro metabolic-pathway and cellular-signaling research. Supplied lyophilized for laboratory use.',
     specs: {
       'Molecular Formula': 'C101H152N28O22S2',
       'Molecular Weight': '2174.6 g/mol',
@@ -137,17 +139,17 @@ const PRODUCTS = [
     categoryName: 'Tissue Repair',
     price: 89.99,
     originalPrice: 109.99,
-    purity: '99.0%',
+    purity: 'ID + content',
     quantity: '20mg',
     lot: 'ENL-24006',
-    description: 'A pairing of two of the most-studied recovery peptides — Body Protection Compound-157 and Thymosin Beta-4 fragment — for tissue repair research.',
+    description: 'A co-lyophilized blend of two widely studied research peptides — Body Protection Compound-157 and a Thymosin Beta-4 fragment (TB-500) — supplied for in-vitro research. See the COA Library for lot identity and measured content.',
     specs: {
       'Components': 'BPC-157 10mg + TB-500 10mg',
-      'Combined Purity': '99.0%',
+      'Analysis': 'Identity + content per component (blend)',
       'Form': 'Co-lyophilized powder',
       'Storage': '-20°C, desiccated',
       'Reconstitution': 'Bacteriostatic water',
-      'Lot Tested': 'HPLC + MS verified'
+      'Documentation': 'Available — Janoshik #151337'
     },
     inStock: true,
     badge: 'Popular',
@@ -160,17 +162,18 @@ const PRODUCTS = [
     categoryName: 'Premium Blends',
     price: 129.99,
     originalPrice: 159.99,
-    purity: '98.6%',
+    purity: 'ID + content',
     quantity: '80mg',
     lot: 'ENL-24007',
-    description: 'A premium multi-peptide formulation (GHK-Cu, KPV, TB-500, BPC-157) engineered for comprehensive regeneration and recovery research applications.',
+    description: 'A multi-peptide research blend (GHK-Cu, KPV, TB-500, BPC-157), co-lyophilized and supplied for in-vitro research. See the COA Library for per-component identity and measured content.',
     specs: {
       'Components': 'GHK-Cu · KPV · TB-500 · BPC-157',
       'Total Mass': '80mg',
-      'Combined Purity': '98.6%',
+      'Analysis': 'Identity + content per component (blend)',
       'Form': 'Co-lyophilized powder',
       'Storage': '-20°C, desiccated',
-      'Reconstitution': 'Bacteriostatic water'
+      'Reconstitution': 'Bacteriostatic water',
+      'Documentation': 'Available — Janoshik #122606'
     },
     inStock: true,
     badge: 'Premium',
@@ -186,7 +189,7 @@ const PRODUCTS = [
     purity: '99.0%',
     quantity: '500mg',
     lot: 'ENL-24008',
-    description: 'Nicotinamide adenine dinucleotide — a central redox coenzyme investigated for its role in cellular energy metabolism, mitochondrial function and sirtuin-mediated signaling in research models.',
+    description: 'Nicotinamide adenine dinucleotide — a redox coenzyme used as a reference compound in in-vitro studies of cellular metabolism and signaling. Supplied lyophilized for laboratory use.',
     specs: {
       'Molecular Formula': 'C21H27N7O14P2',
       'Molecular Weight': '663.4 g/mol',

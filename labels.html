@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vial Label Sheet — Ever Nova Life</title>
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="description" content="Print-ready vial labels for Ever Nova Life research products. For internal / laboratory use.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Cpath d='M20.00 1.00 L21.91 15.38 L27.78 12.22 L24.62 18.09 L39.00 20.00 L24.62 21.91 L27.78 27.78 L21.91 24.62 L20.00 39.00 L18.09 24.62 L12.22 27.78 L15.38 21.91 L1.00 20.00 L15.38 18.09 L12.22 12.22 L18.09 15.38 Z' fill='%23a855f7'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    /* ============================================================
+       VIAL LABEL SHEET — internal print tool
+       Screen: dark control panel + white "paper" preview.
+       Print:  only the paper, sized in real mm so it prints to scale.
+       ============================================================ */
+    :root{
+      --ink:#0d0d12; --muted:#5b6070; --line:#d7d3e0;
+      --violet:#7e22ce; --deep:#2e1065;
+      --grad:linear-gradient(180deg,#4f46e5 0%,#8b2fd6 38%,#c026d3 68%,#ec4899 100%);
+      --bg:#12101c; --panel:rgba(255,255,255,.05); --panel-line:rgba(255,255,255,.12);
+      --panel-txt:#e7e3f2; --panel-mut:#a49fc0; --accent:#a855f7;
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0}
+    body{
+      font-family:Inter,'Helvetica Neue',Arial,sans-serif;
+      background:#0b0a14; color:var(--panel-txt);
+      -webkit-print-color-adjust:exact; print-color-adjust:exact;
+    }
+
+    /* ---------- top bar ---------- */
+    .topbar{
+      position:sticky; top:0; z-index:20;
+      display:flex; align-items:center; gap:1rem; flex-wrap:wrap;
+      padding:.85rem 1.25rem; background:rgba(12,10,22,.92);
+      backdrop-filter:blur(10px); border-bottom:1px solid var(--panel-line);
+    }
+    .topbar h1{font-size:1.02rem; font-weight:700; margin:0; letter-spacing:-.01em}
+    .topbar h1 span{color:var(--accent)}
+    .topbar .hint{font-size:.78rem; color:var(--panel-mut); margin-right:auto}
+    .btn{
+      font:inherit; font-weight:600; font-size:.86rem; cursor:pointer;
+      border:1px solid var(--panel-line); background:var(--panel); color:var(--panel-txt);
+      padding:.5rem .9rem; border-radius:9px; transition:.15s;
+    }
+    .btn:hover{border-color:var(--accent); color:#fff}
+    .btn-print{background:linear-gradient(180deg,#8b5cf6,#7c3aed); border-color:transparent; color:#fff; box-shadow:0 4px 14px rgba(124,58,237,.4)}
+    .btn-print:hover{filter:brightness(1.08)}
+
+    /* ---------- layout ---------- */
+    .wrap{display:flex; align-items:flex-start; gap:0; min-height:calc(100vh - 56px)}
+    .controls{
+      width:290px; flex:none; position:sticky; top:56px; align-self:flex-start;
+      max-height:calc(100vh - 56px); overflow:auto;
+      padding:1.1rem 1.1rem 2rem; border-right:1px solid var(--panel-line);
+      background:rgba(255,255,255,.02);
+    }
+    .controls h2{font-size:.72rem; text-transform:uppercase; letter-spacing:.14em; color:var(--panel-mut); margin:1.4rem 0 .6rem}
+    .controls h2:first-child{margin-top:0}
+    .field{margin-bottom:.7rem}
+    .field label{display:block; font-size:.78rem; color:var(--panel-mut); margin-bottom:.28rem}
+    .field input[type=number], .field select{
+      width:100%; font:inherit; font-size:.86rem; padding:.42rem .55rem;
+      background:rgba(255,255,255,.06); color:var(--panel-txt);
+      border:1px solid var(--panel-line); border-radius:8px;
+    }
+    .row2{display:flex; gap:.5rem}
+    .chk{display:flex; align-items:center; gap:.5rem; font-size:.82rem; padding:.2rem 0; color:var(--panel-txt); cursor:pointer}
+    .chk input{width:15px; height:15px; accent-color:var(--accent)}
+    .prodlist{border:1px solid var(--panel-line); border-radius:10px; padding:.5rem .6rem; max-height:230px; overflow:auto}
+    .minibtns{display:flex; gap:.4rem; margin-bottom:.4rem}
+    .minibtns button{flex:1; font:inherit; font-size:.72rem; padding:.3rem; background:rgba(255,255,255,.05); color:var(--panel-mut); border:1px solid var(--panel-line); border-radius:7px; cursor:pointer}
+    .minibtns button:hover{color:#fff; border-color:var(--accent)}
+    .count{font-size:.74rem; color:var(--panel-mut); margin-top:.5rem}
+
+    /* ---------- paper preview ---------- */
+    .stage{flex:1; padding:1.6rem; display:flex; justify-content:center; overflow:auto}
+    .sheet{
+      background:#fff; color:var(--ink); border-radius:2px;
+      box-shadow:0 10px 40px rgba(0,0,0,.5);
+      padding:8mm; width:194mm; min-height:120mm;
+      display:flex; flex-wrap:wrap; align-content:flex-start;
+      gap:var(--gap,4mm);
+    }
+
+    /* ============================================================
+       THE LABEL — faithful reproduction of the vial artwork:
+       nebula-dark top (glowing compass star + serif wordmark) over a
+       light lower panel (name · dose · info row · RUO · warning).
+       Portrait. Root font-size = width / 13; inner sizes in em so any
+       preset stays balanced.
+       ============================================================ */
+    .label{
+      position:relative; width:var(--w,40mm); height:var(--h,56mm);
+      font-size:calc(var(--w,40mm) / 13);
+      overflow:hidden; border-radius:.5em;
+      display:flex; flex-direction:column; break-inside:avoid; page-break-inside:avoid;
+      background:#efe8f8; color:var(--deep);
+    }
+    .label.guides{outline:.15mm dashed #b7b2c6; outline-offset:0}
+
+    /* ---- nebula top ---- */
+    .label .top{
+      flex:0 0 45%; position:relative; overflow:hidden;
+      display:flex; flex-direction:column; align-items:center; justify-content:center;
+      padding:.5em .4em .4em;
+      background:radial-gradient(115% 85% at 50% 8%, #5a3a9e 0%, #3a2270 42%, #22103f 100%);
+    }
+    .label .top::before{content:""; position:absolute; inset:0; pointer-events:none; mix-blend-mode:screen;
+      background:radial-gradient(45% 34% at 28% 26%, rgba(168,85,247,.42), transparent 60%),
+                 radial-gradient(46% 36% at 78% 66%, rgba(236,72,153,.30), transparent 62%);}
+    .label .star{position:relative; width:3.1em; height:3.1em; margin-bottom:.14em}
+    .label .star::before{content:""; position:absolute; inset:-42%;
+      background:radial-gradient(closest-side, rgba(198,166,255,.72), transparent 72%)}
+    .label .star svg{position:relative; width:100%; height:100%; display:block;
+      filter:drop-shadow(0 0 .28em rgba(210,180,255,.9))}
+    .label .wm{position:relative; text-align:center; color:#fff;
+      font-family:Cinzel,Georgia,'Times New Roman',serif; line-height:1.05}
+    .label .wm i{display:block; font-style:normal; font-size:.6em; letter-spacing:.4em; font-weight:600; padding-left:.4em}
+    .label .wm b{display:block; font-size:1.55em; letter-spacing:.1em; font-weight:700}
+
+    /* ---- light lower panel ---- */
+    .label .bot{
+      flex:1; min-height:0; display:flex; flex-direction:column; align-items:center;
+      text-align:center; padding:.6em .55em .5em;
+      background:linear-gradient(180deg,#f5f0fc,#e7def4);
+    }
+    .label .name{font-weight:800; line-height:1.05; letter-spacing:.01em; color:var(--deep);
+      text-transform:uppercase; font-size:var(--nfs,1.12em); margin-top:.06em}
+    .label .dose{display:flex; align-items:center; justify-content:center; gap:.5em;
+      font-weight:700; font-size:1.02em; color:#3b1d75; margin-top:.3em}
+    .label .dose s{width:1.05em; height:.11em; background:#8b5cf6; border-radius:1px; text-decoration:none}
+    .label .comp{font-size:.54em; font-weight:600; color:#5a4a86; line-height:1.35; margin-top:.4em}
+    .label .div{width:78%; height:.13em; border-radius:1px; margin:.52em 0 .44em;
+      background:linear-gradient(90deg,#4f46e5,#c026d3,#ec4899)}
+    .label .info{display:flex; justify-content:center; align-items:stretch; font-size:.5em; color:var(--deep); line-height:1.16}
+    .label .info div{padding:0 .7em; border-left:1px solid #cebfe6; display:flex; flex-direction:column; justify-content:center}
+    .label .info div:first-child{border-left:0}
+    .label .info small{font-size:.8em; letter-spacing:.08em; color:#6b5a95; font-weight:600}
+    .label .info b{font-weight:800; letter-spacing:.02em}
+    .label .ruo{margin-top:auto; background:linear-gradient(90deg,#6d28d9,#7c3aed); color:#fff;
+      font-weight:700; font-size:.5em; letter-spacing:.13em; padding:.42em 1.05em; border-radius:2em}
+    .label .warn{font-size:.45em; font-weight:600; letter-spacing:.05em; color:#4a3a7a; margin-top:.4em; line-height:1.28}
+
+    .empty{width:100%; text-align:center; color:#999; padding:4rem 1rem; font-size:.9rem}
+
+    /* ---------- print ---------- */
+    @media print{
+      .topbar,.controls{display:none !important}
+      body{background:#fff}
+      .wrap{display:block; min-height:0}
+      .stage{padding:0; overflow:visible; display:block}
+      .sheet{box-shadow:none; border-radius:0; padding:0; width:auto; min-height:0; gap:var(--gap,4mm)}
+    }
+  </style>
+</head>
+<body>
+
+  <div class="topbar">
+    <h1>Vial Label Sheet <span>· Ever Nova Life</span></h1>
+    <span class="hint">Internal / laboratory use — For Research Use Only material</span>
+    <button class="btn" id="downloadNote" type="button" title="How to download">⤓ Download</button>
+    <button class="btn btn-print" id="printBtn" type="button">🖨 Print / Save as PDF</button>
+  </div>
+
+  <div class="wrap">
+    <aside class="controls">
+      <h2>Products</h2>
+      <div class="minibtns">
+        <button type="button" id="selAll">All</button>
+        <button type="button" id="selNone">None</button>
+      </div>
+      <div class="prodlist" id="prodList"></div>
+
+      <h2>Quantity</h2>
+      <div class="field">
+        <label for="copies">Copies of each label</label>
+        <input type="number" id="copies" min="1" max="200" value="4">
+      </div>
+
+      <h2>Vial / label size</h2>
+      <div class="field">
+        <label for="preset">Preset</label>
+        <select id="preset">
+          <option value="38,54">2–3 mL peptide vial · 38 × 54 mm</option>
+          <option value="40,56" selected>3 mL vial (standard) · 40 × 56 mm</option>
+          <option value="46,64">5 mL vial · 46 × 64 mm</option>
+          <option value="54,74">10–30 mL vial · 54 × 74 mm</option>
+          <option value="custom">Custom…</option>
+        </select>
+        <div class="count" style="margin-top:.4rem">Portrait, like the vial front. Set Custom to match your real vials.</div>
+      </div>
+      <div class="field" id="customWrap" style="display:none">
+        <label>Custom width × height (mm)</label>
+        <div class="row2">
+          <input type="number" id="cw" min="24" max="140" value="40" step="1">
+          <input type="number" id="ch" min="30" max="160" value="56" step="1">
+        </div>
+      </div>
+
+      <h2>Sheet</h2>
+      <div class="field">
+        <label for="paper">Paper</label>
+        <select id="paper">
+          <option value="A4" selected>A4 (210 × 297 mm)</option>
+          <option value="Letter">US Letter (8.5 × 11 in)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="gap">Gap between labels (mm)</label>
+        <input type="number" id="gap" min="0" max="20" value="4" step="1">
+      </div>
+
+      <h2>On each label</h2>
+      <label class="chk"><input type="checkbox" id="tGuides" checked> Cut guides (dashed outline)</label>
+      <label class="chk"><input type="checkbox" id="tInfo" checked> Info row (LOT · purity · type)</label>
+      <label class="chk"><input type="checkbox" id="tRuo" checked> "For Research Use Only" pill</label>
+      <label class="chk"><input type="checkbox" id="tWarn" checked> "Not for human…" warning</label>
+
+      <div class="count" id="count"></div>
+    </aside>
+
+    <main class="stage">
+      <div class="sheet" id="sheet"></div>
+    </main>
+  </div>
+
+  <!-- brand config (API base) + product data -->
+  <script src="js/config.js"></script>
+  <script src="js/products-data.js"></script>
+  <script>
+  (function(){
+    /* ---- compass star (lifted from the site's brand mark) ---- */
+    var STAR_D = ['M50 50 L50 0 L54.97 37.99 Z','M50 50 L70.51 29.49 L62.01 45.03 Z','M50 50 L100 50 L62.01 54.97 Z','M50 50 L70.51 70.51 L54.97 62.01 Z','M50 50 L50 100 L45.03 62.01 Z','M50 50 L29.49 70.51 L37.99 54.97 Z','M50 50 L0 50 L37.99 45.03 Z','M50 50 L29.49 29.49 L45.03 37.99 Z'];
+    var STAR_L = ['M50 50 L45.03 37.99 L50 0 Z','M50 50 L54.97 37.99 L70.51 29.49 Z','M50 50 L62.01 45.03 L100 50 Z','M50 50 L62.01 54.97 L70.51 70.51 Z','M50 50 L54.97 62.01 L50 100 Z','M50 50 L45.03 62.01 L29.49 70.51 Z','M50 50 L37.99 54.97 L0 50 Z','M50 50 L37.99 45.03 L29.49 29.49 Z'];
+    function starSVG(){
+      var d = STAR_D.map(function(p){return '<path d="'+p+'" fill="#b79ae6"/>';}).join('');
+      var l = STAR_L.map(function(p){return '<path d="'+p+'" fill="#ffffff"/>';}).join('');
+      return '<span class="star"><svg viewBox="0 0 100 100" aria-hidden="true">'+d+l+
+        '<circle cx="50" cy="50" r="4.5" fill="#ffffff"/></svg></span>';
+    }
+
+    function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c];});}
+    var MINUS = function(s){return String(s).replace(/-\s*(\d)/g,'−$1');}; // hyphen -> real minus before a digit
+
+    /* ---- product model (static seed; refreshed from API if reachable) ---- */
+    var products = (window.PRODUCTS || []).slice();
+
+    function formOf(p){
+      var f = (p.specs && (p.specs.Form || p.specs.form));
+      if (f) return f;
+      if (p.id === 2 || /bacteriostatic\s*water/i.test(p.name||'')) return 'Sterile solution';
+      return 'Lyophilized powder';
+    }
+    function storageOf(p){
+      var s = p.specs && (p.specs.Storage || p.specs.storage);
+      if (!s) return (p.id === 2 ? 'Room temperature' : '−20 °C');
+      return MINUS(s.split(',')[0].trim());
+    }
+    function componentsOf(p){ return (p.specs && (p.specs.Components || p.specs.components)) || ''; }
+    function isBlend(p){ return /blend/i.test(p.name||'') || p.category === 'blends' || !!componentsOf(p); }
+    function isWater(p){ return p.id === 2 || /bacteriostatic\s*water/i.test(p.name||''); }
+    // "10mg" -> "10 mg" ; "10mg / 3mg" -> "10 mg / 3 mg" ; keeps a real minus sign
+    function doseText(q){ return MINUS(String(q||'')).replace(/(\d)\s*(mg|mcg|ml|iu)\b/gi, function(m,a,b){ return a+' '+b; }); }
+    // purity cell: only a clean HPLC percentage (single peptides). Blends / water omit it.
+    function purityCell(p){
+      var s = String(p.purity||'').trim();
+      return /^\d+(\.\d+)?\s*%$/.test(s) ? s.replace(/\s*%/, '% ') + 'HPLC' : '';
+    }
+    function typeToken(p){ return isBlend(p) ? 'BLEND' : isWater(p) ? 'REAGENT' : 'PEPTIDE'; }
+    function nameSize(name){
+      var n = name.length;
+      return n > 26 ? '.84em' : n > 18 ? '.98em' : n > 12 ? '1.12em' : '1.3em';
+    }
+
+    /* ---- one label's HTML (matches the vial artwork) ---- */
+    function labelHTML(p, opt){
+      var name = p.name || 'Research Peptide';
+      var dose = p.quantity ? MINUS(p.quantity).replace(/(\d)\s*(mg|mcg|mL|iu)/gi,'$1 $2') : '';
+      var sub  = [dose, formOf(p)].filter(Boolean).join(' · ');
+      var comp = componentsOf(p);
+      var cls  = 'label' + (opt.guides ? ' guides' : '');
+
+      var cells = [];
+      if (opt.info){
+        if (p.lot) cells.push('<div><small>LOT</small><b>'+esc(p.lot)+'</b></div>');
+        var pc = purityCell(p); if (pc) cells.push('<div><b>'+esc(pc)+'</b></div>');
+        cells.push('<div><b>'+esc(typeToken(p))+'</b></div>');
+      }
+
+      var h = '';
+      h += '<article class="'+cls+'">';
+      h += '<div class="top">'+starSVG()+
+           '<div class="wm"><i>EVER</i><b>NOVA</b><i>LIFE</i></div></div>';
+      h += '<div class="bot">';
+      h += '<div class="name" style="--nfs:'+nameSize(name)+'">'+esc(name)+'</div>';
+      if (dose) h += '<div class="dose"><s></s>'+esc(dose)+'<s></s></div>';
+      if (comp) h += '<div class="comp">'+esc(comp)+'</div>';
+      if (cells.length){ h += '<div class="div"></div><div class="info">'+cells.join('')+'</div>'; }
+      if (opt.ruo)  h += '<div class="ruo">FOR RESEARCH USE ONLY</div>';
+      if (opt.warn) h += '<div class="warn">NOT FOR HUMAN OR<br>ANIMAL CONSUMPTION</div>';
+      h += '</div></article>';
+      return h;
+    }
+
+    /* ---- DOM refs ---- */
+    var $ = function(id){return document.getElementById(id);};
+    var sheet=$('sheet'), prodList=$('prodList');
+
+    /* ---- product picker ---- */
+    function buildPicker(){
+      prodList.innerHTML = products.map(function(p){
+        return '<label class="chk"><input type="checkbox" class="pchk" value="'+p.id+'" checked> '+esc(p.name)+'</label>';
+      }).join('');
+    }
+
+    function selectedProducts(){
+      var ids = {};
+      Array.prototype.forEach.call(document.querySelectorAll('.pchk'), function(c){ if(c.checked) ids[c.value]=1; });
+      return products.filter(function(p){ return ids[p.id]; });
+    }
+
+    function currentSize(){
+      var v = $('preset').value;
+      if (v === 'custom') return [Number($('cw').value)||40, Number($('ch').value)||56];
+      var parts = v.split(','); return [Number(parts[0]), Number(parts[1])];
+    }
+
+    /* ---- render ---- */
+    function render(){
+      var size = currentSize(), w=size[0], h=size[1];
+      var copies = Math.max(1, Math.min(200, Number($('copies').value)||1));
+      var gap = Math.max(0, Number($('gap').value)||0);
+      var opt = { guides:$('tGuides').checked, info:$('tInfo').checked, ruo:$('tRuo').checked, warn:$('tWarn').checked };
+      var sel = selectedProducts();
+
+      // on-screen sheet = full paper width (border-box incl. 8mm padding),
+      // so its content area matches the printed @page area (paper − 2×8mm margin)
+      var paperW = $('paper').value === 'Letter' ? 216 : 210;
+      sheet.style.width = paperW + 'mm';
+      sheet.style.setProperty('--gap', gap + 'mm');
+      setPageCSS($('paper').value, gap);
+
+      if (!sel.length){ sheet.innerHTML = '<div class="empty">Select at least one product on the left.</div>'; $('count').textContent=''; return; }
+
+      var out = [];
+      sel.forEach(function(p){
+        var one = labelHTML(p, opt);
+        for (var i=0;i<copies;i++) out.push(one);
+      });
+      // inject per-label size via a shared style tag (keeps markup light)
+      sheet.innerHTML = out.join('');
+      Array.prototype.forEach.call(sheet.querySelectorAll('.label'), function(el){
+        el.style.setProperty('--w', w+'mm');
+        el.style.setProperty('--h', h+'mm');
+      });
+      $('count').textContent = sel.length + ' product(s) × ' + copies + ' = ' + (sel.length*copies) + ' labels · ' + w + ' × ' + h + ' mm each';
+    }
+
+    /* ---- dynamic @page ---- */
+    var pageStyle = document.createElement('style');
+    document.head.appendChild(pageStyle);
+    function setPageCSS(paper, gap){
+      var size = paper === 'Letter' ? 'letter' : 'A4';
+      pageStyle.textContent = '@page{ size:'+size+'; margin:8mm; }';
+    }
+
+    /* ---- wire up ---- */
+    ['copies','preset','cw','ch','paper','gap','tGuides','tInfo','tRuo','tWarn'].forEach(function(id){
+      $(id).addEventListener('input', render);
+      $(id).addEventListener('change', render);
+    });
+    $('preset').addEventListener('change', function(){
+      $('customWrap').style.display = this.value === 'custom' ? '' : 'none';
+    });
+    prodList.addEventListener('change', render);
+    $('selAll').addEventListener('click', function(){ document.querySelectorAll('.pchk').forEach(function(c){c.checked=true;}); render(); });
+    $('selNone').addEventListener('click', function(){ document.querySelectorAll('.pchk').forEach(function(c){c.checked=false;}); render(); });
+    $('printBtn').addEventListener('click', function(){ window.print(); });
+    $('downloadNote').addEventListener('click', function(){
+      alert('To download as a PDF:\n\n1. Click "Print / Save as PDF".\n2. In the print dialog, set Destination / Printer to "Save as PDF".\n3. Set Margins to "Default" and Scale to 100% (do NOT use "Fit to page" — that changes the physical size).\n4. Save.\n\nTo print onto label/sticker sheets, choose your printer instead and keep Scale at 100%.');
+    });
+
+    /* ---- init, then try to refresh from the live catalog ---- */
+    buildPicker();
+    render();
+
+    var API = (window.PEPTIDE_API_BASE || '');
+    fetch(API + '/api/products').then(function(r){ return r.ok ? r.json() : null; }).then(function(list){
+      if (!Array.isArray(list) || !list.length) return;
+      // merge: keep static specs as fallback where the API row omits them
+      var byId = {}; products.forEach(function(p){ byId[p.id]=p; });
+      products = list.map(function(row){
+        var base = byId[row.id] || {};
+        return Object.assign({}, base, row, { specs: Object.assign({}, base.specs, row.specs) });
+      });
+      buildPicker(); render();
+    }).catch(function(){ /* offline / static host — static seed is fine */ });
+  })();
+  </script>
+</body>
+</html>
