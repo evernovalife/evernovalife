@@ -79,9 +79,27 @@ function publicUser(u) {
     lastName: u.lastName,
     email: u.email,
     createdAt: u.createdAt,
+    referralCode: u.referralCode || '',   // this account's own share code
     isAdmin: isAdminEmail(u.email)   // lets the UI show admin tools for this account
   };
 }
+
+/* ---- referral codes ----
+   Each account gets a short, human-shareable code. Alphabet omits easily
+   confused characters (0/O, 1/I) so codes read cleanly over the phone / in
+   print. Codes are unique across all accounts. */
+const REF_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+function genReferralCode(users) {
+  const taken = new Set(users.map(u => String(u.referralCode || '').toUpperCase()));
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const bytes = crypto.randomBytes(6);
+    let code = '';
+    for (let i = 0; i < 6; i++) code += REF_ALPHABET[bytes[i] % REF_ALPHABET.length];
+    if (!taken.has(code)) return code;
+  }
+  return 'R' + crypto.randomBytes(4).toString('hex').toUpperCase().slice(0, 6);  // fallback
+}
+const normCode = c => String(c || '').trim().toUpperCase();
 
 function signToken(u) {
   return jwt.sign({ sub: u.id, email: u.email }, SECRET, { expiresIn: TOKEN_TTL });
@@ -93,8 +111,12 @@ function httpError(status, message) {
   return e;
 }
 
-/* ---- register a new account ---- */
-async function registerUser({ firstName, lastName, email, password }) {
+/* ---- register a new account ----
+   `ref` (optional) is a referral code shared by an existing account. When it
+   matches a real, different account we record who referred this user; the
+   reward for BOTH sides is granted later, on this user's first paid order
+   (see claimReferralReward). Storing it here just remembers the relationship. */
+async function registerUser({ firstName, lastName, email, password, ref }) {
   firstName = String(firstName || '').trim();
   lastName = String(lastName || '').trim();
   email = normEmail(email);
@@ -109,13 +131,23 @@ async function registerUser({ firstName, lastName, email, password }) {
     throw httpError(409, 'An account with that email already exists.');
   }
 
+  // Resolve the referral code (if any) to an existing, different account.
+  let referredBy = '';
+  const refCode = normCode(ref);
+  if (refCode) {
+    const referrer = users.find(u => normCode(u.referralCode) === refCode);
+    if (referrer && referrer.email !== email) referredBy = referrer.referralCode;
+  }
+
   const user = {
     id: crypto.randomUUID(),
     firstName,
     lastName,
     email,
     passwordHash: await bcrypt.hash(password, BCRYPT_ROUNDS),
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    referralCode: genReferralCode(users),
+    ...(referredBy ? { referredBy } : {})
   };
   users.push(user);
   saveUsers(users);
@@ -205,6 +237,53 @@ async function resetPassword(token, newPassword) {
   return { user: publicUser(user) };
 }
 
+/* ---- referral queries + reward claim ---- */
+
+/* Look up an account by its share code (public fields only), or null. */
+function findByReferralCode(code) {
+  code = normCode(code);
+  if (!code) return null;
+  const u = loadUsers().find(x => normCode(x.referralCode) === code);
+  return u ? publicUser(u) : null;
+}
+
+/* This account's referral summary. Lazily assigns a code to legacy accounts
+   that predate the feature, so every account can share as soon as it looks. */
+function getReferralStats(userId) {
+  const users = loadUsers();
+  const me = users.find(x => x.id === userId);
+  if (!me) return { code: '', referredCount: 0, rewardedCount: 0 };
+  if (!me.referralCode) { me.referralCode = genReferralCode(users); saveUsers(users); }
+  const code = normCode(me.referralCode);
+  let referredCount = 0, rewardedCount = 0;
+  for (const u of users) {
+    if (normCode(u.referredBy) === code) {
+      referredCount++;
+      if (u.referralRewarded) rewardedCount++;
+    }
+  }
+  return { code: me.referralCode, referredCount, rewardedCount };
+}
+
+/* Claim the referral reward for `userId`, exactly once, when they complete
+   their first paid order. Returns { referrerId, refereeId } if a reward should
+   now be granted to both sides (the caller does the actual points crediting),
+   or null if there's nothing to reward (no referrer, self-referral, or already
+   rewarded). Marking rewarded here makes it idempotent against repeated calls
+   (e.g. a webhook fired twice). */
+function claimReferralReward(userId) {
+  const users = loadUsers();
+  const me = users.find(x => x.id === userId);
+  if (!me || me.referralRewarded) return null;
+  const code = normCode(me.referredBy);
+  if (!code) return null;
+  const referrer = users.find(x => normCode(x.referralCode) === code);
+  if (!referrer || referrer.id === me.id) return null;
+  me.referralRewarded = true;
+  saveUsers(users);
+  return { referrerId: referrer.id, refereeId: me.id };
+}
+
 function verifyToken(token) {
   try {
     return jwt.verify(token, SECRET);
@@ -239,6 +318,9 @@ module.exports = {
   deleteUser,
   createResetToken,
   resetPassword,
+  findByReferralCode,
+  getReferralStats,
+  claimReferralReward,
   verifyToken,
   requireAuth
 };

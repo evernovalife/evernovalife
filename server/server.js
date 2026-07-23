@@ -19,6 +19,7 @@ const braintree = require('./braintree.js');
 const btcpay = require('./btcpay.js');
 const auth = require('./auth.js');
 const store = require('./store.js');
+const loyalty = require('./loyalty.js');
 const productStore = require('./products.js');
 const mailer = require('./email.js');
 
@@ -76,8 +77,8 @@ app.get('/api/health', (req, res) => res.json({
 /* ---- create an account ---- */
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { firstName, lastName, email, password } = req.body || {};
-    const result = await auth.registerUser({ firstName, lastName, email, password });
+    const { firstName, lastName, email, password, ref } = req.body || {};
+    const result = await auth.registerUser({ firstName, lastName, email, password, ref });
     res.status(201).json({ success: true, ...result });
 
     // Fire-and-forget after responding, so they never delay or fail signup.
@@ -194,6 +195,42 @@ app.get('/api/orders', auth.requireAuth, (req, res) => {
 });
 
 /* ============================================================
+   LOYALTY — the signed-in user's points balance + history, and
+   the conversion rates the UI needs to show "N points ≈ $X".
+   Points are EARNED/REDEEMED server-side during checkout; this
+   endpoint is read-only.
+   ============================================================ */
+app.get('/api/loyalty', auth.requireAuth, (req, res) => {
+  const acct = loyalty.getAccount(req.user.id);
+  res.json({
+    success: true,
+    balance: acct.balance,
+    dollarValue: loyalty.pointsToDollars(acct.balance),
+    ledger: acct.ledger.slice(0, 50),
+    perDollar: loyalty.POINTS_PER_DOLLAR,
+    valueCents: loyalty.POINTS_VALUE_CENTS
+  });
+});
+
+/* ============================================================
+   REFERRAL — the signed-in user's share code, a ready-made invite
+   link, how many people they've referred, and the reward size.
+   ============================================================ */
+app.get('/api/referral', auth.requireAuth, (req, res) => {
+  const stats = auth.getReferralStats(req.user.id);
+  const base = (process.env.SITE_URL || req.headers.origin || '').replace(/\/+$/, '');
+  const link = (base || '') + '/register.html?ref=' + encodeURIComponent(stats.code);
+  res.json({
+    success: true,
+    code: stats.code,
+    link,
+    referredCount: stats.referredCount,
+    rewardedCount: stats.rewardedCount,
+    rewardPoints: loyalty.REFERRAL_REWARD_POINTS
+  });
+});
+
+/* ============================================================
    PRODUCTS — admin-managed catalog.
    GET is public (the storefront reads it). Add/edit/delete are
    admin-only (same requireAdmin as the user tools).
@@ -269,6 +306,7 @@ app.delete('/api/admin/users/:id', requireAdmin, (req, res) => {
   const removed = auth.deleteUser(id);
   if (!removed) return res.status(404).json({ error: 'No account with that id.' });
   try { store.deleteUserData(id); } catch (e) { console.error('[admin delete] cleanup failed:', e.message); }
+  try { loyalty.deleteUser(id); } catch (e) { console.error('[admin delete] loyalty cleanup failed:', e.message); }
   res.json({ success: true, deleted: removed });
 });
 
@@ -355,11 +393,85 @@ app.post('/api/auth/reset', async (req, res) => {
   }
 });
 
+/* ---- LOYALTY / REFERRAL bookkeeping helpers ----
+   Turn a validated redemption request into a discount BEFORE pricing, so the
+   amount we charge already reflects it. We work out the actual points to spend
+   from the discount pricing.js ends up applying (it clamps to the subtotal), so
+   points and dollars can never drift apart. The points are only DEDUCTED after
+   the charge succeeds (see the checkout handlers). Guests can't redeem. */
+function plannedDiscount(user, pointsToRedeem) {
+  if (!user) return 0;
+  const requested = Math.max(0, Math.floor(Number(pointsToRedeem) || 0));
+  if (!requested) return 0;
+  const usePoints = Math.min(requested, loyalty.getBalance(user.id));
+  return loyalty.pointsToDollars(usePoints);
+}
+
+/* After a paid order: deduct redeemed points, grant earned points, and process
+   any pending referral reward. Returns { pointsEarned, pointsRedeemed } for the
+   stored record + the API response. */
+function settleLoyaltyForPaidOrder(userId, orderId, order) {
+  let pointsRedeemed = 0, pointsEarned = 0;
+  try {
+    pointsRedeemed = order.discount > 0 ? loyalty.centsToPoints(Math.round(order.discount * 100)) : 0;
+    if (pointsRedeemed > 0) loyalty.redeem(userId, pointsRedeemed, 'Redeemed at checkout', { orderId });
+    // earn on the cash actually spent on product (subtotal minus any discount)
+    pointsEarned = loyalty.earnForAmount(order.subtotal - order.discount);
+    if (pointsEarned > 0) loyalty.earn(userId, pointsEarned, 'Order ' + orderId, { orderId });
+  } catch (e) {
+    console.error('[loyalty] settle failed:', e.message);
+  }
+  awardReferral(userId);
+  return { pointsEarned, pointsRedeemed };
+}
+
+/* Referral reward — granted once, on the referred buyer's first paid order.
+   Credits loyalty points to BOTH the referrer and the new customer, then (if
+   email is configured) tells the referrer. Safe to call on every paid order:
+   auth.claimReferralReward returns null after the first successful claim. */
+function awardReferral(userId) {
+  let claim;
+  try { claim = auth.claimReferralReward(userId); }
+  catch (e) { console.error('[referral] claim failed:', e.message); return; }
+  if (!claim) return;
+  const pts = loyalty.REFERRAL_REWARD_POINTS;
+  if (pts > 0) {
+    try {
+      loyalty.earn(claim.referrerId, pts, 'Referral reward', {});
+      loyalty.earn(claim.refereeId, pts, 'Referral welcome bonus', {});
+    } catch (e) { console.error('[referral] credit failed:', e.message); }
+  }
+  sendReferralRewardEmail(claim.referrerId, pts)
+    .catch(err => console.error('[referral email] failed:', err.message));
+}
+
+async function sendReferralRewardEmail(referrerId, points) {
+  if (!mailer.CONFIGURED || points <= 0) return;
+  const referrer = auth.getUserById(referrerId);
+  if (!referrer || !referrer.email) return;
+  const name = referrer.firstName || 'there';
+  const dollars = loyalty.pointsToDollars(points).toFixed(2);
+  const subject = 'You earned a referral reward 🎁';
+  const text = `Hi ${name},\n\n` +
+    `Someone you referred just placed their first order on Ever Nova Life — so we've added ` +
+    `${points} reward points (worth $${dollars}) to your account. Thanks for spreading the word!\n\n` +
+    `— The Ever Nova Life team`;
+  const html = `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;color:#1f2937">
+    <h2 style="color:#6d28d9">You earned a referral reward 🎁</h2>
+    <p>Hi ${escapeHtmlSrv(name)}, someone you referred just placed their first order on <strong>Ever Nova Life</strong>.</p>
+    <p>We've added <strong>${points} reward points</strong> (worth $${dollars}) to your account. Thanks for spreading the word!</p>
+  </div>`;
+  return mailer.sendMail({ to: referrer.email, subject, text, html });
+}
+
 /* ---- checkout: price it HERE (never trust the browser's total), then sell ---- */
 app.post('/api/checkout', optionalAuth, async (req, res) => {
   try {
     const body = req.body || {};
-    const order = buildOrder(body.items);                 // authoritative price
+    // Loyalty redemption (signed-in only) is folded into the price up-front so
+    // the charge already reflects it; the points are spent only on success.
+    const discount = plannedDiscount(req.user, body.pointsToRedeem);
+    const order = buildOrder(body.items, { discount });   // authoritative price
     const transaction = await braintree.createTransaction({
       order,
       nonce: body.nonce,
@@ -369,14 +481,17 @@ app.post('/api/checkout', optionalAuth, async (req, res) => {
     });
 
     const orderId = newOrderId();
+    let pointsEarned = 0, pointsRedeemed = 0;
 
     // Signed in? Record the order on their account and empty their saved cart.
     if (req.user) {
       try {
+        ({ pointsEarned, pointsRedeemed } = settleLoyaltyForPaidOrder(req.user.id, orderId, order));
         store.addOrder(req.user.id, buildOrderRecord({
           orderId, order, method: 'card', status: 'paid',
           email: body.email, shipping: body.shipping,
-          transactionId: transaction.id
+          transactionId: transaction.id,
+          pointsEarned, pointsRedeemed
         }));
         store.clearCart(req.user.id);
       } catch (e) {
@@ -390,7 +505,10 @@ app.post('/api/checkout', optionalAuth, async (req, res) => {
       transactionId: transaction.id,
       status: transaction.status,                          // e.g. "submitted_for_settlement"
       amount: transaction.amount,
-      total: order.total
+      total: order.total,
+      discount: order.discount,
+      pointsEarned,
+      pointsRedeemed
     });
   } catch (err) {
     console.error('[checkout] failed:', err.message);
@@ -402,7 +520,7 @@ app.post('/api/checkout', optionalAuth, async (req, res) => {
    `order.shipping` is the shipping COST (from pricing.js); the delivery
    address arrives separately as `shipping`, stored as shippingAddress so
    the two never collide. */
-function buildOrderRecord({ orderId, order, method, status, email, shipping, transactionId, invoiceId }) {
+function buildOrderRecord({ orderId, order, method, status, email, shipping, transactionId, invoiceId, pointsEarned, pointsRedeemed }) {
   return {
     orderId,
     createdAt: new Date().toISOString(),
@@ -410,11 +528,14 @@ function buildOrderRecord({ orderId, order, method, status, email, shipping, tra
     method,
     items: order.items,          // [{ id, name, unitPrice, quantity, lineTotal }]
     subtotal: order.subtotal,
+    discount: order.discount || 0,
     shippingCost: order.shipping,
     tax: order.tax,
     total: order.total,
     email: email || '',
     shippingAddress: shipping || null,
+    ...(pointsEarned ? { pointsEarned } : {}),
+    ...(pointsRedeemed ? { pointsRedeemed } : {}),
     ...(transactionId ? { transactionId } : {}),
     ...(invoiceId ? { invoiceId } : {})
   };
@@ -502,7 +623,23 @@ app.post('/api/crypto/webhook', (req, res) => {
   // recorded (guest orders have no owner to attach to), so updateOrderStatus
   // simply no-ops when the order isn't found.
   if (evt.type === 'InvoiceSettled') {
-    store.updateOrderStatus(orderId, 'paid', { paidAt: new Date().toISOString() });
+    const upd = store.updateOrderStatus(orderId, 'paid', { paidAt: new Date().toISOString() });
+    // Award loyalty + referral only on the FIRST transition to paid — a repeated
+    // webhook delivery has previousStatus === 'paid', so it's skipped (no double
+    // credit). Crypto orders carry no points redemption, so we just earn.
+    if (upd && upd.previousStatus !== 'paid') {
+      try {
+        const o = upd.order;
+        const earned = loyalty.earnForAmount((o.subtotal || 0) - (o.discount || 0));
+        if (earned > 0) {
+          loyalty.earn(upd.userId, earned, 'Order ' + (o.orderId || ''), { orderId: o.orderId });
+          store.updateOrderStatus(orderId, null, { pointsEarned: earned });   // stamp for display
+        }
+        awardReferral(upd.userId);
+      } catch (e) {
+        console.error('[crypto webhook] loyalty/referral failed:', e.message);
+      }
+    }
   } else if (evt.type === 'InvoiceExpired' || evt.type === 'InvoiceInvalid') {
     store.updateOrderStatus(orderId, 'cancelled');
   }

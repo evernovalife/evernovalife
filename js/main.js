@@ -978,8 +978,136 @@ function loadBraintreeDropin() {
   });
 }
 
-function showOrderConfirmation(transactionId) {
+/* ============================================================
+   LOYALTY POINTS — redeem at checkout
+   Signed-in buyers with a points balance can apply it as money off.
+   The discount is folded into the amount we ask Braintree to charge,
+   but the SERVER re-prices authoritatively and only spends the points
+   once the charge succeeds. State lives in window._enlRedeem so the
+   summary, the pay button and the Drop-in amount all agree.
+   ============================================================ */
+let _dropinInstance = null;   // current Braintree Drop-in (so we can rebuild it)
+let _redeemBusy = false;      // guard against overlapping rebuilds
+
+function round2(n) { return Math.round(((Number(n) || 0) + Number.EPSILON) * 100) / 100; }
+function enlRedeem() { return window._enlRedeem || { points: 0, discount: 0 }; }
+
+/* Checkout totals mirroring the server's pricing (server stays authoritative
+   for the actual charge). The discount lowers the taxable subtotal; free
+   shipping is still decided on the pre-discount subtotal. */
+function checkoutTotals() {
+  const subtotal = round2(cart.getSubtotal());
+  const discount = round2(Math.min(enlRedeem().discount || 0, subtotal));
+  const shipping = round2(cart.getShipping());
+  const taxable = round2(Math.max(0, subtotal - discount));
+  const tax = round2(taxable * TAX_RATE);
+  return { subtotal, discount, shipping, taxable, tax, total: round2(taxable + shipping + tax) };
+}
+
+/* Pull the signed-in buyer's points balance so we can offer redemption. */
+async function loadCheckoutLoyalty() {
+  let token = '';
+  try { token = localStorage.getItem('enl_token') || ''; } catch (e) {}
+  if (!token) return;
+  try {
+    const res = await fetch(API_BASE + '/api/loyalty', { headers: { Authorization: 'Bearer ' + token } });
+    if (!res.ok) return;
+    const d = await res.json().catch(() => null);
+    if (d && d.success) {
+      window._enlLoyalty = {
+        balance: Number(d.balance) || 0,
+        dollarValue: Number(d.dollarValue) || 0,
+        valueCents: Number(d.valueCents) > 0 ? Number(d.valueCents) : 1,
+        perDollar: Number(d.perDollar) || 1
+      };
+    }
+  } catch (e) { /* offline → no redeem control, checkout still works */ }
+}
+
+/* Render the checkout order summary (with the points-redeem control when the
+   buyer is signed in and has a balance). Replaces renderOrderSummary here so
+   the discount line + redeem toggle live in one place. */
+function renderCheckoutSummary(el) {
+  if (!el) return;
+  const t = checkoutTotals();
+  const loy = window._enlLoyalty;
+  let signedIn = false;
+  try { signedIn = !!(localStorage.getItem('enl_token') || ''); } catch (e) {}
+  const canRedeem = signedIn && loy && loy.balance > 0 && t.subtotal > 0;
+  const redeemActive = (enlRedeem().points || 0) > 0;
+  const maxRedeem = canRedeem ? Math.min(loy.dollarValue, t.subtotal) : 0;
+
+  el.innerHTML = `
+    <div class="summary-row"><span>Subtotal (${cart.getItemCount()} items)</span><span>${formatPrice(t.subtotal)}</span></div>
+    <div class="summary-row"><span>Shipping</span><span>${t.shipping === 0 ? 'FREE' : formatPrice(t.shipping)}</span></div>
+    ${t.discount > 0 ? `<div class="summary-row discount"><span>Points discount</span><span>−${formatPrice(t.discount)}</span></div>` : ''}
+    <div class="summary-row"><span>Tax (8%)</span><span>${formatPrice(t.tax)}</span></div>
+    <div class="summary-row total"><span>Total</span><span>${formatPrice(t.total)}</span></div>
+    ${canRedeem ? `
+      <label class="loyalty-redeem-row">
+        <input type="checkbox" id="redeemPoints" ${redeemActive ? 'checked' : ''}>
+        <span>Use my <strong>${loy.balance} points</strong> (−${formatPrice(maxRedeem)})</span>
+      </label>` : ''}
+    ${redeemActive ? `<p class="summary-note">Points apply to <strong>card payment</strong>. You'll still earn points on this order.</p>` : ''}
+    <p class="summary-note">🔒 Secure checkout · Research use only</p>`;
+
+  const chk = document.getElementById('redeemPoints');
+  if (chk) chk.addEventListener('change', () => onRedeemToggle(chk.checked));
+}
+
+/* Toggle points redemption on/off, then re-price everything: summary, the
+   crypto option (hidden while points are applied), and the Drop-in amount. */
+function onRedeemToggle(checked) {
+  const loy = window._enlLoyalty;
+  if (checked && loy) {
+    const subtotal = cart.getSubtotal();
+    const discount = round2(Math.min(loy.dollarValue, subtotal));
+    const valueCents = loy.valueCents > 0 ? loy.valueCents : 1;
+    const points = Math.round((discount * 100) / valueCents);   // points matching the applied discount
+    window._enlRedeem = { points, discount };
+  } else {
+    window._enlRedeem = { points: 0, discount: 0 };
+  }
+  const form = document.getElementById('checkoutForm');
+  renderCheckoutSummary(document.getElementById('checkoutSummary'));
+  updateCryptoForRedeem();
+  refreshPayment(form);
+}
+
+/* Crypto can't apply a points discount, so hide that option while points are
+   applied. Also respects the /api/health check (window._cryptoAvailable). */
+function updateCryptoForRedeem() {
+  const sec = document.getElementById('cryptoPaySection');
+  if (!sec) return;
+  const active = (enlRedeem().points || 0) > 0;
+  sec.style.display = (window._cryptoAvailable !== false && !active) ? '' : 'none';
+}
+
+/* Rebuild the Drop-in so the PayPal/Venmo amount matches the discounted total
+   (card charges are server-priced regardless). Guarded so rapid toggles queue. */
+async function refreshPayment(form) {
+  if (_redeemBusy) return;
+  _redeemBusy = true;
+  const container = document.getElementById('dropin-container');
+  const payBtn = document.getElementById('payBtn');
+  const loading = document.getElementById('dropinLoading');
+  try {
+    if (_dropinInstance) {
+      try { await _dropinInstance.teardown(); } catch (e) { /* already gone */ }
+      _dropinInstance = null;
+    }
+    if (container) container.innerHTML = '';
+    if (payBtn) payBtn.style.display = 'none';
+    if (loading) { loading.className = 'form-hint'; loading.style.display = ''; loading.textContent = 'Updating secure checkout…'; }
+    await renderBraintreeDropin(form);
+  } finally {
+    _redeemBusy = false;
+  }
+}
+
+function showOrderConfirmation(transactionId, pointsEarned) {
   cart.clearCart();
+  const earned = Number(pointsEarned) || 0;
   const wrap = document.getElementById('checkoutMain');
   if (wrap) {
     wrap.innerHTML = `
@@ -988,6 +1116,7 @@ function showOrderConfirmation(transactionId) {
         <h3>Payment received — welcome to the Nest!</h3>
         <p>Thank you. Your payment was processed securely by Braintree (a PayPal service).${transactionId
           ? ` Your transaction reference is <strong>${escapeHtml(transactionId)}</strong>.` : ''}</p>
+        ${earned > 0 ? `<p class="text-muted">🎉 You earned <strong>${earned} reward points</strong> on this order — see your balance in <a href="account.html" style="color:var(--accent-purple)">your account</a>.</p>` : ''}
         <p class="text-muted">We've recorded your order and will ship to the address you provided. Keep your transaction reference for your records.</p>
         <a class="btn btn-primary" href="index.html">Back to Home</a>
       </div>`;
@@ -1056,7 +1185,8 @@ async function submitOrder(form, payload) {
       shipping: checkout,
       email: checkout.email,
       nonce: payload.nonce,
-      deviceData: payload.deviceData
+      deviceData: payload.deviceData,
+      pointsToRedeem: enlRedeem().points || 0    // server clamps to the real balance
     })
   });
   const body = await res.json().catch(() => ({}));
@@ -1075,7 +1205,7 @@ async function onPay(instance, form, payBtn) {
     const payload = await instance.requestPaymentMethod();
     checkoutSetMsg('Finalising your payment…', 'success');
     const body = await submitOrder(form, payload);
-    showOrderConfirmation(body.transactionId);
+    showOrderConfirmation(body.transactionId, body.pointsEarned);
   } catch (err) {
     console.error('[checkout pay]', err);
     const noMethod = /no payment method/i.test((err && err.message) || '');
@@ -1085,7 +1215,7 @@ async function onPay(instance, form, payBtn) {
       'error'
     );
     payBtn.disabled = false;
-    payBtn.innerHTML = 'Pay <span id="payBtnAmount">' + escapeHtml(formatPrice(cart.getTotal())) + '</span>';
+    payBtn.innerHTML = 'Pay <span id="payBtnAmount">' + escapeHtml(formatPrice(checkoutTotals().total)) + '</span>';
   }
 }
 
@@ -1114,7 +1244,7 @@ async function renderBraintreeDropin(form) {
 
     // 2) load the Drop-in and create the instance (cards + PayPal + Venmo)
     const dropin = await loadBraintreeDropin();
-    const amount = cart.getTotal().toFixed(2);
+    const amount = checkoutTotals().total.toFixed(2);   // reflects any points discount
     const currency = tok.currency || 'USD';
     const baseOpts = { authorization: tok.clientToken, container: '#dropin-container', dataCollector: true };
 
@@ -1131,12 +1261,15 @@ async function renderBraintreeDropin(form) {
       instance = await dropin.create(baseOpts);
     }
 
+    _dropinInstance = instance;   // remember it so a points-toggle can rebuild it
+
     if (loading) loading.style.display = 'none';
     if (payBtn) {
       const amt = document.getElementById('payBtnAmount');
-      if (amt) amt.textContent = formatPrice(cart.getTotal());
+      if (amt) amt.textContent = formatPrice(checkoutTotals().total);
       payBtn.style.display = 'block';
-      payBtn.addEventListener('click', () => onPay(instance, form, payBtn));
+      // assign (not addEventListener) so a Drop-in rebuild can't stack handlers
+      payBtn.onclick = () => onPay(instance, form, payBtn);
     }
   } catch (err) {
     console.error('[checkout]', err);
@@ -1157,8 +1290,12 @@ function initCheckoutPage() {
     return;
   }
 
+  window._enlRedeem = { points: 0, discount: 0 };
+  window._cryptoAvailable = true;
   const summary = document.getElementById('checkoutSummary');
-  if (summary) renderOrderSummary(summary, false);
+  renderCheckoutSummary(summary);
+  // pull the signed-in points balance, then re-render so the redeem control appears
+  loadCheckoutLoyalty().then(() => renderCheckoutSummary(summary));
 
   // line items in summary
   const lineItems = document.getElementById('checkoutItems');
@@ -1200,9 +1337,10 @@ function initCheckoutPage() {
   if (cryptoBtn && cryptoSection) {
     cryptoBtn.addEventListener('click', () => submitCryptoOrder(form, cryptoBtn));
     // hide the crypto option if the server says BTCPay isn't configured yet
+    // (and keep it hidden while points are being redeemed — see updateCryptoForRedeem)
     fetch(API_BASE + '/api/health')
       .then(r => r.json())
-      .then(h => { if (h && h.crypto === false) cryptoSection.style.display = 'none'; })
+      .then(h => { window._cryptoAvailable = !(h && h.crypto === false); updateCryptoForRedeem(); })
       .catch(() => { /* leave visible; a click will surface any real error */ });
   }
 
@@ -1507,7 +1645,7 @@ document.addEventListener('DOMContentLoaded', () => {
       renderCartPage();
     } else if (currentPage === 'checkout.html') {
       const summary = document.getElementById('checkoutSummary');
-      if (summary) renderOrderSummary(summary, false);
+      if (summary) renderCheckoutSummary(summary);
       const lineItems = document.getElementById('checkoutItems');
       if (lineItems && cart.items.length) {
         lineItems.innerHTML = cart.items.map(i =>

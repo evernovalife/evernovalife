@@ -108,8 +108,12 @@ function addOrder(userId, order) {
 
 /* Update an order's status by orderId, searching across all users.
    The crypto webhook only knows the orderId (not who placed it), so we
-   scan every user's list. Returns the updated order, or null if not found
-   (e.g. a guest order that was never stored). */
+   scan every user's list. Returns { userId, order, previousStatus } for the
+   updated order, or null if not found (e.g. a guest order that was never
+   stored). The previousStatus lets the caller act only on a real state change
+   — e.g. award loyalty points the first time an order becomes paid, so a
+   repeated webhook delivery can't double-credit. Pass status === null to patch
+   fields without changing the status. */
 function updateOrderStatus(orderId, status, patch) {
   if (!orderId) return null;
   const orders = loadMap(ORDERS_FILE);
@@ -118,10 +122,11 @@ function updateOrderStatus(orderId, status, patch) {
     if (!Array.isArray(list)) continue;
     const found = list.find(o => o && o.orderId === orderId);
     if (found) {
+      const previousStatus = found.status;
       if (status) found.status = status;
       if (patch) Object.assign(found, patch);
       saveMap(ORDERS_FILE, orders);
-      return found;
+      return { userId: uid, order: found, previousStatus };
     }
   }
   return null;

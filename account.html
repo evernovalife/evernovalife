@@ -21,7 +21,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/styles.css?v=13">
+  <link rel="stylesheet" href="css/styles.css?v=14">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Cpath d='M20.00 1.00 L21.91 15.38 L27.78 12.22 L24.62 18.09 L39.00 20.00 L24.62 21.91 L27.78 27.78 L21.91 24.62 L20.00 39.00 L18.09 24.62 L12.22 27.78 L15.38 21.91 L1.00 20.00 L15.38 18.09 L12.22 12.22 L18.09 15.38 Z' fill='%23a855f7'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -150,6 +150,10 @@
               <div class="num" id="statSpent">$0.00</div>
               <div class="lbl">Total Spent</div>
             </div>
+            <div class="stat-tile glass">
+              <div class="num" id="statPoints">0</div>
+              <div class="lbl">Reward Points</div>
+            </div>
           </div>
 
           <div class="account-card glass">
@@ -157,6 +161,30 @@
             <div id="recentOrders">
               <p class="text-muted">Loading your orders…</p>
             </div>
+          </div>
+
+          <!-- REWARDS — loyalty points balance + history -->
+          <div class="account-card glass" id="loyaltyCard">
+            <div class="rewards-head">
+              <h3>Reward Points</h3>
+              <div class="rewards-balance">
+                <span class="rewards-num" id="loyaltyBalance">0</span>
+                <span class="rewards-sub">points<span id="loyaltyValue"></span></span>
+              </div>
+            </div>
+            <p class="text-muted rewards-blurb" id="loyaltyBlurb">Earn points on every order and redeem them for money off at checkout.</p>
+            <div id="loyaltyLedger"></div>
+          </div>
+
+          <!-- REFER A FRIEND -->
+          <div class="account-card glass" id="referralCard">
+            <h3>Refer a Friend</h3>
+            <p class="text-muted rewards-blurb" id="referralBlurb">Share your code — when a friend places their first order, you both earn reward points.</p>
+            <div class="referral-code-row">
+              <input type="text" id="referralCode" readonly aria-label="Your referral code" value="…">
+              <button class="btn btn-primary btn-sm" type="button" id="copyReferralBtn">Copy link</button>
+            </div>
+            <p class="referral-stats text-muted" id="referralStats"></p>
           </div>
 
           <div class="account-card glass">
@@ -239,10 +267,10 @@
     </div>
   </footer>
 
-  <script src="js/config.js?v=10"></script>
-  <script src="js/products-data.js?v=10"></script>
-  <script src="js/cart.js?v=10"></script>
-  <script src="js/main.js?v=10"></script>
-  <script src="js/auth.js?v=10"></script>
+  <script src="js/config.js?v=11"></script>
+  <script src="js/products-data.js?v=11"></script>
+  <script src="js/cart.js?v=11"></script>
+  <script src="js/main.js?v=11"></script>
+  <script src="js/auth.js?v=11"></script>
 </body>
 </html>

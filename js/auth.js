@@ -102,6 +102,28 @@
         const data = await res.json().catch(() => ({}));
         return Array.isArray(data.orders) ? data.orders : [];
       } catch (e) { return []; }
+    },
+
+    /* Loyalty points balance + ledger + conversion rates, or null. */
+    async loyalty() {
+      const token = this.getToken();
+      if (!token) return null;
+      try {
+        const res = await fetch(API_BASE + '/api/loyalty', { headers: { Authorization: 'Bearer ' + token } });
+        if (!res.ok) return null;
+        return await res.json().catch(() => null);
+      } catch (e) { return null; }
+    },
+
+    /* Referral code, invite link + stats, or null. */
+    async referral() {
+      const token = this.getToken();
+      if (!token) return null;
+      try {
+        const res = await fetch(API_BASE + '/api/referral', { headers: { Authorization: 'Bearer ' + token } });
+        if (!res.ok) return null;
+        return await res.json().catch(() => null);
+      } catch (e) { return null; }
     }
   };
   window.Auth = Auth;
@@ -176,6 +198,81 @@
     }).join('');
   }
 
+  /* Short, human label for a loyalty ledger reason + its sign. */
+  function ledgerRow(e) {
+    const sign = e.delta > 0 ? '+' : '';
+    const cls = e.delta > 0 ? 'earn' : 'redeem';
+    return `<div class="ledger-row">
+      <div><span class="ledger-reason">${esc(e.reason || (e.delta > 0 ? 'Points earned' : 'Points redeemed'))}</span>
+        <span class="text-muted"> · ${esc(orderDate(e.ts))}</span></div>
+      <div class="ledger-delta ${cls}">${sign}${Number(e.delta) || 0}</div>
+    </div>`;
+  }
+
+  /* Fill the Reward Points card (balance, cash value, recent history) and the
+     Points stat tile. Silently leaves defaults if the API is unreachable. */
+  async function renderAccountRewards() {
+    const data = await Auth.loyalty();
+    if (!data) return;
+    const bal = Number(data.balance) || 0;
+    const setNum = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    setNum('statPoints', bal);
+    setNum('loyaltyBalance', bal);
+    const val = document.getElementById('loyaltyValue');
+    if (val) val.textContent = bal > 0 ? ` · worth ${money(data.dollarValue)}` : '';
+
+    const per = Number(data.perDollar) || 1;
+    const blurb = document.getElementById('loyaltyBlurb');
+    if (blurb) blurb.textContent =
+      `Earn ${per === 1 ? '1 point' : per + ' points'} for every $1 spent, and redeem points for money off at checkout.`;
+
+    const ledgerBox = document.getElementById('loyaltyLedger');
+    if (ledgerBox) {
+      const ledger = Array.isArray(data.ledger) ? data.ledger : [];
+      ledgerBox.innerHTML = ledger.length
+        ? ledger.slice(0, 8).map(ledgerRow).join('')
+        : `<p class="text-muted">No points activity yet. Your first order will start your balance.</p>`;
+    }
+  }
+
+  /* Fill the Refer a Friend card (code, copy-link button, stats). */
+  async function renderReferral() {
+    const data = await Auth.referral();
+    if (!data) return;
+    const codeInput = document.getElementById('referralCode');
+    if (codeInput) codeInput.value = data.code || '';
+
+    const blurb = document.getElementById('referralBlurb');
+    if (blurb && data.rewardPoints) {
+      blurb.textContent = `Share your code — when a friend places their first order, you both earn ${data.rewardPoints} reward points.`;
+    }
+
+    const stats = document.getElementById('referralStats');
+    if (stats) {
+      const n = Number(data.referredCount) || 0;
+      stats.textContent = n
+        ? `${n} friend${n === 1 ? '' : 's'} joined with your code · ${Number(data.rewardedCount) || 0} completed a first order.`
+        : 'No referrals yet — share your link to get started.';
+    }
+
+    const btn = document.getElementById('copyReferralBtn');
+    if (btn && !btn._wired) {
+      btn._wired = true;
+      btn.addEventListener('click', async () => {
+        const link = data.link || (location.origin + '/register.html?ref=' + (data.code || ''));
+        let ok = false;
+        try { await navigator.clipboard.writeText(link); ok = true; }
+        catch (e) {
+          // fallback: select the code field so the user can copy manually
+          if (codeInput) { codeInput.focus(); codeInput.select(); }
+        }
+        const label = btn.textContent;
+        btn.textContent = ok ? '✓ Copied!' : 'Press Ctrl+C';
+        setTimeout(() => { btn.textContent = label; }, 1600);
+      });
+    }
+  }
+
   /* ============================================================
      LOGIN PAGE
      ============================================================ */
@@ -214,6 +311,16 @@
     const msg = form.querySelector('.form-msg');
     const btn = form.querySelector('button[type="submit"]');
 
+    // Referral: capture ?ref=CODE from the invite link. We keep it and hand it
+    // to the register API; if it matches a real account the new user (and their
+    // referrer) earn bonus points on the first order.
+    const refCode = (new URLSearchParams(location.search).get('ref') || '').trim();
+    const refNote = document.getElementById('refNote');
+    if (refCode && refNote) {
+      refNote.textContent = `🎁 You were invited! You'll both earn bonus reward points once you place your first order.`;
+      refNote.style.display = '';
+    }
+
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const firstName = (form.elements.firstName.value || '').trim();
@@ -234,7 +341,7 @@
       const label = btn.textContent;
       btn.disabled = true; btn.textContent = 'Creating account…';
       try {
-        await Auth.register({ firstName, lastName, email, password });
+        await Auth.register({ firstName, lastName, email, password, ref: refCode || undefined });
         setMsg(msg, '🎉 Account created! Redirecting…', 'success');
         location.href = 'account.html';
       } catch (err) {
@@ -270,6 +377,9 @@
 
     // real orders + stat tiles from the server
     renderAccountOrders();
+    // loyalty points + referral cards (independent — each no-ops if offline)
+    renderAccountRewards();
+    renderReferral();
 
     // admin accounts: reveal the Admin section of the nav (Manage Users + Products)
     if (user.isAdmin) {

@@ -84,6 +84,8 @@ test('anonymous users get 401 on all account/admin endpoints', async () => {
     ['GET', '/api/cart'],
     ['PUT', '/api/cart'],
     ['GET', '/api/orders'],
+    ['GET', '/api/loyalty'],
+    ['GET', '/api/referral'],
     ['GET', '/api/admin/users'],
     ['POST', '/api/products'],
     ['DELETE', '/api/admin/users/does-not-exist'],
@@ -117,6 +119,28 @@ test('registered user can read their own profile; no password hash is returned',
   assert.equal(me.body.user.email, 'alice@example.com');
   assert.ok(!('passwordHash' in me.body.user), '/me does not leak passwordHash');
   assert.equal(me.body.user.isAdmin, false, 'ordinary user is not admin');
+  assert.ok(me.body.user.referralCode && me.body.user.referralCode.length >= 6,
+    'a new account is issued a referral code');
+});
+
+/* ============================================================
+   3b) Loyalty + referral endpoints work for a signed-in user
+   ============================================================ */
+test('a signed-in user sees a zero loyalty balance and their referral code', async () => {
+  const { body } = await login('alice@example.com');
+  const token = body.token;
+
+  const loy = await api('/api/loyalty', { token });
+  assert.equal(loy.status, 200);
+  assert.equal(loy.body.balance, 0, 'new account starts at 0 points');
+  assert.ok(Array.isArray(loy.body.ledger), 'ledger is an array');
+  assert.ok(loy.body.perDollar >= 0 && loy.body.valueCents >= 0, 'conversion rates present');
+
+  const ref = await api('/api/referral', { token });
+  assert.equal(ref.status, 200);
+  assert.ok(ref.body.code && ref.body.code.length >= 6, 'referral code returned');
+  assert.match(ref.body.link, /register\.html\?ref=/, 'invite link points at register with the code');
+  assert.equal(ref.body.referredCount, 0, 'no referrals yet');
 });
 
 test('a user can save and read back their own cart', async () => {

@@ -824,6 +824,49 @@ h1, h2, h3, h4 { line-height: 1.2; font-weight: 700; letter-spacing: -0.02em; }
 .order-status.cancelled { background: rgba(148,163,184,0.18); color: #94a3b8; }
 
 /* ============================================================
+   LOYALTY POINTS + REFERRAL
+   ============================================================ */
+.rewards-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+.rewards-balance { text-align: right; line-height: 1.1; }
+.rewards-num { font-size: 2rem; font-weight: 800; color: #fff; }
+.rewards-sub { display: block; font-size: 0.8rem; color: var(--dark-text-muted); }
+.rewards-blurb { margin: 0.4rem 0 1rem; font-size: 0.9rem; }
+
+.ledger-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0.6rem 0; border-bottom: 1px solid var(--glass-border); font-size: 0.88rem;
+}
+.ledger-row:last-child { border-bottom: none; }
+.ledger-reason { color: #e5e7eb; }
+.ledger-delta { font-weight: 800; font-variant-numeric: tabular-nums; }
+.ledger-delta.earn { color: var(--accent-mint); }
+.ledger-delta.redeem { color: #94a3b8; }
+
+.referral-code-row { display: flex; gap: 0.6rem; align-items: stretch; margin: 0.4rem 0 0.8rem; flex-wrap: wrap; }
+.referral-code-row input {
+  flex: 1; min-width: 140px; padding: 0.7rem 0.9rem;
+  background: var(--glass-bg); border: 1px solid var(--glass-border-strong);
+  border-radius: var(--radius-sm); color: #fff; font-size: 1.1rem; font-weight: 700;
+  letter-spacing: 0.15em; text-align: center;
+}
+.referral-code-row .btn { white-space: nowrap; }
+.referral-stats { font-size: 0.85rem; margin: 0; }
+.referral-invite {
+  background: rgba(168,85,247,0.12); border: 1px solid var(--glass-border-strong);
+  border-radius: var(--radius-sm); padding: 0.7rem 0.9rem; margin: 0 0 1rem;
+  font-size: 0.9rem; color: #e9d5ff;
+}
+
+/* checkout: points-redeem control + discount line */
+.summary-row.discount { color: var(--accent-mint); font-weight: 600; }
+.loyalty-redeem-row {
+  display: flex; align-items: center; gap: 0.6rem; margin: 0.9rem 0 0.2rem;
+  padding: 0.7rem 0.9rem; border: 1px solid var(--glass-border-strong);
+  border-radius: var(--radius-sm); background: var(--glass-bg); cursor: pointer; font-size: 0.9rem;
+}
+.loyalty-redeem-row input { width: 18px; height: 18px; accent-color: var(--accent-purple); cursor: pointer; }
+
+/* ============================================================
    FAQ ACCORDION
    ============================================================ */
 .faq-list { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 1rem; }

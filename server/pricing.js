@@ -19,10 +19,15 @@ const money = n => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 /**
  * Build an authoritative order from a client-supplied cart.
  * @param {Array<{id:number|string, quantity:number|string}>} rawItems
- * @returns {{ items, subtotal, shipping, tax, total }}
+ * @param {{ discount?: number }} [opts] optional order-level discount in DOLLARS
+ *        (e.g. loyalty-points redemption). Always clamped to [0, subtotal] here,
+ *        so the browser can never push the charge below zero or discount more
+ *        than was actually purchased. Free-shipping is decided on the pre-discount
+ *        subtotal (what was actually bought); the discount lowers the taxable base.
+ * @returns {{ items, subtotal, discount, shipping, tax, total }}
  * @throws  {Error} if the cart is empty or contains unknown / invalid items
  */
-function buildOrder(rawItems) {
+function buildOrder(rawItems, opts = {}) {
   if (!Array.isArray(rawItems) || rawItems.length === 0) {
     throw new Error('Cart is empty.');
   }
@@ -49,10 +54,13 @@ function buildOrder(rawItems) {
 
   const subtotal = money(items.reduce((sum, i) => sum + i.lineTotal, 0));
   const shipping = subtotal >= FREE_SHIP_THRESHOLD ? 0 : SHIP_FLAT;
-  const tax = money(subtotal * TAX_RATE);
-  const total = money(subtotal + shipping + tax);
+  // clamp the discount to [0, subtotal] — never trust the caller with a raw value
+  const discount = money(Math.max(0, Math.min(Number(opts.discount) || 0, subtotal)));
+  const taxable = money(subtotal - discount);
+  const tax = money(taxable * TAX_RATE);
+  const total = money(taxable + shipping + tax);
 
-  return { items, subtotal, shipping: money(shipping), tax, total };
+  return { items, subtotal, discount, shipping: money(shipping), tax, total };
 }
 
 module.exports = { buildOrder, money, FREE_SHIP_THRESHOLD, SHIP_FLAT, TAX_RATE };
