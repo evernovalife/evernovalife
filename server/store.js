@@ -23,6 +23,14 @@ const ORDERS_FILE = path.join(DATA_DIR, 'orders.json');
 const MAX_CART_ITEMS = 100;      // guard against a runaway / tampered cart
 const MAX_ORDERS_KEPT = 200;     // per user, newest kept
 
+/* Guest orders have no account to hang off, but a manual payment (Zelle) has
+   to be reconcilable by the store owner whether or not the buyer signed in —
+   otherwise money arrives with a reference that matches nothing. They're
+   collected under one reserved key, kept out of every per-user path, and
+   allowed a bigger backlog because they're shared by every guest. */
+const GUEST_KEY = '__guest__';
+const MAX_GUEST_ORDERS = 2000;
+
 /* ---- tiny JSON-map store (read-through + atomic write) ---- */
 function ensureDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -101,9 +109,24 @@ function addOrder(userId, order) {
   const orders = loadMap(ORDERS_FILE);
   const list = Array.isArray(orders[userId]) ? orders[userId] : [];
   list.unshift(order);                       // newest first
-  orders[userId] = list.slice(0, MAX_ORDERS_KEPT);
+  const cap = userId === GUEST_KEY ? MAX_GUEST_ORDERS : MAX_ORDERS_KEPT;
+  orders[userId] = list.slice(0, cap);
   saveMap(ORDERS_FILE, orders);
   return order;
+}
+
+/* Every order in the store, newest first, each stamped with the account it
+   belongs to (GUEST_KEY for guest checkouts). Admin-only — this is what the
+   owner works from when confirming manual payments. */
+function listAllOrders() {
+  const orders = loadMap(ORDERS_FILE);
+  const all = [];
+  for (const uid of Object.keys(orders)) {
+    const list = orders[uid];
+    if (!Array.isArray(list)) continue;
+    for (const o of list) if (o) all.push({ ...o, userId: uid });
+  }
+  return all.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
 }
 
 /* Update an order's status by orderId, searching across all users.
@@ -138,7 +161,9 @@ module.exports = {
   clearCart,
   deleteUserData,
   listOrders,
+  listAllOrders,
   addOrder,
   updateOrderStatus,
-  sanitizeItems
+  sanitizeItems,
+  GUEST_KEY
 };

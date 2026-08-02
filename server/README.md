@@ -99,6 +99,10 @@ The server also serves the static site, so open **http://localhost:4242/checkout
 | POST   | `/api/checkout`        | Price the cart server-side and run the card sale |
 | POST   | `/api/crypto/checkout` | Price the cart + open a BTCPay crypto invoice    |
 | POST   | `/api/crypto/webhook`  | BTCPay → us: invoice state changes (signed)      |
+| POST   | `/api/zelle/checkout`  | Price the cart + open an unpaid Zelle order      |
+| GET    | `/api/admin/orders`    | Admin: all orders (`?status=awaiting_payment`)   |
+| POST   | `/api/admin/orders/:id/paid`   | Admin: confirm a manual payment landed   |
+| POST   | `/api/admin/orders/:id/cancel` | Admin: cancel an order that was never paid |
 | POST   | `/api/auth/register`   | Create an account (bcrypt) → returns a JWT       |
 | POST   | `/api/auth/login`      | Verify email + password → returns a JWT          |
 | GET    | `/api/auth/me`         | Current user (needs `Authorization: Bearer …`)   |
@@ -169,6 +173,67 @@ The order id + full price breakdown + ship-to are stored in the invoice
 > event. When you add an order store, act on `InvoiceSettled` (paid & confirmed)
 > to mark the order paid / trigger shipping. Volatility tip: set your BTCPay
 > store to auto-convert or settle in a stablecoin if you don't want to hold BTC.
+
+## Zelle — manual bank transfer (US only)
+
+Zelle has **no merchant API**: no charge to create, nothing to redirect to, and
+no webhook to tell us the money arrived. So this is an offline payment with an
+online paper trail — the buyer sends the transfer from their own banking app,
+and **you** confirm it landed. Fees: none, either side.
+
+```
+Browser (checkout.html)
+   │  POST /api/zelle/checkout   ── server prices the cart, opens the order
+   │  ◄ { orderId, instructions } status = awaiting_payment   (nothing charged)
+   │  buyer sends the transfer themselves, memo = orderId
+   ▼
+You (admin.html → "Payments to Confirm")
+   │  see the memo in your bank → press "Mark paid"
+   ▼  POST /api/admin/orders/:id/paid → order paid, points credited, buyer emailed
+```
+
+### Set up
+
+1. Enrol with Zelle **as a business** through your bank (see the warning below),
+   and note the email address or US mobile number buyers will send to.
+2. Put it in `ZELLE_RECIPIENT`, and the name buyers will see in their banking app
+   in `ZELLE_NAME`. Optionally `ZELLE_BANK`, `ZELLE_WINDOW_HOURS` (hold time,
+   default 24) and `ZELLE_MAX_TOTAL` (refuse orders above a bank's daily send
+   limit).
+3. Restart. `GET /api/health` shows `"zelle": true`, the startup log prints
+   `zelle: ready → …`, and the option appears at checkout. Leave the variables
+   blank and the option simply never shows.
+
+### Things worth knowing before switching it on
+
+- **Use a business enrolment.** Consumer Zelle terms don't cover paying for goods
+  and services. Most banks offer Zelle for Small Business; use that.
+- **Nothing ships until you confirm.** An order sits at `awaiting_payment` — it is
+  a claim, not a payment. Only "Mark paid" credits points, emails the buyer, and
+  releases it.
+- **Confirm against your bank, not the buyer's word.** A screenshot is not money.
+  Confirming is idempotent, so a double-click can't double-credit points.
+- **There is no chargeback, in either direction.** Money that arrives is yours;
+  money that never arrives is simply an order to cancel. Refunds are a transfer
+  you send back by hand.
+- **Points redemption and auto-ship are hidden for Zelle** — there's no charge of
+  ours to discount and no stored method to charge again.
+- **US only.** Non-US shipping addresses are refused at `/api/zelle/checkout`
+  before an order is created.
+
+`POST /api/zelle/checkout` body (same shape as the others):
+
+```json
+{
+  "items":   [{ "id": 1, "quantity": 2 }],
+  "shipping":{ "firstName": "...", "lastName": "...", "address": "...",
+               "city": "...", "state": "...", "postalCode": "...", "country": "US" },
+  "email":   "you@lab.com"
+}
+```
+
+Guest Zelle orders are stored too (under a reserved `__guest__` key), otherwise a
+transfer could arrive with a reference matching nothing.
 
 ## Accounts — sign in / sign up
 

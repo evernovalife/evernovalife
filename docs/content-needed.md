@@ -16,13 +16,13 @@ Status legend: **NEEDED** = no source found · **VERIFY** = a claim is on the si
 - **Carriers & tracked service level** — NEEDED. Confirm carrier(s) and whether all orders are tracked.
 - **Shipping origin / facilities** — NEEDED. Confirm the location(s) orders ship from (needed for accurate transit-time and temperature claims).
 - **Temperature / cold-chain handling** — VERIFY. Copy claims "temperature-aware, temperature-controlled" packaging. Confirm whether cold packs / insulated packaging are actually used, and for which products.
-- **International shipping** — NEEDED. Confirm whether orders ship outside the U.S.
+- **International shipping** — RESOLVED 2026-08-01. Domestic (U.S.) only; international shipping was removed from the site per compliance review.
 
 ## Returns (returns.html, index.html)
 - **Returns policy** — VERIFY. Copy claims "30-day returns on unopened vials". Confirm the real window, conditions, and restocking terms.
 
 ## Quality / documentation (quality.html)
-- **Lots without a published COA** — NEEDED. The COA Library currently documents 5 lots (Retatrutide, MOTS-C, GHK-Cu, BPC-157/TB-500, KLOW). The catalog also lists **Bacteriostatic Water, Tesamorelin/Ipamorelin Blend, and NAD+**, which have **no third-party report on file**. Provide reports (or confirm status: Pending / Not Provided / Not Applicable) before claiming documentation for them.
+- **Lots without a published COA** — NEEDED. The COA Library currently documents 5 lots (Retatrutide, MOTS-C, GHK-Cu, BPC-157/TB-500, KLOW). The catalog also lists **NAD+ and the Tesamorelin/Ipamorelin Blend**, which have **no third-party report on file** — their product pages show a "Pending" COA notice. Real Janoshik reports for the current NAD+ and Tesamorelin/Ipamorelin batches are REQUIRED to satisfy the "COA viewable for every product" compliance item. Bacteriostatic Water is exempt — it is a reagent, not a peptide, and its product page states "Not applicable" rather than "Pending".
 - **SDS (Safety Data Sheets)** — NEEDED. The footer links "Safety Data Sheets" to quality.html#sds, but no SDS documents exist on the site. Provide real SDS files or relabel the link.
 - **Purity for blends** — Confirmed N/A. Blend lots report identity + measured content only (no single %). This is already reflected in the COA Library.
 

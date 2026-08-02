@@ -3,7 +3,11 @@
    8 SKUs · For in-vitro research and laboratory use only
    Each product: id, name, category, categoryName, price,
    originalPrice, purity, quantity, description, specs{},
-   inStock, badge, featured, lot
+   coa{}, inStock, badge, featured, lot
+   coa{} carries the lot's third-party certificate of analysis so it can be
+   viewed from the product page: status ('available' | 'pending'), lab,
+   reportId, batch, testDate, reportDate, purity, content, file, verifyUrl.
+   Every value is copied from the published report — never estimated.
    Descriptions describe each material's research context only.
    They make no human-use, treatment, or physiological-benefit claims.
    ============================================================ */
@@ -36,6 +40,18 @@ const PRODUCTS = [
       'Storage': '-20°C, desiccated',
       'Reconstitution': 'Bacteriostatic water'
     },
+    coa: {
+      status: 'available',
+      lab: 'Janoshik Analytical',
+      reportId: '#137638',
+      batch: 'CS-re10-0322',
+      testDate: '2026-04-07',
+      reportDate: '2026-04-10',
+      purity: '99.786%',
+      content: 'Retatrutide 11.86 mg',
+      file: 'assets/coa/137638.pdf',
+      verifyUrl: 'https://janoshik.com'
+    },
     inStock: true,
     badge: 'Bestseller',
     featured: true
@@ -48,16 +64,20 @@ const PRODUCTS = [
     price: 8.99,
     originalPrice: 11.99,
     purity: '0.9% Benzyl Alcohol',
-    quantity: '30mL',
+    quantity: '10mL',
     lot: 'ENL-24002',
     description: 'Sterile water with 0.9% benzyl alcohol for reconstitution of lyophilized research peptides in the laboratory. Multi-dose laboratory reagent.',
     specs: {
       'Composition': 'Sterile water + 0.9% benzyl alcohol',
-      'Volume': '30mL multi-dose vial',
+      'Volume': '10mL multi-dose vial',
       'Grade': 'Laboratory reagent',
       'Form': 'Liquid',
       'Storage': 'Room temperature',
       'Use': 'Peptide reconstitution'
+    },
+    coa: {
+      status: 'not-applicable',
+      note: 'Bacteriostatic water is a laboratory reagent, not a peptide. Peptide identity and purity analysis does not apply to it, so no certificate of analysis is issued for this item.'
     },
     inStock: true,
     badge: 'Essential',
@@ -68,8 +88,8 @@ const PRODUCTS = [
     name: 'GHK-Cu (Copper Peptide)',
     category: 'repair',
     categoryName: 'Tissue Repair',
-    price: 39.99,
-    originalPrice: 49.99,
+    price: 85.00,
+    originalPrice: null,
     purity: '99.0%',
     quantity: '50mg',
     lot: 'ENL-24003',
@@ -82,6 +102,18 @@ const PRODUCTS = [
       'Storage': '-20°C, desiccated',
       'Reconstitution': 'Bacteriostatic water'
     },
+    coa: {
+      status: 'available',
+      lab: 'Janoshik Analytical',
+      reportId: '#122571',
+      batch: 'CS-gu50-0309',
+      testDate: '2026-03-17',
+      reportDate: '2026-03-18',
+      purity: '99.780%',
+      content: 'GHK-Cu 60.04 mg',
+      file: 'assets/coa/122571.pdf',
+      verifyUrl: 'https://janoshik.com'
+    },
     inStock: true,
     badge: null,
     featured: true
@@ -91,8 +123,8 @@ const PRODUCTS = [
     name: 'Tesamorelin / Ipamorelin Blend',
     category: 'growth',
     categoryName: 'Growth Factors',
-    price: 79.99,
-    originalPrice: 94.99,
+    price: 125.00,
+    originalPrice: null,
     purity: 'ID + content',
     quantity: '10mg / 3mg',
     lot: 'ENL-24004',
@@ -102,8 +134,13 @@ const PRODUCTS = [
       'Analysis': 'Identity + content per component (blend)',
       'Form': 'Co-lyophilized powder',
       'Storage': '-20°C, desiccated',
-      'Reconstitution': 'Bacteriostatic water',
-      'Documentation': 'Pending — see Quality & Documentation'
+      'Reconstitution': 'Bacteriostatic water'
+    },
+    coa: {
+      status: 'pending',
+      lab: 'Janoshik Analytical',
+      note: 'An independent report for the current Tesamorelin / Ipamorelin batch has not been published yet. This item is not released for order until its report is on file.',
+      verifyUrl: 'https://janoshik.com'
     },
     inStock: true,
     badge: 'New',
@@ -128,6 +165,18 @@ const PRODUCTS = [
       'Storage': '-20°C, desiccated',
       'Reconstitution': 'Bacteriostatic water'
     },
+    coa: {
+      status: 'available',
+      lab: 'Janoshik Analytical',
+      reportId: '#147077',
+      batch: 'CS-mc10-0408',
+      testDate: '2026-04-20',
+      reportDate: '2026-04-23',
+      purity: '99.025%',
+      content: 'MOTS-C 11.82 mg',
+      file: 'assets/coa/147077.pdf',
+      verifyUrl: 'https://janoshik.com'
+    },
     inStock: true,
     badge: null,
     featured: false
@@ -137,8 +186,8 @@ const PRODUCTS = [
     name: 'BPC-157 / TB-500 Blend',
     category: 'repair',
     categoryName: 'Tissue Repair',
-    price: 89.99,
-    originalPrice: 109.99,
+    price: 130.00,
+    originalPrice: null,
     purity: 'ID + content',
     quantity: '20mg',
     lot: 'ENL-24006',
@@ -151,6 +200,18 @@ const PRODUCTS = [
       'Reconstitution': 'Bacteriostatic water',
       'Documentation': 'Available — Janoshik #151337'
     },
+    coa: {
+      status: 'available',
+      lab: 'Janoshik Analytical',
+      reportId: '#151337',
+      batch: 'CS-bb1010-0408',
+      testDate: '2026-04-20',
+      reportDate: '2026-04-23',
+      purity: 'Not applicable (blend)',
+      content: 'BPC-157 12.60 mg · TB-500 11.90 mg',
+      file: 'assets/coa/151337.pdf',
+      verifyUrl: 'https://janoshik.com'
+    },
     inStock: true,
     badge: 'Popular',
     featured: true
@@ -160,7 +221,7 @@ const PRODUCTS = [
     name: 'KLOW Blend',
     category: 'blends',
     categoryName: 'Premium Blends',
-    price: 129.99,
+    price: 150.00,
     originalPrice: 159.99,
     purity: 'ID + content',
     quantity: '80mg',
@@ -175,6 +236,18 @@ const PRODUCTS = [
       'Reconstitution': 'Bacteriostatic water',
       'Documentation': 'Available — Janoshik #122606'
     },
+    coa: {
+      status: 'available',
+      lab: 'Janoshik Analytical',
+      reportId: '#122606',
+      batch: 'CS-ko80-0309',
+      testDate: '2026-03-17',
+      reportDate: '2026-03-18',
+      purity: 'Not applicable (blend)',
+      content: 'GHK-Cu 60.90 mg · BPC-157 11.50 mg · TB-500 11.65 mg · KPV 12.22 mg',
+      file: 'assets/coa/122606.pdf',
+      verifyUrl: 'https://janoshik.com'
+    },
     inStock: true,
     badge: 'Premium',
     featured: true
@@ -184,7 +257,7 @@ const PRODUCTS = [
     name: 'NAD+',
     category: 'metabolic',
     categoryName: 'Metabolic',
-    price: 100.00,
+    price: 80.00,
     originalPrice: null,
     purity: '99.0%',
     quantity: '500mg',
@@ -197,6 +270,12 @@ const PRODUCTS = [
       'Form': 'Lyophilized powder',
       'Storage': '-20°C, desiccated',
       'Reconstitution': 'Bacteriostatic water'
+    },
+    coa: {
+      status: 'pending',
+      lab: 'Janoshik Analytical',
+      note: 'An independent report for the current NAD+ batch has not been published yet. This item is not released for order until its report is on file.',
+      verifyUrl: 'https://janoshik.com'
     },
     inStock: true,
     badge: 'New',

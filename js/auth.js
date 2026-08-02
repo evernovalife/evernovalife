@@ -124,6 +124,50 @@
         if (!res.ok) return null;
         return await res.json().catch(() => null);
       } catch (e) { return null; }
+    },
+
+    /* ---- auto-ship (repeating orders) ---- */
+
+    /* This account's plans, or null when we can't reach the server. Note the
+       difference from [] — "no plans" and "couldn't ask" render differently. */
+    async subscriptions() {
+      const token = this.getToken();
+      if (!token) return null;
+      try {
+        const res = await fetch(API_BASE + '/api/subscriptions', { headers: { Authorization: 'Bearer ' + token } });
+        if (!res.ok) return null;
+        return await res.json().catch(() => null);
+      } catch (e) { return null; }
+    },
+
+    /* Change a plan (frequency, pause/resume, skip the next shipment, items).
+       Throws with the server's message so the UI can show exactly what went
+       wrong — these actions change what a customer gets charged, so a silent
+       failure is not acceptable. */
+    async updateSubscription(id, patch) {
+      const token = this.getToken();
+      if (!token) throw new Error('Please sign in again.');
+      const res = await fetch(API_BASE + '/api/subscriptions/' + encodeURIComponent(id), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+        body: JSON.stringify(patch || {})
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) throw new Error(data.error || 'That change could not be saved.');
+      return data.subscription;
+    },
+
+    /* Cancel a plan for good. */
+    async cancelSubscription(id) {
+      const token = this.getToken();
+      if (!token) throw new Error('Please sign in again.');
+      const res = await fetch(API_BASE + '/api/subscriptions/' + encodeURIComponent(id), {
+        method: 'DELETE',
+        headers: { Authorization: 'Bearer ' + token }
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) throw new Error(data.error || 'That plan could not be cancelled.');
+      return data.subscription;
     }
   };
   window.Auth = Auth;
@@ -152,9 +196,10 @@
   function statusBadge(status) {
     const s = String(status || '').toLowerCase();
     const known = { paid: 'Paid', pending: 'Pending', cancelled: 'Cancelled',
-      processing: 'Processing', shipped: 'Shipped', delivered: 'Delivered' };
+      processing: 'Processing', shipped: 'Shipped', delivered: 'Delivered',
+      awaiting_payment: 'Awaiting payment' };   // Zelle: placed, money not in yet
     const label = known[s] || (s ? s.charAt(0).toUpperCase() + s.slice(1) : 'Processing');
-    const cls = known[s] ? s : 'processing';
+    const cls = known[s] ? s.replace(/_/g, '-') : 'processing';
     return { cls, label };
   }
   function orderItemsSummary(items) {
@@ -274,6 +319,164 @@
   }
 
   /* ============================================================
+     AUTO-SHIP CARD — the customer's own controls over repeating
+     orders. Every action here changes what they get charged, so
+     each one confirms out loud and re-reads the plan from the
+     server rather than guessing at the new state.
+     ============================================================ */
+
+  function everyPhrase(days) {
+    const n = Number(days) || 0;
+    return n === 1 ? 'every day' : `every ${n} days`;
+  }
+
+  /* "March 14, 2026" — the shipment date, spelled out so there's no ambiguity
+     about day/month order for international customers. */
+  function longDate(iso) {
+    const d = iso ? new Date(iso) : null;
+    if (!d || isNaN(d)) return '';
+    return d.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+  }
+
+  function subscriptionCard(s) {
+    const status = String(s.status || 'active').toLowerCase();
+    const itemsTotal = (s.items || []).reduce((sum, i) => sum + (Number(i.price) || 0) * (Number(i.quantity) || 0), 0);
+    const rows = (s.items || []).map(i =>
+      `<li><span>${esc(i.name)}</span><span class="qty">× ${esc(i.quantity)}</span></li>`).join('');
+
+    const headline = status === 'active'
+      ? `Next shipment ${esc(longDate(s.nextRunAt))}`
+      : (status === 'paused' ? 'Paused — nothing scheduled' : 'Cancelled');
+
+    const failed = Number(s.failCount) || 0;
+    const alert = failed > 0
+      ? `<p class="sub-alert">We couldn't take the last payment${s.lastError ? ` (${esc(s.lastError)})` : ''}.
+         ${status === 'paused'
+           ? 'The plan is paused — update your card at your next checkout, then resume it here.'
+           : 'We\'ll try again automatically.'}</p>`
+      : '';
+
+    const controls = status === 'cancelled' ? '' : `
+      <div class="sub-every">
+        <label for="every-${esc(s.id)}">Repeat every</label>
+        <input type="number" id="every-${esc(s.id)}" class="sub-days" value="${esc(s.intervalDays)}" min="7" max="180" step="1" inputmode="numeric">
+        <span>days</span>
+        <button type="button" class="btn btn-ghost btn-sm" data-action="interval" data-id="${esc(s.id)}">Save</button>
+      </div>
+      <div class="sub-actions">
+        ${status === 'active'
+          ? `<button type="button" class="btn btn-ghost" data-action="skip" data-id="${esc(s.id)}">Skip next shipment</button>
+             <button type="button" class="btn btn-ghost" data-action="pause" data-id="${esc(s.id)}">Pause</button>`
+          : `<button type="button" class="btn btn-primary" data-action="resume" data-id="${esc(s.id)}">Resume</button>`}
+        <button type="button" class="btn btn-ghost" data-action="cancel" data-id="${esc(s.id)}">Cancel plan</button>
+      </div>`;
+
+    return `<div class="sub-item is-${esc(status)}" data-sub="${esc(s.id)}">
+      <div class="sub-item-head">
+        <span class="sub-next">${headline}</span>
+        <span class="sub-status ${esc(status)}">${esc(status.charAt(0).toUpperCase() + status.slice(1))}</span>
+      </div>
+      <p class="sub-meta">${esc(everyPhrase(s.intervalDays))} · ${esc(s.paymentLabel || 'saved payment method')}${
+        s.runCount ? ` · ${s.runCount} shipment${s.runCount === 1 ? '' : 's'} sent` : ''} · ${esc(s.id)}</p>
+      <ul class="sub-items">${rows}</ul>
+      <p class="sub-meta">≈ ${esc(money(itemsTotal))} in products per shipment, plus shipping and tax at the rates in effect on the day.</p>
+      ${alert}
+      ${controls}
+    </div>`;
+  }
+
+  /* Fill the Auto-Ship card and wire its buttons (delegated, so a re-render
+     never stacks handlers). */
+  async function renderAutoship() {
+    const box = document.getElementById('autoshipList');
+    if (!box) return;
+    const data = await Auth.subscriptions();
+
+    if (!data) {
+      box.innerHTML = `<p class="text-muted">We couldn't load your auto-ship plans right now. Please refresh the page.</p>`;
+      return;
+    }
+
+    const subs = Array.isArray(data.subscriptions) ? data.subscriptions : [];
+    // Cancelled plans are history — keep them out of the way unless they're all there is.
+    const live = subs.filter(s => s.status !== 'cancelled');
+    const show = live.length ? live : subs;
+
+    if (!show.length) {
+      box.innerHTML = `<p class="text-muted">No auto-ship plans yet. Tick <strong>“Auto-ship this order”</strong> at checkout and we'll reorder the same items on the schedule you choose. <a href="products.html" style="color:var(--accent-purple)">Browse products →</a></p>`;
+      return;
+    }
+
+    box.innerHTML = `<div class="sub-list">${show.map(subscriptionCard).join('')}</div>`;
+
+    if (!box._wired) {
+      box._wired = true;
+      box.addEventListener('click', (e) => {
+        const btn = e.target.closest('button[data-action]');
+        if (btn) onAutoshipAction(btn);
+      });
+    }
+  }
+
+  async function onAutoshipAction(btn) {
+    const id = btn.dataset.id;
+    const action = btn.dataset.action;
+    const msg = document.getElementById('autoshipMsg');
+    if (!id || !action) return;
+
+    // Cancelling stops a service the customer is relying on — always ask first.
+    if (action === 'cancel' &&
+        !window.confirm('Cancel this auto-ship plan? Nothing more will ship and your card won\'t be charged again. This can\'t be undone — you\'d need to start a new plan.')) {
+      return;
+    }
+
+    const label = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '…';
+    setMsg(msg, '', '');
+
+    try {
+      let done = '';
+      if (action === 'cancel') {
+        await Auth.cancelSubscription(id);
+        done = 'Auto-ship cancelled. You won\'t be charged again.';
+      } else if (action === 'skip') {
+        const s = await Auth.updateSubscription(id, { skipNext: true });
+        done = `Skipped. Your next shipment is now ${longDate(s.nextRunAt)}.`;
+      } else if (action === 'pause') {
+        await Auth.updateSubscription(id, { status: 'paused' });
+        done = 'Paused. Nothing will ship or be charged until you resume.';
+      } else if (action === 'resume') {
+        const s = await Auth.updateSubscription(id, { status: 'active' });
+        done = `Resumed. Your next shipment is ${longDate(s.nextRunAt)}.`;
+      } else if (action === 'interval') {
+        const input = document.getElementById('every-' + id);
+        const days = input ? Number(input.value) : NaN;
+        if (!Number.isFinite(days) || days < 7 || days > 180) {
+          throw new Error('Choose between 7 and 180 days.');
+        }
+        const s = await Auth.updateSubscription(id, { intervalDays: days });
+        done = `Updated — now shipping ${everyPhrase(s.intervalDays)}.`;
+      }
+      setMsg(msg, '✅ ' + done, 'success');
+      await renderAutoship();       // re-read from the server; never assume
+    } catch (err) {
+      setMsg(msg, err.message || 'That change could not be saved.', 'error');
+      btn.disabled = false;
+      btn.textContent = label;
+    }
+  }
+
+  /* Where to land after signing in / registering. Pages that need an account
+     (checkout) send the user here with ?next=checkout.html. Only a bare
+     same-site page name is honoured — never an absolute or protocol-relative
+     URL, so this can't be used to bounce someone off-site. */
+  function nextTarget(fallback) {
+    const raw = (new URLSearchParams(location.search).get('next') || '').trim();
+    return /^[a-z0-9_-]+\.html(\?[^#]*)?(#.*)?$/i.test(raw) ? raw : fallback;
+  }
+
+  /* ============================================================
      LOGIN PAGE
      ============================================================ */
   function initLoginPage() {
@@ -294,7 +497,7 @@
       try {
         await Auth.login({ email, password });
         setMsg(msg, '✅ Signed in! Redirecting…', 'success');
-        location.href = 'account.html';
+        location.href = nextTarget('account.html');
       } catch (err) {
         setMsg(msg, err.message, 'error');
         btn.disabled = false; btn.textContent = label;
@@ -343,7 +546,7 @@
       try {
         await Auth.register({ firstName, lastName, email, password, ref: refCode || undefined });
         setMsg(msg, '🎉 Account created! Redirecting…', 'success');
-        location.href = 'account.html';
+        location.href = nextTarget('account.html');
       } catch (err) {
         setMsg(msg, err.message, 'error');
         btn.disabled = false; btn.textContent = label;
@@ -377,9 +580,10 @@
 
     // real orders + stat tiles from the server
     renderAccountOrders();
-    // loyalty points + referral cards (independent — each no-ops if offline)
+    // loyalty points + referral + auto-ship cards (independent — each no-ops if offline)
     renderAccountRewards();
     renderReferral();
+    renderAutoship();
 
     // admin accounts: reveal the Admin section of the nav (Manage Users + Products)
     if (user.isAdmin) {

@@ -11,6 +11,7 @@ Drop your labelled-vial photos here, named by **product id**, as PNG:
 | `5.png`        | MOTS-C                           |
 | `6.png`        | BPC-157 / TB-500 Blend           |
 | `7.png`        | KLOW Blend                       |
+| `8.png`        | NAD+                             |
 
 These photos are used across the whole site — product cards, the product
 detail page, cart rows and the mini-cart.

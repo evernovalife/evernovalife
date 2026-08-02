@@ -29,6 +29,30 @@ function ensureDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
+/* Fields added to the static catalog AFTER a server has already written its
+   products.json. That file is only ever seeded once, so without this a new
+   field (e.g. the `coa` block added in the 2026-08 compliance work) would
+   never reach an existing deployment and every product page would claim its
+   documentation was pending. Backfill is additive only: a value already in
+   the store — including one an admin edited — always wins. */
+const BACKFILL_FIELDS = ['coa'];
+
+function backfillFromSeed(list) {
+  const seedById = new Map(SEED.map(s => [Number(s.id), s]));
+  let changed = false;
+  for (const item of list) {
+    const seed = seedById.get(Number(item.id));
+    if (!seed) continue;
+    for (const field of BACKFILL_FIELDS) {
+      if (item[field] === undefined && seed[field] !== undefined) {
+        item[field] = seed[field];
+        changed = true;
+      }
+    }
+  }
+  return changed;
+}
+
 /* Read the catalog. First run (no file yet) seeds from the static
    catalog and writes it, so the built-in products survive as editable rows. */
 function load() {
@@ -39,7 +63,12 @@ function load() {
   }
   try {
     const arr = JSON.parse(fs.readFileSync(PRODUCTS_FILE, 'utf8'));
-    return Array.isArray(arr) ? arr : SEED.map(p => ({ ...p }));
+    if (!Array.isArray(arr)) return SEED.map(p => ({ ...p }));
+    // Persist the backfill so it happens once, not on every read.
+    if (backfillFromSeed(arr)) {
+      try { save(arr); } catch (e) { console.error('[products] backfill not saved:', e.message); }
+    }
+    return arr;
   } catch (e) {
     console.error('[products] store unreadable, using seed:', e.message);
     return SEED.map(p => ({ ...p }));
@@ -87,6 +116,20 @@ function sanitize(data, existing) {
     badge: (data.badge == null || data.badge === '') ? (existing.badge || null) : str(data.badge, 40),
     featured: data.featured === undefined ? !!existing.featured : !!data.featured
   };
+
+  /* Certificate of analysis. Free-form on purpose (the fields differ between a
+     single peptide and a blend), but carried through every edit — losing it
+     would silently drop the COA from the product page. */
+  const rawCoa = (data.coa && typeof data.coa === 'object') ? data.coa
+               : (existing.coa && typeof existing.coa === 'object' ? existing.coa : null);
+  if (rawCoa) {
+    const coa = {};
+    Object.keys(rawCoa).slice(0, 24).forEach(k => {
+      const key = str(k, 60).trim();
+      if (key) coa[key] = str(rawCoa[k], 500);
+    });
+    rec.coa = coa;
+  }
 
   // image: use a newly-supplied one, else keep the existing image (if any)
   let image = existing.image;

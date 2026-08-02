@@ -20,7 +20,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/styles.css?v=14">
+  <link rel="stylesheet" href="css/styles.css?v=36">
+  <!-- 21+ age gate: runs before anything paints -->
+  <script src="js/age-gate.js?v=33"></script>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Cpath d='M20.00 1.00 L21.91 15.38 L27.78 12.22 L24.62 18.09 L39.00 20.00 L24.62 21.91 L27.78 27.78 L21.91 24.62 L20.00 39.00 L18.09 24.62 L12.22 27.78 L15.38 21.91 L1.00 20.00 L15.38 18.09 L12.22 12.22 L18.09 15.38 Z' fill='%23a855f7'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -34,12 +36,16 @@
       </a>
       <nav class="main-nav" id="mainNav">
         <a href="index.html">Home</a>
-        <a href="products.html">Catalog</a>
-        <a href="quality.html">Quality</a>
+        <a href="products.html">Products</a>
+        <a href="quality.html">Lab Reports (COA)</a>
         <a href="research-accounts.html">Research</a>
         <a href="about.html">About</a>
         <a href="contact.html">Contact</a>
       </nav>
+      <form class="header-search" role="search" action="products.html">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        <input type="search" name="search" placeholder="Search products..." aria-label="Search products">
+      </form>
       <div class="header-actions">
         <button class="icon-btn" id="searchBtn" aria-label="Search">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
@@ -78,6 +84,18 @@
     <div class="container">
       <div class="faq-list">
         <div class="faq-item">
+          <button class="faq-q">Do I have to be 21 to use this site? <span class="chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span></button>
+          <div class="faq-a"><p>Yes. You must confirm you are at least 21 years old before entering the site, and we do not sell to anyone under 21. All materials are supplied strictly for in-vitro research and laboratory use only.</p></div>
+        </div>
+        <div class="faq-item">
+          <button class="faq-q">Do I need an account to order? <span class="chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span></button>
+          <div class="faq-a"><p>Yes. An account is required to check out — every order must be tied to a verified account holder. You can <a href="register.html">create one in a minute</a>; your cart is saved to your account, so nothing is lost. Ordering also requires an approved <a href="research-accounts.html">research account</a>.</p></div>
+        </div>
+        <div class="faq-item">
+          <button class="faq-q">Do you ship internationally? <span class="chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span></button>
+          <div class="faq-a"><p>No. We ship within the United States only, to U.S. delivery addresses. International addresses cannot be selected at checkout. See <a href="shipping.html">Shipping</a> for full details.</p></div>
+        </div>
+        <div class="faq-item">
           <button class="faq-q">Are these products for human use? <span class="chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span></button>
           <div class="faq-a"><p>No. All Ever Nova Life products are sold strictly for in-vitro research and laboratory use only. They are not drugs, supplements or food, and they are not intended for human or animal consumption.</p></div>
         </div>
@@ -87,7 +105,7 @@
         </div>
         <div class="faq-item">
           <button class="faq-q">Do you provide a Certificate of Analysis? <span class="chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span></button>
-          <div class="faq-a"><p>For each released lot we publish the original independent laboratory report in our <a href="quality.html#coa-library">COA Library</a>, where it can be verified by its task number. Documentation status is shown per lot (Available, Pending, or Not Provided). Where a report is on file, single-peptide lots include a purity figure and blend lots report identity and measured content per component.</p></div>
+          <div class="faq-a"><p>Yes — every product page has a <strong>Certificate of Analysis</strong> section showing the laboratory, report number, batch, test dates, purity and measured content for the lot supplied, with a link to the full report. The same reports are collected in our <a href="quality.html#coa-library">COA Library</a>, where each can be verified by its task number. Documentation status is shown per lot (Available, Pending, or Not Provided). Where a report is on file, single-peptide lots include a purity figure and blend lots report identity and measured content per component.</p></div>
         </div>
         <div class="faq-item">
           <button class="faq-q">How should research materials be stored? <span class="chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span></button>
@@ -107,7 +125,8 @@
         </div>
         <div class="faq-item">
           <button class="faq-q">Which payment methods do you accept? <span class="chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span></button>
-          <div class="faq-a"><p>Checkout is handled through a secure, encrypted, PCI-compliant connection. You will receive an order confirmation by email as soon as your payment is processed, and a second notification with tracking once your order ships.</p></div>
+          <div class="faq-a"><p>Debit and credit cards, PayPal and Venmo (processed by Braintree), Bitcoin and Lightning, and Zelle bank transfer for US accounts. Checkout is handled through a secure, encrypted, PCI-compliant connection. You will receive an order confirmation by email as soon as your payment is processed, and a second notification with tracking once your order ships.</p>
+          <p>Zelle works a little differently: you send the transfer yourself from your own bank, using the order reference we give you as the memo. We confirm it by hand, so allow a little time — we email you the moment it lands, and ship after that.</p></div>
         </div>
       </div>
     </div>
@@ -168,9 +187,9 @@
     </div>
   </footer>
 
-  <script src="js/products-data.js?v=11"></script>
-  <script src="js/config.js?v=11"></script>
-  <script src="js/cart.js?v=11"></script>
-  <script src="js/main.js?v=11"></script>
+  <script src="js/products-data.js?v=33"></script>
+  <script src="js/config.js?v=33"></script>
+  <script src="js/cart.js?v=33"></script>
+  <script src="js/main.js?v=33"></script>
 </body>
 </html>

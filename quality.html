@@ -3,24 +3,26 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Quality &amp; Documentation — Ever Nova Life</title>
+  <title>Lab Reports (COA) — Ever Nova Life</title>
   <meta name="description" content="Ever Nova Life quality and documentation — testing approach, lot-release process, and a searchable COA library for qualified in-vitro research organizations.">
   <link rel="canonical" href="https://evernovalife.com/quality.html">
   <meta name="theme-color" content="#1e1b4b">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Ever Nova Life">
-  <meta property="og:title" content="Quality &amp; Documentation — Ever Nova Life">
+  <meta property="og:title" content="Lab Reports (COA) — Ever Nova Life">
   <meta property="og:description" content="Testing approach, lot-release process, and lot-specific documentation for qualified in-vitro research organizations.">
   <meta property="og:url" content="https://evernovalife.com/quality.html">
   <meta property="og:image" content="https://evernovalife.com/og-image.svg">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="Quality &amp; Documentation — Ever Nova Life">
+  <meta name="twitter:title" content="Lab Reports (COA) — Ever Nova Life">
   <meta name="twitter:description" content="Testing approach, lot-release process, and lot-specific documentation for qualified in-vitro research organizations.">
   <meta name="twitter:image" content="https://evernovalife.com/og-image.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/styles.css?v=14">
+  <link rel="stylesheet" href="css/styles.css?v=36">
+  <!-- 21+ age gate: runs before anything paints -->
+  <script src="js/age-gate.js?v=33"></script>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Cpath d='M20.00 1.00 L21.91 15.38 L27.78 12.22 L24.62 18.09 L39.00 20.00 L24.62 21.91 L27.78 27.78 L21.91 24.62 L20.00 39.00 L18.09 24.62 L12.22 27.78 L15.38 21.91 L1.00 20.00 L15.38 18.09 L12.22 12.22 L18.09 15.38 Z' fill='%23a855f7'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -34,12 +36,16 @@
       </a>
       <nav class="main-nav" id="mainNav">
         <a href="index.html">Home</a>
-        <a href="products.html">Catalog</a>
-        <a href="quality.html">Quality</a>
+        <a href="products.html">Products</a>
+        <a href="quality.html">Lab Reports (COA)</a>
         <a href="research-accounts.html">Research</a>
         <a href="about.html">About</a>
         <a href="contact.html">Contact</a>
       </nav>
+      <form class="header-search" role="search" action="products.html">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        <input type="search" name="search" placeholder="Search products..." aria-label="Search products">
+      </form>
       <div class="header-actions">
         <button class="icon-btn" id="searchBtn" aria-label="Search">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
@@ -68,8 +74,8 @@
 
   <section class="page-head">
     <div class="container">
-      <div class="breadcrumb"><a href="index.html">Home</a> <span>/</span> <span>Quality &amp; Documentation</span></div>
-      <h1>Quality &amp; <span class="gradient-text">Documentation</span></h1>
+      <div class="breadcrumb"><a href="index.html">Home</a> <span>/</span> <span>Lab Reports (COA)</span></div>
+      <h1>Lab Reports <span class="gradient-text">(COA)</span></h1>
       <p>Each released lot is supported by identity and purity documentation. Below is how material is tested, how a lot is released, and where to find lot-specific records.</p>
     </div>
   </section>
@@ -167,9 +173,9 @@
           <table class="rate-table">
             <thead><tr><th>Product</th><th>Documentation</th><th>Note</th></tr></thead>
             <tbody>
+              <tr><td>Bacteriostatic Water</td><td><strong style="opacity:.7">Not applicable</strong></td><td>Laboratory reagent; identity/purity COA does not apply.</td></tr>
               <tr><td>Tesamorelin / Ipamorelin (blend)</td><td><strong style="color:#f59e0b">Pending</strong></td><td>Independent report not yet published for the current batch.</td></tr>
               <tr><td>NAD+</td><td><strong style="color:#f59e0b">Pending</strong></td><td>Independent report not yet published for the current batch.</td></tr>
-              <tr><td>Bacteriostatic Water</td><td><strong style="opacity:.7">Not applicable</strong></td><td>Laboratory reagent; identity/purity COA does not apply.</td></tr>
             </tbody>
           </table>
         </div>
@@ -247,9 +253,9 @@
     </div>
   </footer>
 
-  <script src="js/products-data.js?v=11"></script>
-  <script src="js/config.js?v=11"></script>
-  <script src="js/cart.js?v=11"></script>
-  <script src="js/main.js?v=11"></script>
+  <script src="js/products-data.js?v=33"></script>
+  <script src="js/config.js?v=33"></script>
+  <script src="js/cart.js?v=33"></script>
+  <script src="js/main.js?v=33"></script>
 </body>
 </html>

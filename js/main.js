@@ -283,7 +283,7 @@ function createVialPhoto(product) {
   return `
   <div class="vial-photo">
     <img class="vial-photo-img" src="${realSrc}" alt="${escapeHtml(name)} research vial" loading="lazy"
-         onerror="this.onerror=null;this.src='assets/vial.png?v=3';var l=this.parentNode.querySelector('.vial-photo-label');if(l)l.style.display='block'">
+         onerror="this.onerror=null;this.src='assets/vial.png?v=3';this.parentNode.classList.add('vial-fallback');var l=this.parentNode.querySelector('.vial-photo-label');if(l)l.style.display='block'">
     <svg class="vial-photo-label" viewBox="0 0 200 380" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" preserveAspectRatio="none" style="display:none">
       <defs>
         <linearGradient id="brand_${uid}" x1="0%" y1="0%" x2="100%" y2="0%">
@@ -381,6 +381,10 @@ function createProductCard(product) {
         <button class="btn btn-primary btn-sm" onclick="addToCartById(${product.id}, 1, this)">Add to Cart</button>
         <a class="btn btn-ghost btn-sm" href="product.html?id=${product.id}">View</a>
       </div>
+      <a class="product-coa-link" href="product.html?id=${product.id}#coa">${iconCheck()} Certificate of Analysis${
+        product.coa && product.coa.status === 'available' ? ''
+          : product.coa && product.coa.status === 'not-applicable' ? ' (not applicable)'
+          : ' (pending)'}</a>
     </div>
   </article>`;
 }
@@ -651,6 +655,322 @@ function rerenderProducts() {
 /* ============================================================
    PRODUCT DETAIL PAGE
    ============================================================ */
+/* ============================================================
+   CERTIFICATE OF ANALYSIS — shown on every product page
+   Every listed material carries its lot's third-party report here, so a
+   buyer never has to go looking for it. What's printed is exactly what the
+   report says (see products-data.js). Where a report has not been published
+   for the current batch we say so plainly rather than implying one exists.
+   ============================================================ */
+function coaRow(label, value) {
+  if (!value) return '';
+  return `<tr><td>${escapeHtml(label)}</td><td>${escapeHtml(value)}</td></tr>`;
+}
+
+function coaPanel(product) {
+  const coa = product && product.coa;
+
+  /* Some items will never have a COA — bacteriostatic water is a reagent, not
+     a peptide. Calling that "pending" would imply a report is coming, so it
+     gets its own state rather than being lumped in with the unreleased lots. */
+  if (coa && coa.status === 'not-applicable') {
+    return `
+      <section class="coa-panel glass" id="coa">
+        <div class="coa-head">
+          <h2>Certificate of Analysis</h2>
+          <span class="coa-status coa-status-na">Not applicable</span>
+        </div>
+        <p class="coa-note">${escapeHtml(coa.note ||
+          'This item is a laboratory reagent; peptide identity and purity analysis does not apply to it.')}</p>
+        <p class="coa-note">Every peptide lot we list is documented — browse the published reports in the
+           <a href="quality.html#coa-library">COA Library</a>.</p>
+      </section>`;
+  }
+
+  if (!coa || coa.status !== 'available') {
+    const note = (coa && coa.note) ||
+      'An independent laboratory report for the current batch of this item has not been published yet.';
+    return `
+      <section class="coa-panel glass" id="coa">
+        <div class="coa-head">
+          <h2>Certificate of Analysis</h2>
+          <span class="coa-status coa-status-pending">Pending</span>
+        </div>
+        <p class="coa-note">${escapeHtml(note)}</p>
+        <p class="coa-note">Need it before you order? <a href="contact.html?subject=coa">Request the report</a>
+           and we'll send it as soon as it is released, or browse every published report in the
+           <a href="quality.html#coa-library">COA Library</a>.</p>
+      </section>`;
+  }
+
+  return `
+    <section class="coa-panel glass" id="coa">
+      <div class="coa-head">
+        <h2>Certificate of Analysis</h2>
+        <span class="coa-status coa-status-available">Available</span>
+      </div>
+      <p class="coa-note">Third-party analysis of the exact batch supplied for this listing, issued by
+         ${escapeHtml(coa.lab || 'an independent laboratory')}.</p>
+      <table class="specs-table coa-table"><tbody>
+        ${coaRow('Laboratory', coa.lab)}
+        ${coaRow('Report ID', coa.reportId)}
+        ${coaRow('Batch analyzed', coa.batch)}
+        ${coaRow('Sample received', coa.testDate)}
+        ${coaRow('Report issued', coa.reportDate)}
+        ${coaRow('Purity (HPLC)', coa.purity)}
+        ${coaRow('Measured content', coa.content)}
+      </tbody></table>
+      ${coaDocument(coa)}
+      <div class="coa-actions">
+        ${coa.file ? `<a class="btn btn-primary btn-sm coa-file-link" href="${escapeHtml(coa.file)}" target="_blank" rel="noopener" hidden>Open full report</a>` : ''}
+        ${coaVerifyLink(coa)}
+        <a class="btn btn-ghost btn-sm" href="quality.html#coa-library">All published reports</a>
+      </div>
+    </section>`;
+}
+
+/* ---- the document itself ----
+   "Viewable" means you can look at the certificate, not read a description of
+   it. The figure starts empty and hidden; revealCoaDocument() finds whichever
+   file is actually on the server and fills it in — an image renders inline
+   (click for full size), a PDF gets an embedded viewer with a link fallback. */
+function coaDocument(coa) {
+  if (!coa.file) return '';
+  /* On the detail page the document itself is shown in the gallery above, so
+     the panel keeps only the data table and actions — no second copy. */
+  return `<figure class="coa-doc" hidden data-gallery-owned></figure>`;
+}
+
+/* Whatever format the lab sent is fine. We try the configured path first, then
+   the usual alternatives on the same base name, so dropping in a PNG works
+   even though the catalog says .pdf. */
+const COA_FILE_EXTS = ['.pdf', '.png', '.jpg', '.jpeg', '.webp'];
+
+function coaFileCandidates(file) {
+  const base = String(file).replace(/\.[a-z0-9]+$/i, '');
+  const list = [file].concat(COA_FILE_EXTS.map(ext => base + ext));
+  return list.filter((v, i) => list.indexOf(v) === i);   // dedupe, keep order
+}
+
+/* Does this file actually exist?
+   Images are probed by LOADING them, not with fetch(HEAD): fetch throws on
+   file:// (so the report vanished when the site was opened straight off disk)
+   and some static hosts don't answer HEAD. An <img> probe works everywhere and
+   warms the cache for the render that follows. PDFs can't load in an <img>, so
+   those still use HEAD — and simply stay hidden if it's blocked. */
+function coaFileExists(url) {
+  if (/\.pdf($|\?)/i.test(url)) {
+    return fetch(url, { method: 'HEAD' }).then(r => r.ok).catch(() => false);
+  }
+  return new Promise(resolve => {
+    const probe = new Image();
+    probe.onload = () => resolve(probe.naturalWidth > 0);
+    probe.onerror = () => resolve(false);
+    probe.src = url;
+  });
+}
+
+function coaDocumentMarkup(url, coa) {
+  const src = escapeHtml(url);
+  const label = escapeHtml(
+    `Certificate of analysis, report ${coa.reportId || ''}, batch ${coa.batch || ''}`.trim());
+
+  const inner = /\.pdf($|\?)/i.test(url)
+    ? `<object class="coa-doc-pdf" data="${src}" type="application/pdf" aria-label="${label}">
+         <p class="coa-note">Your browser can't display the PDF inline —
+            <a href="${src}" target="_blank" rel="noopener">open the report in a new tab</a>.</p>
+       </object>`
+    : `<a href="${src}" target="_blank" rel="noopener" class="coa-doc-zoom">
+         <img class="coa-doc-img" src="${src}" alt="${label}" loading="lazy">
+         <span class="coa-doc-hint">Click to view full size</span>
+       </a>`;
+
+  return `${inner}<figcaption class="coa-doc-cap">Original report as issued by
+    ${escapeHtml(coa.lab || 'the laboratory')}.</figcaption>`;
+}
+
+/* Prefer a deep link straight to the archived report
+   (verify.janoshik.com/tests/<task>-<compound>_<size>_<KEY> — the key is
+   printed on the report itself). Without one, send people to the verification
+   form and tell them the task number to type in, rather than to a homepage
+   that does nothing. */
+function coaVerifyLink(coa) {
+  const deep = coa.verifyUrl && /\/tests\//.test(coa.verifyUrl);
+  if (deep) {
+    return `<a class="btn btn-ghost btn-sm" href="${escapeHtml(coa.verifyUrl)}" target="_blank" rel="noopener">Verify ${escapeHtml(coa.reportId || '')} at ${escapeHtml(hostOf(coa.verifyUrl))}</a>`;
+  }
+  if (!coa.reportId) return '';
+  return `<a class="btn btn-ghost btn-sm" href="https://janoshik.com/verify" target="_blank" rel="noopener">Verify ${escapeHtml(coa.reportId)} at janoshik.com</a>`;
+}
+
+function hostOf(url) {
+  try { return new URL(url).hostname.replace(/^www\./, ''); } catch (e) { return url; }
+}
+
+/* Only show the report once it's actually on the server. A dead link or a
+   broken image is worse than none, and this way the document appears by
+   itself the moment the file is uploaded — no code change needed.
+   Candidates are tried in order and we stop at the first one that exists. */
+async function revealCoaDocument(root, coa) {
+  const scope = root || document;
+  const link = scope.querySelector('.coa-file-link');
+  const fig = scope.querySelector('.coa-doc');
+  if (!link || !coa || !coa.file) return;
+
+  for (const url of coaFileCandidates(coa.file)) {
+    const ok = await coaFileExists(url);
+    if (!ok) continue;
+    link.href = url;
+    link.hidden = false;
+    // only render the inline figure where there is no gallery to own the document
+    if (fig && !scope.querySelector('.detail-view-coa')) {
+      fig.innerHTML = coaDocumentMarkup(url, coa);
+      fig.hidden = false;
+    }
+
+    /* Gallery (product detail page): fill the COA view + its thumbnail and
+       let them out of hiding. A PDF can't be shown in an <img>, so there the
+       thumb opens the file directly rather than switching the view. */
+    const view = scope.querySelector('.detail-view-coa');
+    const thumb = scope.querySelector('.detail-thumb-coa');
+    if (view && thumb) {
+      const isPdf = /\.pdf($|\?)/i.test(url);
+      thumb.hidden = false;
+      if (isPdf) {
+        thumb.dataset.view = '';
+        thumb.addEventListener('click', () => window.open(url, '_blank', 'noopener'));
+        thumb.querySelector('img').replaceWith(Object.assign(document.createElement('span'), { textContent: 'PDF' }));
+      } else {
+        view.querySelector('.detail-coa-img').src = url;
+        thumb.querySelector('img').src = url;
+      }
+    }
+    return;
+  }
+}
+
+/* Thumbnail switching for the detail gallery. Delegated, so it works no matter
+   when the COA thumb is revealed. */
+function initDetailGallery(root) {
+  const thumbs = root.querySelector('.detail-thumbs');
+  if (thumbs) {
+    thumbs.addEventListener('click', (e) => {
+      const btn = e.target.closest('.detail-thumb');
+      if (!btn || !btn.dataset.view) return;
+      root.querySelectorAll('.detail-thumb').forEach(t => t.classList.toggle('is-active', t === btn));
+      root.querySelectorAll('.detail-view').forEach(v =>
+        v.classList.toggle('is-active', v.classList.contains('detail-view-' + btn.dataset.view)));
+    });
+  }
+  const coaView = root.querySelector('.detail-view-coa');
+  if (coaView) {
+    coaView.addEventListener('click', () => {
+      const img = coaView.querySelector('.detail-coa-img');
+      if (img && img.src) openCoaLightbox(img.src, img.alt);
+    });
+  }
+}
+
+/* Set a <meta> by attribute+value, creating it if the page doesn't carry one. */
+function setMetaContent(attr, key, value) {
+  if (!value) return;
+  let el = document.head.querySelector(`meta[${attr}="${key}"]`);
+  if (!el) {
+    el = document.createElement('meta');
+    el.setAttribute(attr, key);
+    document.head.appendChild(el);
+  }
+  el.setAttribute('content', value);
+}
+
+/* ---- previous / next product ----
+   Browsing the catalog shouldn't mean bouncing back to the grid between every
+   item. Arrows sit at the edges of the viewport and wrap around the catalog,
+   so there is never a dead end. Reads window.PRODUCTS (mutated in place by
+   loadProducts) so the order matches whatever the server actually serves. */
+function renderProductNav(root, product) {
+  const list = Array.isArray(window.PRODUCTS) ? window.PRODUCTS : [];
+  if (list.length < 2) return;
+  const i = list.findIndex(p => Number(p.id) === Number(product.id));
+  if (i === -1) return;
+
+  const prev = list[(i - 1 + list.length) % list.length];
+  const next = list[(i + 1) % list.length];
+  const chevron = (d) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+      stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`;
+  const arrow = (p, dir, label) => `
+    <a class="pdt-nav pdt-nav-${dir}" href="product.html?id=${p.id}"
+       aria-label="${label}: ${escapeHtml(p.name)}" title="${escapeHtml(p.name)}">
+      ${chevron(dir === 'prev' ? 'm15 18-6-6 6-6' : 'm9 18 6-6-6-6')}
+      <span class="pdt-nav-name">${escapeHtml(p.name)}</span>
+    </a>`;
+
+  root.insertAdjacentHTML('beforeend',
+    arrow(prev, 'prev', 'Previous product') + arrow(next, 'next', 'Next product'));
+
+  // ← / → also navigate, but never while typing or with a modifier held
+  if (!renderProductNav._keys) {
+    renderProductNav._keys = true;
+    document.addEventListener('keydown', (e) => {
+      if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      const t = e.target;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      if (document.querySelector('.coa-lightbox')) return;   // lightbox is open
+      const el = document.querySelector(e.key === 'ArrowLeft' ? '.pdt-nav-prev' : '.pdt-nav-next');
+      if (el) location.href = el.getAttribute('href');
+    });
+  }
+}
+
+/* ---- COA lightbox ----
+   A report is only useful if you can read the small print, so the overlay
+   opens fit-to-screen and a second click switches to 1:1 in a scrollable
+   frame — centred on wherever you clicked. Esc or the backdrop closes it. */
+function openCoaLightbox(src, alt) {
+  const box = document.createElement('div');
+  box.className = 'coa-lightbox';
+  box.setAttribute('role', 'dialog');
+  box.setAttribute('aria-modal', 'true');
+  box.setAttribute('aria-label', alt || 'Certificate of analysis');
+  box.innerHTML = `
+    <button type="button" class="coa-lightbox-close" aria-label="Close">&times;</button>
+    <div class="coa-lightbox-scroll">
+      <img class="coa-lightbox-img" src="${escapeHtml(src)}" alt="${escapeHtml(alt || '')}">
+    </div>
+    <p class="coa-lightbox-hint">Click the report to zoom · Esc to close</p>`;
+
+  const scroll = box.querySelector('.coa-lightbox-scroll');
+  const img = box.querySelector('.coa-lightbox-img');
+
+  const close = () => {
+    document.removeEventListener('keydown', onKey);
+    document.body.classList.remove('coa-lightbox-open');
+    box.remove();
+  };
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+
+  // zoom toggles between fit-to-screen and natural size, keeping the clicked
+  // point under the cursor so you land on the row you were aiming at
+  img.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const zoomed = box.classList.toggle('is-zoomed');
+    if (!zoomed) return;
+    const r = img.getBoundingClientRect();
+    const fx = (e.clientX - r.left) / r.width;
+    const fy = (e.clientY - r.top) / r.height;
+    scroll.scrollLeft = fx * scroll.scrollWidth - scroll.clientWidth / 2;
+    scroll.scrollTop  = fy * scroll.scrollHeight - scroll.clientHeight / 2;
+  });
+
+  box.addEventListener('click', close);                       // backdrop
+  box.querySelector('.coa-lightbox-close').addEventListener('click', close);
+  document.addEventListener('keydown', onKey);
+  document.body.classList.add('coa-lightbox-open');
+  document.body.appendChild(box);
+  box.querySelector('.coa-lightbox-close').focus();
+}
+
 function initProductDetailPage() {
   const root = document.getElementById('productDetail');
   if (!root) return;
@@ -661,6 +981,23 @@ function initProductDetailPage() {
     return;
   }
   document.title = `${product.name} — Ever Nova Life`;
+
+  /* The page ships with generic placeholders ("Product", "Detail") because it
+     is one static file serving every SKU. Name the actual product here, so the
+     breadcrumb, the shared-link preview and the canonical URL all agree with
+     the BreadcrumbList JSON-LD below. */
+  const crumb = document.getElementById('detailCrumb');
+  if (crumb) crumb.textContent = product.name;
+
+  const pageUrl = `https://evernovalife.com/product.html?id=${product.id}`;
+  setMetaContent('property', 'og:title', `${product.name} — Ever Nova Life`);
+  setMetaContent('name', 'twitter:title', `${product.name} — Ever Nova Life`);
+  setMetaContent('property', 'og:description', product.description);
+  setMetaContent('name', 'twitter:description', product.description);
+  setMetaContent('name', 'description', product.description);
+  setMetaContent('property', 'og:url', pageUrl);
+  const canonical = document.querySelector('link[rel="canonical"]');
+  if (canonical) canonical.href = pageUrl;
 
   // structured data for rich search results
   injectJSONLD({
@@ -689,8 +1026,30 @@ function initProductDetailPage() {
     ? `<span class="detail-price-old">${formatPrice(product.originalPrice)}</span>` : '';
   const badge = product.badge ? `<span class="product-badge ${productBadgeClass(product.badge)}" style="position:static;display:inline-block">${escapeHtml(product.badge)}</span>` : '';
 
+  /* Gallery: the vial and its certificate are two views of the same panel,
+     switched by the thumbnails underneath — so the report is visible right
+     beside the product instead of below the fold. The COA view and its thumb
+     stay hidden until revealCoaDocument() confirms the file is on the server. */
+  const vialSrc = product.image || `assets/vials/${product.id}.png`;
   root.innerHTML = `
-    <div class="product-detail-media glass">${createVialPhoto(product)}</div>
+    <div class="product-detail-side">
+      <div class="product-detail-media glass">
+        <div class="detail-view detail-view-vial is-active">${createVialPhoto(product)}</div>
+        <button type="button" class="detail-view detail-view-coa" hidden>
+          <img class="detail-coa-img" alt="Certificate of analysis for ${escapeHtml(product.name)}">
+          <span class="coa-doc-hint">Click to zoom</span>
+        </button>
+      </div>
+      <div class="detail-thumbs">
+        <button type="button" class="detail-thumb is-active" data-view="vial" aria-label="View the vial">
+          <img src="${vialSrc}" alt="" onerror="this.src='assets/vial.png?v=3'">
+        </button>
+        <button type="button" class="detail-thumb detail-thumb-coa" data-view="coa" hidden aria-label="View the certificate of analysis">
+          <img alt="">
+        </button>
+      </div>
+      ${coaPanel(product)}
+    </div>
     <div class="product-detail-info">
       <span class="product-cat">${escapeHtml(product.categoryName)}</span> ${badge}
       <h1>${escapeHtml(product.name)}</h1>
@@ -715,12 +1074,16 @@ function initProductDetailPage() {
       </div>
       <table class="specs-table"><tbody>${specsRows}</tbody></table>
       <div class="trust-badges-inline">
-        <span>${iconCheck()} <a href="quality.html#coa-library">Lot documentation</a></span>
+        <span>${iconCheck()} <a href="#coa">Certificate of Analysis</a></span>
         <span>${iconShield()} Third-party tested</span>
         <span>${iconTruck()} Tracked U.S. dispatch</span>
         <span>${iconBox()} In-vitro research use only</span>
       </div>
     </div>`;
+
+  initDetailGallery(root);
+  renderProductNav(root, product);
+  revealCoaDocument(root, product.coa);   // show the report only if the file is there
 
   // quantity controls
   const qtyInput = document.getElementById('qtyInput');
@@ -847,8 +1210,22 @@ function renderOrderSummary(el, withCheckoutBtn) {
     <div class="summary-row total"><span>Total</span><span>${formatPrice(cart.getTotal())}</span></div>
     ${remaining > 0 ? `<p class="summary-note">Add ${formatPrice(remaining)} more for FREE shipping 🚚</p>` : `<p class="summary-note">🎉 You've unlocked free shipping!</p>`}
     <div class="promo-row"><input type="text" placeholder="Promo code"><button class="btn btn-ghost btn-sm">Apply</button></div>
-    ${withCheckoutBtn ? `<a class="btn btn-primary btn-block" href="checkout.html">Proceed to Checkout</a>` : ''}
+    ${withCheckoutBtn ? `<a class="btn btn-primary btn-block" href="${checkoutHref()}">Proceed to Checkout</a>` : ''}
+    ${withCheckoutBtn && !isSignedIn()
+      ? `<p class="summary-note">An account is required to check out — you'll be asked to sign in or register next.</p>` : ''}
     <p class="summary-note">🔒 Secure checkout · Research use only</p>`;
+}
+
+/* ---- account state, read straight from storage (auth.js isn't loaded on
+   every page, but the token it writes is always there). ---- */
+function isSignedIn() {
+  try { return !!(localStorage.getItem('enl_token') || ''); } catch (e) { return false; }
+}
+
+/* Checkout requires an account, so send signed-out buyers to sign in first
+   and bring them straight back. */
+function checkoutHref() {
+  return isSignedIn() ? 'checkout.html' : 'login.html?next=checkout.html';
 }
 
 /* ============================================================
@@ -955,12 +1332,17 @@ function collectCheckout(form) {
   return {
     email: v('email'),
     name: (v('firstName') + ' ' + v('lastName')).trim(),
+    // Required research qualification — recorded with the order.
+    institution: v('institution'),
+    researchField: v('researchField'),
     address: v('address'),
     city: v('city'),
     state: v('state'),
     postalCode: v('postalCode'),
-    // only forward a 2-letter code; "OTHER"/blank → let PayPal collect it
-    countryCode: /^[A-Z]{2}$/.test(cc) ? cc : ''
+    // We ship to the U.S. only, so this is always 'US'. The field is still read
+    // (rather than hardcoded blindly) so the form stays the single source of
+    // truth — and the server re-checks it either way.
+    countryCode: /^[A-Z]{2}$/.test(cc) ? cc : 'US'
   };
 }
 
@@ -1053,6 +1435,9 @@ function renderCheckoutSummary(el) {
 
   const chk = document.getElementById('redeemPoints');
   if (chk) chk.addEventListener('change', () => onRedeemToggle(chk.checked));
+
+  // The auto-ship terms quote the order total, so keep them in step with it.
+  updateAutoshipTerms();
 }
 
 /* Toggle points redemption on/off, then re-price everything: summary, the
@@ -1070,17 +1455,120 @@ function onRedeemToggle(checked) {
   }
   const form = document.getElementById('checkoutForm');
   renderCheckoutSummary(document.getElementById('checkoutSummary'));
-  updateCryptoForRedeem();
+  updateAltPayVisibility();
   refreshPayment(form);
 }
 
-/* Crypto can't apply a points discount, so hide that option while points are
-   applied. Also respects the /api/health check (window._cryptoAvailable). */
-function updateCryptoForRedeem() {
-  const sec = document.getElementById('cryptoPaySection');
-  if (!sec) return;
-  const active = (enlRedeem().points || 0) > 0;
-  sec.style.display = (window._cryptoAvailable !== false && !active) ? '' : 'none';
+/* Show or hide the non-card payment options. Neither crypto nor Zelle can apply
+   a points discount (there's no charge of ours to reduce), and neither can be
+   saved for a repeating charge — so both step aside while either is active. On
+   top of that each one respects what the server said it has configured
+   (/api/health → window._cryptoAvailable / window._zelleAvailable). When
+   nothing is left, the whole block including the "or" divider goes away. */
+function updateAltPayVisibility() {
+  const wrap = document.getElementById('altPaySection');
+  const crypto = document.getElementById('cryptoPaySection');
+  const zelle = document.getElementById('zellePaySection');
+  const blocked = (enlRedeem().points || 0) > 0 || autoshipSelection().enabled;
+
+  const showCrypto = window._cryptoAvailable !== false && !blocked;
+  const showZelle = window._zelleAvailable !== false && !blocked;
+  if (crypto) crypto.style.display = showCrypto ? '' : 'none';
+  if (zelle) zelle.style.display = showZelle ? '' : 'none';
+  if (wrap) wrap.style.display = (showCrypto || showZelle) ? '' : 'none';
+}
+
+/* ============================================================
+   AUTO-SHIP — opt in at checkout
+   Ticking the box turns this order into a standing one: the same
+   items, charged to the card being used now, every N days. The
+   server does the actual work (vaulting the card and scheduling);
+   all this does is collect the choice and state the terms plainly
+   before the buyer commits to a repeating charge.
+   ============================================================ */
+const AUTOSHIP_MIN_DAYS = 7;
+const AUTOSHIP_MAX_DAYS = 180;
+
+/* What the buyer has chosen, clamped. The server clamps again — this is only
+   so the terms text on screen matches what will actually happen. */
+function autoshipSelection() {
+  const box = document.getElementById('autoshipCheck');
+  const days = document.getElementById('autoshipDays');
+  if (!box || !box.checked) return { enabled: false, intervalDays: 30 };
+  const n = Math.round(Number(days && days.value));
+  const intervalDays = Number.isFinite(n)
+    ? Math.min(AUTOSHIP_MAX_DAYS, Math.max(AUTOSHIP_MIN_DAYS, n))
+    : 30;
+  return { enabled: true, intervalDays };
+}
+
+/* Spell out the recurring charge: how much, how often, starting when, and how
+   to stop it. Shown before payment, not after. */
+function updateAutoshipTerms() {
+  const el = document.getElementById('autoshipTerms');
+  if (!el) return;
+  const sel = autoshipSelection();
+  const total = formatPrice(checkoutTotals().total);
+  const every = sel.intervalDays === 1 ? 'day' : `${sel.intervalDays} days`;
+  const first = new Date(Date.now() + sel.intervalDays * 86400000)
+    .toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+  el.innerHTML =
+    `By ticking this box you authorise Ever Nova Life to charge your payment method ` +
+    `<strong>about ${escapeHtml(total)} every ${escapeHtml(every)}</strong> for these items, ` +
+    `starting <strong>${escapeHtml(first)}</strong>, until you cancel. Prices are charged at the ` +
+    `rate in effect on each shipment date. We'll email you 3 days before every charge, and you can ` +
+    `change the frequency, skip a shipment, pause or cancel any time from ` +
+    `<a href="account.html#autoship">your account</a> — no minimum, no cancellation fee.`;
+
+  document.querySelectorAll('.autoship-preset').forEach(btn => {
+    btn.classList.toggle('active', Number(btn.dataset.days) === sel.intervalDays);
+  });
+}
+
+/* Show the panel to signed-in buyers, and the "sign in first" note to guests. */
+function initAutoshipCheckout() {
+  const box = document.getElementById('autoshipBox');
+  if (!box) return;
+  box.style.display = '';
+
+  let signedIn = false;
+  try { signedIn = !!(localStorage.getItem('enl_token') || ''); } catch (e) {}
+
+  const toggle = document.getElementById('autoshipCheck');
+  const detail = document.getElementById('autoshipDetail');
+  const guest = document.getElementById('autoshipGuestHint');
+  const days = document.getElementById('autoshipDays');
+
+  if (!signedIn) {
+    // A repeating charge needs an account to manage and cancel it.
+    if (toggle) toggle.closest('.autoship-toggle').style.display = 'none';
+    if (guest) guest.style.display = '';
+    return;
+  }
+
+  const sync = () => {
+    if (detail) detail.style.display = toggle && toggle.checked ? '' : 'none';
+    updateAutoshipTerms();
+    updateAltPayVisibility();
+  };
+
+  if (toggle) toggle.addEventListener('change', sync);
+  if (days) {
+    days.addEventListener('input', updateAutoshipTerms);
+    // Clamp only on blur, so typing "9" on the way to "90" isn't fought.
+    days.addEventListener('blur', () => {
+      days.value = autoshipSelection().intervalDays;
+      updateAutoshipTerms();
+    });
+  }
+  document.querySelectorAll('.autoship-preset').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (days) days.value = btn.dataset.days;
+      updateAutoshipTerms();
+    });
+  });
+
+  sync();
 }
 
 /* Rebuild the Drop-in so the PayPal/Venmo amount matches the discounted total
@@ -1105,10 +1593,28 @@ async function refreshPayment(form) {
   }
 }
 
-function showOrderConfirmation(transactionId, pointsEarned) {
+function showOrderConfirmation(transactionId, pointsEarned, result) {
   cart.clearCart();
   const earned = Number(pointsEarned) || 0;
+  const sub = result && result.subscription;
   const wrap = document.getElementById('checkoutMain');
+
+  // Be straight about auto-ship either way: confirm the schedule when it's set
+  // up, and say so plainly when it wasn't — never leave them assuming a repeat
+  // order exists when it doesn't.
+  let autoshipNote = '';
+  if (sub) {
+    const when = new Date(sub.nextRunAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+    const every = sub.intervalDays === 1 ? 'day' : `${sub.intervalDays} days`;
+    autoshipNote = `<p class="text-muted">🔁 <strong>Auto-ship is on.</strong> We'll send these items again every
+      ${escapeHtml(every)} — next on <strong>${escapeHtml(when)}</strong> — and email you 3 days before each charge.
+      Change, skip or cancel any time in <a href="account.html#autoship" style="color:var(--accent-purple)">your account</a>.</p>`;
+  } else if (result && result.autoshipFailed) {
+    autoshipNote = `<p class="text-muted">⚠️ Your payment went through, but we couldn't set up the auto-ship
+      schedule. <strong>No repeating charge has been created.</strong> You can start one from
+      <a href="account.html#autoship" style="color:var(--accent-purple)">your account</a>, or contact us and we'll sort it out.</p>`;
+  }
+
   if (wrap) {
     wrap.innerHTML = `
       <div class="empty-state glass">
@@ -1117,6 +1623,7 @@ function showOrderConfirmation(transactionId, pointsEarned) {
         <p>Thank you. Your payment was processed securely by Braintree (a PayPal service).${transactionId
           ? ` Your transaction reference is <strong>${escapeHtml(transactionId)}</strong>.` : ''}</p>
         ${earned > 0 ? `<p class="text-muted">🎉 You earned <strong>${earned} reward points</strong> on this order — see your balance in <a href="account.html" style="color:var(--accent-purple)">your account</a>.</p>` : ''}
+        ${autoshipNote}
         <p class="text-muted">We've recorded your order and will ship to the address you provided. Keep your transaction reference for your records.</p>
         <a class="btn btn-primary" href="index.html">Back to Home</a>
       </div>`;
@@ -1174,6 +1681,99 @@ async function submitCryptoOrder(form, btn) {
   }
 }
 
+/* ============================================================
+   ZELLE — manual bank transfer
+   There's no Zelle API to redirect to: the buyer sends the money
+   themselves from their own banking app. So all this does is place
+   the order (priced on the server) and then show them exactly who
+   to pay, how much, and what memo to put on it. The order stays
+   unpaid until the store owner confirms the transfer landed.
+   ============================================================ */
+
+/* The screen the buyer works from while they make the transfer. Deliberately
+   plain and copyable — they're about to retype these details into a banking
+   app, and a typo in the memo is what makes an order hard to match. */
+function showZelleInstructions(body) {
+  const wrap = document.getElementById('checkoutMain');
+  cart.clearCart();
+  if (!wrap) return;
+  const inst = body.instructions || {};
+  const amount = formatPrice(Number(inst.amount != null ? inst.amount : body.total) || 0);
+  const hours = Number(inst.windowHours) || 24;
+
+  wrap.innerHTML = `
+    <div class="zelle-instructions glass">
+      <div class="empty-icon">🏦</div>
+      <h3>Almost done — send your Zelle payment</h3>
+      <p>Your order <strong>${escapeHtml(body.orderId || '')}</strong> is placed and held for
+         <strong>${escapeHtml(String(hours))} hours</strong>. Nothing has been charged — send the transfer
+         below from your bank's app or website (look for <em>"Send money with Zelle"</em>).</p>
+
+      <dl class="zelle-details">
+        <div><dt>Send to</dt><dd><span class="zelle-value">${escapeHtml(inst.recipient || '')}</span>
+          <button type="button" class="btn btn-ghost btn-sm zelle-copy" data-copy="${escapeHtml(inst.recipient || '')}">Copy</button>
+          <span class="zelle-sub">${escapeHtml(inst.recipientName || '')}${inst.bank ? ' · ' + escapeHtml(inst.bank) : ''}</span></dd></div>
+        <div><dt>Amount</dt><dd><span class="zelle-value">${escapeHtml(amount)}</span>
+          <span class="zelle-sub">exact amount, please</span></dd></div>
+        <div><dt>Memo</dt><dd><span class="zelle-value">${escapeHtml(inst.memo || body.orderId || '')}</span>
+          <button type="button" class="btn btn-ghost btn-sm zelle-copy" data-copy="${escapeHtml(inst.memo || body.orderId || '')}">Copy</button>
+          <span class="zelle-sub">this is how we match your payment to your order</span></dd></div>
+      </dl>
+
+      <p class="text-muted">We check payments by hand, so this isn't instant: you'll get an email as soon as
+         the money lands, and we ship after that. If anything looks wrong, reply to your order email and
+         quote <strong>${escapeHtml(body.orderId || '')}</strong> — please don't send a second transfer.</p>
+      <a class="btn btn-primary" href="index.html">Back to Home</a>
+    </div>`;
+
+  wrap.querySelectorAll('.zelle-copy').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const text = btn.getAttribute('data-copy') || '';
+      try {
+        await navigator.clipboard.writeText(text);
+        const was = btn.textContent;
+        btn.textContent = 'Copied ✓';
+        setTimeout(() => { btn.textContent = was; }, 1600);
+      } catch (e) {
+        // No clipboard permission (or an insecure origin) — the value is on
+        // screen anyway, so just get out of the way.
+        btn.textContent = 'Copy by hand';
+      }
+    });
+  });
+}
+
+/* validate the form, place the order on our server, then show the transfer
+   details. Prices come from the server — the browser never names the amount. */
+async function submitZelleOrder(form, btn) {
+  if (cart.items.length === 0) { checkoutSetMsg('Your cart is empty.', 'error'); return; }
+  if (!validateCheckout(form)) { checkoutSetMsg('Please complete the highlighted fields first.', 'error'); return; }
+  checkoutSetMsg('');
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.textContent = 'Placing your order…';
+  try {
+    const checkout = collectCheckout(form);
+    const res = await fetch(API_BASE + '/api/zelle/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeader() },
+      body: JSON.stringify({
+        items: cart.items.map(i => ({ id: i.id, quantity: i.quantity })),
+        shipping: checkout,
+        email: checkout.email
+      })
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || !body.success) throw new Error(body.error || 'Could not place your Zelle order.');
+    showZelleInstructions(body);
+  } catch (err) {
+    console.error('[zelle checkout]', err);
+    checkoutSetMsg((err && err.message) || 'Could not place your Zelle order. Please try again.', 'error');
+    btn.disabled = false;
+    btn.innerHTML = original;
+  }
+}
+
 /* run the sale on our server (priced server-side) using the Drop-in nonce */
 async function submitOrder(form, payload) {
   const checkout = collectCheckout(form);
@@ -1186,7 +1786,8 @@ async function submitOrder(form, payload) {
       email: checkout.email,
       nonce: payload.nonce,
       deviceData: payload.deviceData,
-      pointsToRedeem: enlRedeem().points || 0    // server clamps to the real balance
+      pointsToRedeem: enlRedeem().points || 0,   // server clamps to the real balance
+      autoship: autoshipSelection()              // ignored unless signed in
     })
   });
   const body = await res.json().catch(() => ({}));
@@ -1205,7 +1806,7 @@ async function onPay(instance, form, payBtn) {
     const payload = await instance.requestPaymentMethod();
     checkoutSetMsg('Finalising your payment…', 'success');
     const body = await submitOrder(form, payload);
-    showOrderConfirmation(body.transactionId, body.pointsEarned);
+    showOrderConfirmation(body.transactionId, body.pointsEarned, body);
   } catch (err) {
     console.error('[checkout pay]', err);
     const noMethod = /no payment method/i.test((err && err.message) || '');
@@ -1280,6 +1881,27 @@ async function renderBraintreeDropin(form) {
   }
 }
 
+/* Replace the checkout form with a sign-in / register prompt. The cart is
+   untouched — it's synced to the account on sign-in, so nothing is lost. */
+function showCheckoutAccountGate() {
+  const wrap = document.getElementById('checkoutMain');
+  if (!wrap) return;
+  wrap.innerHTML = `
+    <div class="empty-state glass">
+      <div class="empty-icon">🔐</div>
+      <h3>An account is required to check out</h3>
+      <p>Ever Nova Life supplies materials for in-vitro research only, and every order must be
+         tied to a verified account holder. Please sign in, or create an account — it takes a minute
+         and your cart will be waiting.</p>
+      <div class="detail-cta" style="justify-content:center">
+        <a class="btn btn-primary btn-lg" href="register.html?next=checkout.html">Create an account</a>
+        <a class="btn btn-ghost btn-lg" href="login.html?next=checkout.html">Sign in</a>
+      </div>
+      <p class="text-muted" style="margin-top:1rem">Ordering also requires an approved
+         <a href="research-accounts.html" style="color:var(--accent-purple)">research account</a>.</p>
+    </div>`;
+}
+
 function initCheckoutPage() {
   // Returning from the hosted BTCPay crypto checkout after paying.
   if (new URLSearchParams(location.search).get('paid') === 'crypto') {
@@ -1290,8 +1912,14 @@ function initCheckoutPage() {
     return;
   }
 
+  // An account is required to order: every purchase has to be attributable to a
+  // verified buyer we can contact and keep records for. Enforced on the server
+  // too — this only saves a signed-out visitor from filling in the whole form.
+  if (!isSignedIn()) { showCheckoutAccountGate(); return; }
+
   window._enlRedeem = { points: 0, discount: 0 };
   window._cryptoAvailable = true;
+  window._zelleAvailable = true;
   const summary = document.getElementById('checkoutSummary');
   renderCheckoutSummary(summary);
   // pull the signed-in points balance, then re-render so the redeem control appears
@@ -1322,25 +1950,35 @@ function initCheckoutPage() {
   const consent = form.querySelector('.form-check input[required]');
   if (consent) consent.addEventListener('change', () => { const r = consent.closest('.form-check'); if (r) r.classList.toggle('invalid', !consent.checked); });
 
-  // crypto (BTCPay) — works independently of the card Drop-in
-  const cryptoSection = document.getElementById('cryptoPaySection');
+  // Non-card options (BTCPay, Zelle) — each works independently of the Drop-in
+  const altSection = document.getElementById('altPaySection');
   const cryptoBtn = document.getElementById('cryptoPayBtn');
+  const zelleBtn = document.getElementById('zellePayBtn');
 
   // empty cart → don't bother loading the payment form
   if (cart.items.length === 0) {
     const loading = document.getElementById('dropinLoading');
     if (loading) loading.textContent = 'Add items to your cart to check out.';
-    if (cryptoSection) cryptoSection.style.display = 'none';
+    if (altSection) altSection.style.display = 'none';
     return;
   }
 
-  if (cryptoBtn && cryptoSection) {
-    cryptoBtn.addEventListener('click', () => submitCryptoOrder(form, cryptoBtn));
-    // hide the crypto option if the server says BTCPay isn't configured yet
-    // (and keep it hidden while points are being redeemed — see updateCryptoForRedeem)
+  initAutoshipCheckout();
+
+  if (cryptoBtn) cryptoBtn.addEventListener('click', () => submitCryptoOrder(form, cryptoBtn));
+  if (zelleBtn) zelleBtn.addEventListener('click', () => submitZelleOrder(form, zelleBtn));
+
+  // Ask the server which payment methods it actually has keys for, and drop the
+  // ones it doesn't. (They also stay hidden while points are being redeemed or
+  // auto-ship is ticked — see updateAltPayVisibility.)
+  if (altSection) {
     fetch(API_BASE + '/api/health')
       .then(r => r.json())
-      .then(h => { window._cryptoAvailable = !(h && h.crypto === false); updateCryptoForRedeem(); })
+      .then(h => {
+        window._cryptoAvailable = !(h && h.crypto === false);
+        window._zelleAvailable = !(h && h.zelle === false);
+        updateAltPayVisibility();
+      })
       .catch(() => { /* leave visible; a click will surface any real error */ });
   }
 

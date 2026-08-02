@@ -87,6 +87,9 @@ test('anonymous users get 401 on all account/admin endpoints', async () => {
     ['GET', '/api/loyalty'],
     ['GET', '/api/referral'],
     ['GET', '/api/admin/users'],
+    ['GET', '/api/admin/orders'],
+    ['POST', '/api/admin/orders/ENL-NOPE/paid'],
+    ['POST', '/api/admin/orders/ENL-NOPE/cancel'],
     ['POST', '/api/products'],
     ['DELETE', '/api/admin/users/does-not-exist'],
     ['PUT', '/api/products/1'],
@@ -203,7 +206,7 @@ test('the admin account can list users, and no hashes are exposed', async () => 
 test('the admin account can create a product', async () => {
   const { body } = await login('boss@evernovalife.com', 'adminpass123');
   const token = body.token;
-  const add = await api('/api/products', { method: 'POST', token, body: { name: 'Test Reagent', price: 5, category: 'supplies' } });
+  const add = await api('/api/products', { method: 'POST', token, body: { name: 'Test Reagent', price: 5, category: 'metabolic' } });
   assert.equal(add.status, 201, 'admin can add a product');
   assert.equal(add.body.product.name, 'Test Reagent');
 });

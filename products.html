@@ -20,7 +20,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/styles.css?v=14">
+  <link rel="stylesheet" href="css/styles.css?v=36">
+  <!-- 21+ age gate: runs before anything paints -->
+  <script src="js/age-gate.js?v=33"></script>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Cpath d='M20.00 1.00 L21.91 15.38 L27.78 12.22 L24.62 18.09 L39.00 20.00 L24.62 21.91 L27.78 27.78 L21.91 24.62 L20.00 39.00 L18.09 24.62 L12.22 27.78 L15.38 21.91 L1.00 20.00 L15.38 18.09 L12.22 12.22 L18.09 15.38 Z' fill='%23a855f7'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -34,12 +36,16 @@
       </a>
       <nav class="main-nav" id="mainNav">
         <a href="index.html">Home</a>
-        <a href="products.html">Catalog</a>
-        <a href="quality.html">Quality</a>
+        <a href="products.html">Products</a>
+        <a href="quality.html">Lab Reports (COA)</a>
         <a href="research-accounts.html">Research</a>
         <a href="about.html">About</a>
         <a href="contact.html">Contact</a>
       </nav>
+      <form class="header-search" role="search" action="products.html">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        <input type="search" name="search" placeholder="Search products..." aria-label="Search products">
+      </form>
       <div class="header-actions">
         <button class="icon-btn" id="searchBtn" aria-label="Search">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
@@ -71,7 +77,7 @@
     <div class="container">
       <div class="breadcrumb"><a href="index.html">Home</a> <span>/</span> <span>Products</span></div>
       <h1>Research <span class="gradient-text">Catalog</span></h1>
-      <p>Lot-traceable research materials, blends and laboratory supplies for qualified in-vitro laboratories. Each listing links to lot-specific documentation. Research-account approval is required to order.</p>
+      <p>Lot-traceable research materials, multi-peptide blends and laboratory supplies for qualified in-vitro laboratories. Each listing links to lot-specific documentation. Research-account approval is required to order.</p>
     </div>
   </section>
 
@@ -90,8 +96,8 @@
             <label class="filter-option"><input type="checkbox" class="cat-filter" value="supplies"> Lab Supplies</label>
           </div>
           <div class="filter-group">
-            <h4>Max Price: <span id="priceValue" class="gradient-text">$150.00</span></h4>
-            <input type="range" class="price-range" id="priceRange" min="0" max="150" value="150" step="5">
+            <h4>Max Price: <span id="priceValue" class="gradient-text">$200.00</span></h4>
+            <input type="range" class="price-range" id="priceRange" min="0" max="200" value="200" step="5">
           </div>
           <div class="filter-group">
             <h4>Availability</h4>
@@ -133,21 +139,21 @@
     <div class="container">
       <div class="content-card glass">
         <h2>Catalog Reference</h2>
-        <p>Every listed material, its size, lot number, and current documentation status. Purity is shown only where a percentage was actually reported for the lot; blend lots are documented by identity and measured content per component. Full reports are in the <a href="quality.html#coa-library">COA Library</a>. Ordering requires an approved <a href="research-accounts.html">research account</a>.</p>
+        <p>Every listed material, its size, lot number, and current documentation status. Purity is shown only where a percentage was actually reported for the lot; blend lots are documented by identity and measured content per component. Every listing links to its own Certificate of Analysis, and all published reports are in the <a href="quality.html#coa-library">COA Library</a>. Ordering requires an approved <a href="research-accounts.html">research account</a>.</p>
         <div style="overflow-x:auto">
           <table class="rate-table">
             <thead>
               <tr><th>Material</th><th>Category</th><th>Size</th><th>Price (USD)</th><th>Reported purity</th><th>Lot</th><th>Documentation</th></tr>
             </thead>
             <tbody>
-              <tr><td><a href="product.html?id=1">Retatrutide</a></td><td>Metabolic</td><td>10&nbsp;mg</td><td>$109.99</td><td>99.786%</td><td>ENL-24001</td><td><a href="quality.html#coa-library"><strong style="color:#22c55e">Available</strong> · #137638</a></td></tr>
-              <tr><td><a href="product.html?id=2">Bacteriostatic Water</a></td><td>Lab Supplies</td><td>30&nbsp;mL</td><td>$8.99</td><td>—</td><td>ENL-24002</td><td><strong style="opacity:.7">Not applicable</strong></td></tr>
-              <tr><td><a href="product.html?id=3">GHK-Cu (Copper Peptide)</a></td><td>Tissue &amp; Matrix</td><td>50&nbsp;mg</td><td>$39.99</td><td>99.780%</td><td>ENL-24003</td><td><a href="quality.html#coa-library"><strong style="color:#22c55e">Available</strong> · #122571</a></td></tr>
-              <tr><td><a href="product.html?id=4">Tesamorelin / Ipamorelin Blend</a></td><td>Growth-Factor Peptides</td><td>10&nbsp;mg / 3&nbsp;mg</td><td>$79.99</td><td>Identity + content (blend)</td><td>ENL-24004</td><td><a href="quality.html#sds"><strong style="color:#f59e0b">Pending</strong></a></td></tr>
-              <tr><td><a href="product.html?id=5">MOTS-C</a></td><td>Metabolic</td><td>10&nbsp;mg</td><td>$64.99</td><td>99.025%</td><td>ENL-24005</td><td><a href="quality.html#coa-library"><strong style="color:#22c55e">Available</strong> · #147077</a></td></tr>
-              <tr><td><a href="product.html?id=6">BPC-157 / TB-500 Blend</a></td><td>Tissue &amp; Matrix</td><td>20&nbsp;mg</td><td>$89.99</td><td>Identity + content (blend)</td><td>ENL-24006</td><td><a href="quality.html#coa-library"><strong style="color:#22c55e">Available</strong> · #151337</a></td></tr>
-              <tr><td><a href="product.html?id=7">KLOW Blend</a></td><td>Multi-Peptide Blends</td><td>80&nbsp;mg</td><td>$129.99</td><td>Identity + content (blend)</td><td>ENL-24007</td><td><a href="quality.html#coa-library"><strong style="color:#22c55e">Available</strong> · #122606</a></td></tr>
-              <tr><td><a href="product.html?id=8">NAD+</a></td><td>Metabolic</td><td>500&nbsp;mg</td><td>$100.00</td><td>—</td><td>ENL-24008</td><td><a href="quality.html#sds"><strong style="color:#f59e0b">Pending</strong></a></td></tr>
+              <tr><td><a href="product.html?id=1">Retatrutide</a></td><td>Metabolic</td><td>10&nbsp;mg</td><td>$109.99</td><td>99.786%</td><td>ENL-24001</td><td><a href="product.html?id=1#coa"><strong style="color:#22c55e">Available</strong> · #137638</a></td></tr>
+              <tr><td><a href="product.html?id=2">Bacteriostatic Water</a></td><td>Lab Supplies</td><td>10&nbsp;mL</td><td>$8.99</td><td>—</td><td>ENL-24002</td><td><a href="product.html?id=2#coa"><strong style="opacity:.7">Not applicable</strong></a></td></tr>
+              <tr><td><a href="product.html?id=3">GHK-Cu (Copper Peptide)</a></td><td>Tissue &amp; Matrix</td><td>50&nbsp;mg</td><td>$85.00</td><td>99.780%</td><td>ENL-24003</td><td><a href="product.html?id=3#coa"><strong style="color:#22c55e">Available</strong> · #122571</a></td></tr>
+              <tr><td><a href="product.html?id=4">Tesamorelin / Ipamorelin Blend</a></td><td>Growth-Factor Peptides</td><td>10&nbsp;mg / 3&nbsp;mg</td><td>$125.00</td><td>Identity + content (blend)</td><td>ENL-24004</td><td><a href="product.html?id=4#coa"><strong style="color:#f59e0b">Pending</strong></a></td></tr>
+              <tr><td><a href="product.html?id=5">MOTS-C</a></td><td>Metabolic</td><td>10&nbsp;mg</td><td>$64.99</td><td>99.025%</td><td>ENL-24005</td><td><a href="product.html?id=5#coa"><strong style="color:#22c55e">Available</strong> · #147077</a></td></tr>
+              <tr><td><a href="product.html?id=6">BPC-157 / TB-500 Blend</a></td><td>Tissue &amp; Matrix</td><td>20&nbsp;mg</td><td>$130.00</td><td>Identity + content (blend)</td><td>ENL-24006</td><td><a href="product.html?id=6#coa"><strong style="color:#22c55e">Available</strong> · #151337</a></td></tr>
+              <tr><td><a href="product.html?id=7">KLOW Blend</a></td><td>Multi-Peptide Blends</td><td>80&nbsp;mg</td><td>$150.00</td><td>Identity + content (blend)</td><td>ENL-24007</td><td><a href="product.html?id=7#coa"><strong style="color:#22c55e">Available</strong> · #122606</a></td></tr>
+              <tr><td><a href="product.html?id=8">NAD+</a></td><td>Metabolic</td><td>500&nbsp;mg</td><td>$80.00</td><td>—</td><td>ENL-24008</td><td><a href="product.html?id=8#coa"><strong style="color:#f59e0b">Pending</strong></a></td></tr>
             </tbody>
           </table>
         </div>
@@ -211,9 +217,9 @@
     </div>
   </footer>
 
-  <script src="js/products-data.js?v=11"></script>
-  <script src="js/config.js?v=11"></script>
-  <script src="js/cart.js?v=11"></script>
-  <script src="js/main.js?v=11"></script>
+  <script src="js/products-data.js?v=33"></script>
+  <script src="js/config.js?v=33"></script>
+  <script src="js/cart.js?v=33"></script>
+  <script src="js/main.js?v=33"></script>
 </body>
 </html>

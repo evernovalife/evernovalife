@@ -10,7 +10,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/styles.css?v=14">
+  <link rel="stylesheet" href="css/styles.css?v=36">
+  <!-- 21+ age gate: runs before anything paints -->
+  <script src="js/age-gate.js?v=33"></script>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Cpath d='M20.00 1.00 L21.91 15.38 L27.78 12.22 L24.62 18.09 L39.00 20.00 L24.62 21.91 L27.78 27.78 L21.91 24.62 L20.00 39.00 L18.09 24.62 L12.22 27.78 L15.38 21.91 L1.00 20.00 L15.38 18.09 L12.22 12.22 L18.09 15.38 Z' fill='%23a855f7'/%3E%3C/svg%3E">
   <style>
     .admin-table { width:100%; border-collapse:collapse; margin-top:1rem; font-size:0.95rem; }
@@ -36,6 +38,10 @@
         <a href="products.html">Products</a>
         <a href="account.html">Account</a>
       </nav>
+      <form class="header-search" role="search" action="products.html">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        <input type="search" name="search" placeholder="Search products..." aria-label="Search products">
+      </form>
       <div class="header-actions">
         <a href="index.html" class="icon-btn" aria-label="Home">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12l9-9 9 9"/><path d="M9 21V12h6v9"/></svg>
@@ -80,10 +86,43 @@
           </form>
         </details>
       </div>
+
+      <!-- PAYMENTS TO CONFIRM — Zelle orders sit here until you've seen the
+           money in your bank. Confirming is what marks the order paid, credits
+           reward points and releases it for shipping, so it's done by hand. -->
+      <div class="account-card glass" id="adminOrdersCard" style="margin-top:1.5rem">
+        <div class="rewards-head" style="margin-bottom:0.75rem">
+          <h3 id="payments">Payments to Confirm</h3>
+          <button class="btn btn-ghost btn-sm" type="button" id="ordersRefreshBtn">↻ Refresh</button>
+        </div>
+        <p class="text-muted" style="font-size:0.85rem;margin:0 0 1rem">
+          Orders waiting on a Zelle transfer. Check your bank for the <strong>memo</strong> below, then press
+          “Mark paid” — that's what tells the customer we've got it and releases the order. Only confirm money
+          you can actually see in the account.
+        </p>
+        <div id="ordersStatus" class="form-msg"></div>
+        <div id="ordersResults" class="admin-table-wrap"></div>
+      </div>
+
+      <!-- AUTO-SHIP — every repeating order, soonest first, plus a manual
+           trigger so a due charge can be run now instead of waiting for the
+           scheduled ping (handy while testing). -->
+      <div class="account-card glass" id="adminAutoshipCard" style="margin-top:1.5rem">
+        <div class="rewards-head" style="margin-bottom:0.75rem">
+          <h3 id="autoship">Auto-Ship Plans</h3>
+          <button class="btn btn-ghost btn-sm" type="button" id="runDueBtn">▶ Run due now</button>
+        </div>
+        <p class="text-muted" style="font-size:0.85rem;margin:0 0 1rem">
+          Every customer's repeating order, soonest first. “Run due now” charges anything already past its date —
+          the same thing the hourly scheduled trigger does.
+        </p>
+        <div id="autoshipStatus" class="form-msg"></div>
+        <div id="autoshipResults" class="admin-table-wrap"></div>
+      </div>
     </div>
   </section>
 
-  <script src="js/config.js?v=11"></script>
+  <script src="js/config.js?v=33"></script>
   <script>
     (function () {
       var API = (window.PEPTIDE_API_BASE || '');
@@ -194,14 +233,243 @@
       try { keyInput.value = localStorage.getItem(STORE_KEY) || ''; } catch (e) {}
       if (keyInput.value) lastKey = keyInput.value;
 
+      /* ---- PAYMENTS TO CONFIRM (Zelle / any manual method) ----
+         Zelle has no API and no webhook, so nothing can tell us the money
+         arrived except the owner looking at their bank. This panel is that
+         step: match the memo to the order reference, then confirm. */
+      var ordersStatus = document.getElementById('ordersStatus');
+      var ordersResults = document.getElementById('ordersResults');
+      var ordersRefreshBtn = document.getElementById('ordersRefreshBtn');
+
+      function setOrdersStatus(text, kind) {
+        ordersStatus.className = 'form-msg' + (kind ? ' ' + kind : '');
+        ordersStatus.textContent = text || '';
+      }
+      function money(n) { return '$' + (Number(n) || 0).toFixed(2); }
+      function addressText(a) {
+        if (!a) return '—';
+        // Checkout sends a single `name`; older records may have first/last.
+        var who = String(a.name || ((a.firstName || '') + ' ' + (a.lastName || ''))).trim();
+        return [who, a.institution, a.researchField, a.address,
+                a.city + ', ' + a.state + ' ' + a.postalCode, a.country || a.countryCode]
+          .map(function (s) { return String(s || '').trim(); })
+          .filter(Boolean).join(' · ');
+      }
+
+      async function loadPendingOrders() {
+        setOrdersStatus('Loading…', '');
+        ordersResults.innerHTML = '';
+        var res;
+        try {
+          res = await fetch(API + '/api/admin/orders?status=awaiting_payment', { headers: headers(lastKey) });
+        } catch (e) { setOrdersStatus("Can't reach the server.", 'error'); return; }
+        var data = await res.json().catch(function () { return {}; });
+        if (!res.ok) { setOrdersStatus(data.error || 'Could not load orders.', 'error'); return; }
+
+        var orders = data.orders || [];
+        var owed = orders.reduce(function (sum, o) { return sum + (Number(o.total) || 0); }, 0);
+        setOrdersStatus(orders.length
+          ? orders.length + ' order' + (orders.length === 1 ? '' : 's') + ' awaiting payment · ' + money(owed) + ' outstanding'
+          : 'Nothing waiting on a payment.', orders.length ? '' : 'success');
+
+        if (!orders.length) {
+          ordersResults.innerHTML = '<p class="text-muted" style="margin-top:1rem">No unpaid orders. ' +
+            'Zelle orders appear here the moment a customer places one.</p>';
+          return;
+        }
+
+        var rows = orders.map(function (o) {
+          // Past the hold window? Say so — it usually means they never sent it.
+          var late = o.expiresAt && new Date(o.expiresAt) < new Date();
+          var placed = fmtDate(o.createdAt) + (late
+            ? '<br><strong style="color:var(--accent-amber)">past its hold window</strong>' : '');
+          var who = esc(o.userEmail || '—') + (o.guest
+            ? ' <span class="text-muted" style="font-size:0.72rem">(guest)</span>' : '');
+          return '<tr>' +
+            '<td><strong>' + esc(o.orderId) + '</strong><br><span class="text-muted" style="font-size:0.72rem">memo to look for</span></td>' +
+            '<td>' + placed + '</td>' +
+            '<td>' + who + '<br><span class="text-muted" style="font-size:0.75rem">' + esc(addressText(o.shippingAddress)) + '</span></td>' +
+            '<td>' + esc(itemsText(o.items)) + '</td>' +
+            '<td><strong>' + esc(money(o.total)) + '</strong><br><span class="text-muted" style="font-size:0.72rem">' + esc(o.method || '') + '</span></td>' +
+            '<td><button class="btn btn-primary btn-sm order-paid" data-id="' + esc(o.orderId) + '" data-total="' + esc(money(o.total)) + '">Mark paid</button> ' +
+            '<button class="btn btn-ghost btn-sm order-cancel" data-id="' + esc(o.orderId) + '">Cancel</button></td>' +
+            '</tr>';
+        }).join('');
+        ordersResults.innerHTML = '<table class="admin-table"><thead><tr><th>Reference</th><th>Placed</th>' +
+          '<th>Customer</th><th>Items</th><th>Total</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>';
+
+        Array.prototype.forEach.call(ordersResults.querySelectorAll('.order-paid'), function (b) {
+          b.addEventListener('click', function () { markPaid(b.getAttribute('data-id'), b.getAttribute('data-total'), b); });
+        });
+        Array.prototype.forEach.call(ordersResults.querySelectorAll('.order-cancel'), function (b) {
+          b.addEventListener('click', function () { cancelOrder(b.getAttribute('data-id'), b); });
+        });
+      }
+
+      async function markPaid(orderId, total, btn) {
+        if (!window.confirm('Confirm you have received ' + total + ' for ' + orderId + '?\n\n' +
+            'Only do this once the money is actually in your bank account. It marks the order paid, ' +
+            'emails the customer, and credits their reward points.')) return;
+        btn.disabled = true;
+        btn.textContent = 'Confirming…';
+        try {
+          var res = await fetch(API + '/api/admin/orders/' + encodeURIComponent(orderId) + '/paid',
+            { method: 'POST', headers: headers(lastKey) });
+          var data = await res.json().catch(function () { return {}; });
+          if (!res.ok) throw new Error(data.error || 'Could not mark that order paid.');
+          setOrdersStatus(data.alreadyPaid
+            ? orderId + ' was already marked paid.'
+            : orderId + ' is now paid — the customer has been emailed.', 'success');
+          loadPendingOrders();
+        } catch (e) {
+          setOrdersStatus(e.message || 'Could not mark that order paid.', 'error');
+          btn.disabled = false;
+          btn.textContent = 'Mark paid';
+        }
+      }
+
+      async function cancelOrder(orderId, btn) {
+        if (!window.confirm('Cancel ' + orderId + '?\n\nUse this when the payment never arrived. ' +
+            'It does not refund anything.')) return;
+        btn.disabled = true;
+        btn.textContent = '…';
+        try {
+          var res = await fetch(API + '/api/admin/orders/' + encodeURIComponent(orderId) + '/cancel',
+            { method: 'POST', headers: headers(lastKey) });
+          var data = await res.json().catch(function () { return {}; });
+          if (!res.ok) throw new Error(data.error || 'Could not cancel that order.');
+          setOrdersStatus(orderId + ' cancelled.', 'success');
+          loadPendingOrders();
+        } catch (e) {
+          setOrdersStatus(e.message || 'Could not cancel that order.', 'error');
+          btn.disabled = false;
+          btn.textContent = 'Cancel';
+        }
+      }
+
+      if (ordersRefreshBtn) ordersRefreshBtn.addEventListener('click', loadPendingOrders);
+
+      /* ---- AUTO-SHIP ---- */
+      var subStatus = document.getElementById('autoshipStatus');
+      var subResults = document.getElementById('autoshipResults');
+      var runDueBtn = document.getElementById('runDueBtn');
+
+      function setSubStatus(text, kind) {
+        subStatus.className = 'form-msg' + (kind ? ' ' + kind : '');
+        subStatus.textContent = text || '';
+      }
+      function shipDate(iso) {
+        if (!iso) return '—';
+        try {
+          return new Date(iso).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: '2-digit' });
+        } catch (e) { return iso; }
+      }
+      function itemsText(items) {
+        if (!items || !items.length) return '—';
+        return items.map(function (i) { return i.name + ' ×' + i.quantity; }).join(', ');
+      }
+
+      async function loadSubscriptions() {
+        setSubStatus('Loading…', '');
+        subResults.innerHTML = '';
+        var res;
+        try {
+          res = await fetch(API + '/api/admin/subscriptions', { headers: headers(lastKey) });
+        } catch (e) { setSubStatus("Can't reach the server.", 'error'); return; }
+        var data = await res.json().catch(function () { return {}; });
+        if (!res.ok) { setSubStatus(data.error || 'Could not load auto-ship plans.', 'error'); return; }
+
+        var subs = data.subscriptions || [];
+        var active = subs.filter(function (s) { return s.status === 'active'; }).length;
+        setSubStatus(subs.length + ' plan' + (subs.length === 1 ? '' : 's') + ' · ' + active + ' active', 'success');
+
+        if (!subs.length) {
+          subResults.innerHTML = '<p class="text-muted" style="margin-top:1rem">No auto-ship plans yet. ' +
+            'They appear here when a customer ticks “Auto-ship this order” at checkout.</p>';
+          return;
+        }
+        var rows = subs.map(function (s) {
+          var overdue = s.status === 'active' && s.scheduledFor && new Date(s.scheduledFor) <= new Date();
+          var when = shipDate(s.scheduledFor) + (overdue ? ' <strong style="color:var(--accent-amber)">(due)</strong>' : '');
+          var failed = s.failCount ? ' <span class="text-muted" style="font-size:0.75rem">· ' + s.failCount + ' failed</span>' : '';
+          var action = (s.status === 'active' && !overdue)
+            ? '<button class="btn btn-ghost btn-sm sub-due-now" data-id="' + esc(s.id) + '">Ship now</button>'
+            : '';
+          return '<tr><td>' + when + '</td>' +
+            '<td>' + esc(s.userName || '—') + '<br><span class="text-muted" style="font-size:0.78rem">' + esc(s.userEmail) + '</span></td>' +
+            '<td>' + esc(itemsText(s.items)) + '</td>' +
+            '<td>every ' + esc(s.intervalDays) + 'd</td>' +
+            '<td>' + esc(s.runCount || 0) + '</td>' +
+            '<td><span class="sub-status ' + esc(s.status) + '">' + esc(s.status) + '</span>' + failed + '</td>' +
+            '<td>' + action + '</td></tr>';
+        }).join('');
+        subResults.innerHTML = '<table class="admin-table"><thead><tr><th>Next ship</th><th>Customer</th>' +
+          '<th>Items</th><th>Every</th><th>Sent</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>';
+
+        Array.prototype.forEach.call(subResults.querySelectorAll('.sub-due-now'), function (b) {
+          b.addEventListener('click', function () { dueNow(b.getAttribute('data-id'), b); });
+        });
+      }
+
+      /* Bring a plan's next shipment forward to right now. It doesn't charge —
+         it just makes the plan due, so "Run due now" (or the hourly trigger)
+         picks it up. Used for testing the cycle and for "send mine early". */
+      async function dueNow(id, btn) {
+        if (!window.confirm('Move this plan\'s next shipment to right now?\n\n' +
+            'It will be charged on the next run — including if you press “Run due now”.')) return;
+        btn.disabled = true;
+        btn.textContent = '…';
+        try {
+          var res = await fetch(API + '/api/admin/subscriptions/' + encodeURIComponent(id) + '/due-now',
+            { method: 'POST', headers: headers(lastKey) });
+          var data = await res.json().catch(function () { return {}; });
+          if (!res.ok) throw new Error(data.error || 'Could not move that plan.');
+          setSubStatus('That plan is now due. Press “Run due now” to charge it.', 'success');
+          loadSubscriptions();
+        } catch (e) {
+          setSubStatus(e.message || 'Could not move that plan.', 'error');
+          btn.disabled = false;
+          btn.textContent = 'Ship now';
+        }
+      }
+
+      if (runDueBtn) {
+        runDueBtn.addEventListener('click', async function () {
+          if (!window.confirm('Charge every auto-ship plan that is past its shipment date now?\n\n' +
+              'This takes real payments — the same thing the scheduled trigger does on its own.')) return;
+          var label = runDueBtn.textContent;
+          runDueBtn.disabled = true;
+          runDueBtn.textContent = 'Running…';
+          try {
+            var res = await fetch(API + '/api/subscriptions/run-due', { method: 'POST', headers: headers(lastKey) });
+            var data = await res.json().catch(function () { return {}; });
+            if (!res.ok) throw new Error(data.error || 'The run failed.');
+            setSubStatus('Ran ' + data.due + ' due plan' + (data.due === 1 ? '' : 's') + ' · ' +
+              data.charged + ' charged · ' + data.failed + ' failed · ' + data.reminded + ' reminder email' +
+              (data.reminded === 1 ? '' : 's') + ' sent.', data.failed ? 'error' : 'success');
+            loadSubscriptions();
+          } catch (e) {
+            setSubStatus(e.message || 'The run failed.', 'error');
+          }
+          runDueBtn.disabled = false;
+          runDueBtn.textContent = label;
+        });
+      }
+
       // Auto-load: prefer the signed-in admin account; else a saved key; else prompt.
       if (token()) {
         load({});
+        loadPendingOrders();
+        loadSubscriptions();
       } else if (keyInput.value) {
         if (keyBox) keyBox.open = true;
         load({ key: keyInput.value });
+        loadPendingOrders();
+        loadSubscriptions();
       } else {
         setStatus('Sign in with the admin account to manage users, or open “Use an admin key” below.', '');
+        setOrdersStatus('Sign in as an admin to see payments waiting to be confirmed.', '');
+        setSubStatus('Sign in as an admin to see auto-ship plans.', '');
       }
     })();
   </script>

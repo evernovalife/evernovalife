@@ -20,7 +20,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/styles.css?v=14">
+  <link rel="stylesheet" href="css/styles.css?v=36">
+  <!-- 21+ age gate: runs before anything paints -->
+  <script src="js/age-gate.js?v=33"></script>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Cpath d='M20.00 1.00 L21.91 15.38 L27.78 12.22 L24.62 18.09 L39.00 20.00 L24.62 21.91 L27.78 27.78 L21.91 24.62 L20.00 39.00 L18.09 24.62 L12.22 27.78 L15.38 21.91 L1.00 20.00 L15.38 18.09 L12.22 12.22 L18.09 15.38 Z' fill='%23a855f7'/%3E%3C/svg%3E">
   <script type="application/ld+json">
   {
@@ -36,7 +38,7 @@
 
   <!-- ===== ANNOUNCEMENT BAR ===== -->
   <div style="background:linear-gradient(90deg,#6d28d9,#a21caf);color:#fff;text-align:center;font-size:.85rem;padding:.5rem 1rem;letter-spacing:.02em">
-    For qualified in-vitro research organizations only · Lot-specific documentation available
+    LABORATORY RESEARCH USE ONLY. NOT INTENDED FOR CONSUMPTION.
   </div>
 
   <!-- ===== HEADER ===== -->
@@ -48,12 +50,16 @@
       </a>
       <nav class="main-nav" id="mainNav">
         <a href="index.html">Home</a>
-        <a href="products.html">Catalog</a>
-        <a href="quality.html">Quality</a>
+        <a href="products.html">Products</a>
+        <a href="quality.html">Lab Reports (COA)</a>
         <a href="research-accounts.html">Research</a>
         <a href="about.html">About</a>
         <a href="contact.html">Contact</a>
       </nav>
+      <form class="header-search" role="search" action="products.html">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        <input type="search" name="search" placeholder="Search products..." aria-label="Search products">
+      </form>
       <div class="header-actions">
         <button class="icon-btn" id="searchBtn" aria-label="Search">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
@@ -84,24 +90,48 @@
   <section class="hero">
     <div class="container hero-grid">
       <div class="hero-copy">
-        <span class="hero-badge"><span class="pulse-dot"></span> For qualified in-vitro research organizations</span>
-        <h1>Lot-traceable research materials for <span class="gradient-text">qualified laboratories</span></h1>
-        <p class="lead">Review lot-specific identity, measured content, and available purity documentation before ordering. Research-account approval is required.</p>
+        <span class="hero-badge"><span class="pulse-dot"></span> Proof before purchase</span>
+        <h1>Lot-traceable research materials.<br><span class="gradient-text">Independently verified.</span></h1>
         <div class="hero-cta">
-          <a href="research-accounts.html" class="btn btn-primary btn-lg">Apply for a Research Account</a>
-          <a href="quality.html#coa-library" class="btn btn-ghost btn-lg">Search Lot Documentation</a>
+          <a href="#best-sellers" class="btn btn-primary btn-lg">Shop Best Sellers &rarr;</a>
+          <a href="quality.html#coa-library" class="btn btn-ghost btn-lg">View Lab Reports</a>
         </div>
+        <p class="lead">Every documented lot carries an original report from Janoshik Analytical — identity, measured content per component, and HPLC purity where a percentage was reported. Read the documentation before you order.</p>
+        <p class="hero-links">New here? Start with <a href="quality.html">Lab Reports (COA)</a>, the <a href="products.html#catalog-reference">catalog reference</a>, or our <a href="faq.html">FAQ</a>.</p>
       </div>
+      <!-- Figures below are copied from the published reports (see the `coa`
+           blocks in js/products-data.js). Update them when a newer lot is
+           released — never round up or estimate. -->
       <div class="hero-visual">
-        <div class="molecule-rings">
-          <div class="ring ring-1"></div>
-          <div class="ring ring-2"></div>
-          <div class="ring ring-3"></div>
-        </div>
-        <div class="stats-card glass">
-          <div class="stat"><div class="stat-value gradient-text">Per-Lot</div><div class="stat-label">Documentation</div></div>
-          <div class="stat"><div class="stat-value gradient-text">Third-Party</div><div class="stat-label">Tested</div></div>
-          <div class="stat"><div class="stat-value gradient-text">Tracked</div><div class="stat-label">U.S. Dispatch</div></div>
+        <div class="verify-card glass">
+          <div class="verify-head">
+            <span class="verify-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6"/><path d="M10 3v6.5L5 19a2 2 0 0 0 1.7 3h10.6A2 2 0 0 0 19 19l-5-9.5V3"/><path d="M7.5 15h9"/></svg>
+            </span>
+            <div class="verify-headings">
+              <h2>Latest batch verification</h2>
+              <p class="verify-meta">Batch <strong>CS-mc10-0408</strong></p>
+              <p class="verify-lab"><a href="quality.html#coa-library">Janoshik Analytical</a> · independent third-party lab</p>
+            </div>
+          </div>
+          <div class="verify-stats">
+            <div class="verify-stat">
+              <div class="verify-stat-value gradient-text">99.025<span>%</span></div>
+              <div class="verify-stat-label">HPLC purity</div>
+              <div class="verify-stat-sub">Report #147077</div>
+            </div>
+            <div class="verify-stat">
+              <div class="verify-stat-value gradient-text">5</div>
+              <div class="verify-stat-label">Lot reports</div>
+              <div class="verify-stat-sub">Published in full</div>
+            </div>
+          </div>
+          <ul class="verify-list">
+            <li>Identity and measured content reported for every documented lot</li>
+            <li>Blend lots analysed component by component</li>
+            <li>Every report verifiable by its task number at janoshik.com</li>
+          </ul>
+          <p class="verify-foot"><span class="pulse-dot"></span> Reports are original documents issued by an independent laboratory</p>
         </div>
       </div>
     </div>
@@ -160,11 +190,11 @@
   </section>
 
   <!-- ===== POPULAR PRODUCTS ===== -->
-  <section class="section">
+  <section class="section" id="best-sellers">
     <div class="container">
       <div class="section-head">
         <span class="eyebrow">Lab Favorites</span>
-        <h2>Popular <span class="gradient-text">Products</span></h2>
+        <h2>Best <span class="gradient-text">Sellers</span></h2>
         <p>Frequently ordered research materials, in stock.</p>
       </div>
       <div class="products-grid" id="featuredProducts"></div>
@@ -298,9 +328,9 @@
     </div>
   </footer>
 
-  <script src="js/products-data.js?v=11"></script>
-  <script src="js/config.js?v=11"></script>
-  <script src="js/cart.js?v=11"></script>
-  <script src="js/main.js?v=11"></script>
+  <script src="js/products-data.js?v=33"></script>
+  <script src="js/config.js?v=33"></script>
+  <script src="js/cart.js?v=33"></script>
+  <script src="js/main.js?v=33"></script>
 </body>
 </html>

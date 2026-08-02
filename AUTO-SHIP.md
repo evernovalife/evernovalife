@@ -1,0 +1,168 @@
+# Auto-Ship (repeating orders) — setup & testing
+
+**What it does:** a signed-in customer ticks *"Auto-ship this order"* at checkout,
+types how many days apart they want it (any number from 7 to 180), and the server
+re-charges their saved card on that schedule — same items, new order each time.
+They control it from **Account → Auto-Ship**: change the frequency, skip one
+shipment, pause, or cancel. No discount is applied; it's a convenience feature.
+
+There is **no subscription product in Braintree**. We save the payment method to
+Braintree's vault and charge it ourselves on a schedule, so the cart contents,
+pricing and loyalty points all keep working exactly as they do for a normal order.
+
+---
+
+## Part A — Two settings on Render (~3 min)
+
+Render dashboard → your `evernova-api` service → **Environment** → add:
+
+| Key | Value |
+|---|---|
+| `CRON_KEY` | `5b28dbec330ceb43ac64282f9d8d625ea0b62e0d85a1de99` |
+| `SITE_URL` | `https://evernovalife.com` |
+
+`CRON_KEY` is the password for the trigger that charges due plans — it stops
+anyone on the internet from firing your billing run. (One was generated for you
+above; if you'd rather make your own, any long random string works.)
+
+`SITE_URL` may already be set. It's what puts the right links in the auto-ship
+emails, so check it's there.
+
+Save → Render redeploys automatically. Then open
+`https://evernova-api.onrender.com/api/health` — you should now see
+`"autoship":true` and `"cron":true`.
+
+## Part B — The hourly trigger (~3 min)
+
+Something has to tell the server "it's time, charge anything that's due."
+Use **cron-job.org** (free). It also pings your Render instance every hour,
+which conveniently stops the free tier from falling asleep.
+
+1. Sign up at **https://cron-job.org** → **Create cronjob**.
+2. Fill in:
+   - **Title:** `Ever Nova Life auto-ship`
+   - **URL:** `https://evernova-api.onrender.com/api/subscriptions/run-due`
+   - **Schedule:** Every hour (at minute 0)
+3. Open the **Advanced** tab:
+   - **Request method:** `POST`
+   - **Headers** → add one: name `x-cron-key`, value `5b28dbec330ceb43ac64282f9d8d625ea0b62e0d85a1de99`
+4. **Create** → then hit **Test run**. A working response looks like:
+   ```json
+   {"success":true,"due":0,"charged":0,"failed":0,"reminded":0}
+   ```
+   `401` means the header name or value doesn't match `CRON_KEY` on Render.
+
+Hourly is right: it isn't about precision (a shipment due "today" can go out any
+time today), it's so a missed hour is never a missed shipment. Charges are dated
+from when they were **due**, not when the trigger ran, so a late or skipped ping
+never drifts the billing date.
+
+## Part C — Upload the site files to GoDaddy
+
+Everything else deploys itself when you push to GitHub (Render rebuilds the
+backend). These files go to `public_html/` on GoDaddy:
+
+```
+checkout.html      ← the auto-ship opt-in
+account.html       ← the customer's Auto-Ship card
+admin.html         ← your plan list + "Run due now"
+shipping.html      ← the Auto-Ship section
+terms.html         ← recurring-billing terms (new section 6)
+css/styles.css     ← styling for both
+js/main.js         ← checkout logic
+js/auth.js         ← account-page logic
+```
+
+Plus every other `*.html` file, because the cache-buster changed site-wide
+(`?v=15` for CSS, `?v=12` for JS) — otherwise returning visitors keep the old
+cached CSS and the new panels look broken. Simplest is to upload all `.html`
+files, `css/` and `js/`.
+
+---
+
+## Testing it end-to-end (sandbox — no real money)
+
+You don't have to wait 30 days.
+
+1. Sign in on the live site and add something to the cart.
+2. At checkout, tick **Auto-ship this order** and set **Repeat every** to `7` days.
+   Read the terms line it shows you — that's the disclosure customers get.
+3. Pay with the Braintree sandbox card **`4111 1111 1111 1111`**, exp `12/29`,
+   CVV `123`. The confirmation should say auto-ship is on, with the next date.
+4. Go to **Account → Auto-Ship**. The plan is there. Try **Skip next shipment**
+   and watch the date jump forward a week.
+5. Now force the whole cycle without waiting. Open **admin.html** signed in as
+   the admin account — your plan is in the **Auto-Ship Plans** table.
+   Click **Ship now** on it. That only moves its date to right now; it doesn't
+   charge anything yet.
+6. Click **▶ Run due now**. That charges every plan past its date — exactly what
+   the hourly trigger does. You should see `1 charged`, a second order in the
+   customer's order history, a receipt email, and the plan's next date jump
+   forward by 7 days.
+
+Repeat steps 5–6 as often as you like. To watch a *failure*, delete the product
+the plan contains (admin → Products) and run it again: the charge is refused
+before any money moves, the plan retries, and after three failures it pauses and
+emails the customer.
+
+**What the customer receives:** a setup confirmation, a reminder 3 days before
+every charge, a receipt for each shipment, and a notice if a payment fails.
+Those need `SMTP_USER` / `SMTP_PASS` set on Render — the feature works without
+email, it just goes quiet, which is a bad experience for recurring billing.
+Check with `/api/health` → `"email":true`.
+
+---
+
+## ⚠️ Before real customers: fix data persistence
+
+Render's **free** tier wipes the disk on every redeploy and sleeps when idle.
+Auto-ship plans live in `DATA_DIR/subscriptions.json`, so on the free tier a
+redeploy **silently deletes everyone's plans** — no charges, no shipments, no
+error, and no way to tell it happened.
+
+That's tolerable for testing. It is not acceptable once someone is relying on a
+shipment arriving. Before launch, do one of:
+
+1. **Paid Render instance (~$7/mo) + a Render Disk** mounted at `/var/data`, with
+   env var `DATA_DIR=/var/data`. The code already supports this — nothing to change.
+2. **Move to Postgres.** Ask me and I'll convert the stores (accounts, cart,
+   orders, loyalty, subscriptions). Free Postgres is available on Render/Neon/Supabase.
+
+Also switch `BRAINTREE_ENV` to `production` with production keys when you're
+ready to take real money — auto-ship is charging real cards at that point, and
+the customer emails are the only warning they get before each one.
+
+---
+
+## How it behaves (worth knowing)
+
+- **Pricing is never stored.** Every shipment is re-priced from the live catalog
+  at the moment it's charged, so a price change or a product you delist is
+  picked up automatically. A delisted product makes the plan fail and pause
+  rather than shipping something wrong.
+- **A declined card** retries after 3 days, up to 3 attempts, then pauses the
+  plan and emails the customer. It never keeps hammering a dead card.
+- **Double-charging is guarded twice**: a plan is locked for the duration of its
+  run (so two overlapping triggers can't both charge it), and the order reference
+  is stamped on the Braintree transaction *before* the charge, so a run that
+  crashes mid-payment recognises the completed charge instead of repeating it.
+- **Deleting a customer** in admin now also deletes their plans — otherwise the
+  scheduler would keep charging a card for an account that no longer exists.
+- **Crypto can't be auto-shipped** (there's no stored payment method to charge),
+  so the Bitcoin option hides itself while auto-ship is ticked.
+- **Loyalty points** are earned on every auto-ship order, same as a normal one.
+
+## Settings you can tune
+
+All optional, all set as Render environment variables — see `server/.env.example`
+for the full list with defaults:
+
+| Variable | Default | What it does |
+|---|---|---|
+| `SUBSCRIPTION_MIN_DAYS` / `MAX_DAYS` | 7 / 180 | The range customers may choose |
+| `SUBSCRIPTION_RETRY_DAYS` | 3 | Wait before retrying a declined charge |
+| `SUBSCRIPTION_MAX_FAILS` | 3 | Declines before the plan auto-pauses |
+| `SUBSCRIPTION_REMINDER_DAYS` | 3 | Days of notice before each charge |
+
+If you ever want to add a subscribe-and-save discount, that's a small change to
+`server/pricing.js` plus the terms text — say the word.
