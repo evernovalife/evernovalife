@@ -273,13 +273,23 @@ function createVialSVG(product) {
    ⭐ PHOTOREALISTIC VIAL = real photo + Ever Nova Life label overlay
    (overlay covers the stock label; per-product name/qty)
    ============================================================ */
+/* Where a built-in product's vial photo lives. WebP at ~900px — a .png of the
+   same image sits beside it at the same size, both for older browsers (via the
+   onerror fallback path) and so nothing that still asks for .png downloads the
+   original 2.9MB master. The masters stay in assets/vials/_base/. */
+function vialPhotoSrc(id) {
+  return `assets/vials/${id}.webp`;
+}
+
 function createVialPhoto(product) {
   const uid = 'p' + (++_vialCounter);
   const name = product.name || '';
   const nameSize = name.length > 22 ? 13 : name.length > 14 ? 16 : 21;
-  // Use the real labelled-vial photo (assets/vials/<id>.png). If it's missing,
-  // fall back to the generic vial + generated Aura label overlay below.
-  const realSrc = product.image || `assets/vials/${product.id}.png`;
+  // Use the real labelled-vial photo. WebP: ~64KB against the 2.9MB PNG these
+  // started as, at HIGHER fidelity — eight of them on the catalog page is the
+  // difference between a 23MB page and a 0.5MB one. A browser too old for WebP
+  // (pre-2020) trips the onerror below and lands on the generic vial + label.
+  const realSrc = product.image || vialPhotoSrc(product.id);
   return `
   <div class="vial-photo">
     <img class="vial-photo-img" src="${realSrc}" alt="${escapeHtml(name)} research vial" loading="lazy"
@@ -1030,7 +1040,7 @@ function initProductDetailPage() {
      switched by the thumbnails underneath — so the report is visible right
      beside the product instead of below the fold. The COA view and its thumb
      stay hidden until revealCoaDocument() confirms the file is on the server. */
-  const vialSrc = product.image || `assets/vials/${product.id}.png`;
+  const vialSrc = product.image || vialPhotoSrc(product.id);
   root.innerHTML = `
     <div class="product-detail-side">
       <div class="product-detail-media glass">
