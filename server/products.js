@@ -52,7 +52,7 @@ const BACKFILL_FIELDS = ['coa'];
 
    HOW TO CHANGE A PRICE: edit js/products-data.js, bump the number below,
    deploy. (Or just edit it in admin-products.html and leave this alone.) */
-const SEED_SYNC_VERSION = 1;
+const SEED_SYNC_VERSION = 2;   // v2 (2026-08-02): MOTS-C → $100, was-price dropped
 const SYNC_FILE = path.join(DATA_DIR, 'products.sync.json');
 const SYNCED_FIELDS = ['price', 'originalPrice'];
 

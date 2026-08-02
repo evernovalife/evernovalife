@@ -60,12 +60,13 @@ test('a stale store is brought back to the seed prices on first read', () => {
   }
 });
 
-test('the five repriced products are exactly what the catalog says', () => {
+test('the repriced products are exactly what the catalog says', () => {
   // The prices this sync exists to deliver — spelled out so a bad seed edit
   // fails here rather than on the shop.
   const expected = {
     3: 85,     // GHK-Cu (Copper Peptide)
     4: 125,    // Tesamorelin / Ipamorelin Blend
+    5: 100,    // MOTS-C
     6: 130,    // BPC-157 / TB-500 Blend
     7: 150,    // KLOW Blend
     8: 80      // NAD+
