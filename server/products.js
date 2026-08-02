@@ -37,6 +37,64 @@ function ensureDir() {
    the store — including one an admin edited — always wins. */
 const BACKFILL_FIELDS = ['coa'];
 
+/* ---- One-time price re-sync from the static catalog ----
+   products.json is written ONCE, on a server's first run. That means a price
+   changed in js/products-data.js afterwards never reaches a live deployment:
+   the storefront and checkout both price from THIS store, so the edit looks
+   applied in the repo and does nothing to the shop. (That is exactly how the
+   Aug 2026 price change was lost.)
+
+   "Seed always wins" isn't the fix either — an admin editing a price in
+   admin-products.html has to keep it. So the seed only wins on demand:
+   bump SEED_SYNC_VERSION, and the next deploy re-applies the seed's price and
+   originalPrice to the BUILT-IN products exactly once, recording the version
+   it applied beside the store. No bump → admin edits are never touched.
+
+   HOW TO CHANGE A PRICE: edit js/products-data.js, bump the number below,
+   deploy. (Or just edit it in admin-products.html and leave this alone.) */
+const SEED_SYNC_VERSION = 1;
+const SYNC_FILE = path.join(DATA_DIR, 'products.sync.json');
+const SYNCED_FIELDS = ['price', 'originalPrice'];
+
+function lastSyncVersion() {
+  try {
+    const v = Number(JSON.parse(fs.readFileSync(SYNC_FILE, 'utf8')).version);
+    return Number.isFinite(v) ? v : 0;
+  } catch (e) {
+    return 0;   // never synced (or unreadable) → treat as version 0
+  }
+}
+function recordSyncVersion(v) {
+  ensureDir();
+  const tmp = SYNC_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify({ version: v, appliedAt: new Date().toISOString() }, null, 2));
+  fs.renameSync(tmp, SYNC_FILE);
+}
+
+/* Re-apply seed pricing to the built-in products, once per version bump.
+   Returns true when something actually changed (so the caller saves). */
+function syncPricesFromSeed(list) {
+  if (lastSyncVersion() >= SEED_SYNC_VERSION) return false;
+  const seedById = new Map(SEED.map(s => [Number(s.id), s]));
+  let changed = false;
+  for (const item of list) {
+    const seed = seedById.get(Number(item.id));
+    if (!seed) continue;                       // admin-added product — not ours to touch
+    for (const field of SYNCED_FIELDS) {
+      const want = seed[field] === undefined ? null : seed[field];
+      const have = item[field] === undefined ? null : item[field];
+      if (want === have) continue;
+      // Loud on purpose: a price moving on its own should be visible in the log.
+      console.log(`[products] seed sync v${SEED_SYNC_VERSION} · #${item.id} ${item.name} · ${field}: ${have} → ${want}`);
+      item[field] = want;
+      changed = true;
+    }
+  }
+  try { recordSyncVersion(SEED_SYNC_VERSION); }
+  catch (e) { console.error('[products] could not record the sync version:', e.message); }
+  return changed;
+}
+
 function backfillFromSeed(list) {
   const seedById = new Map(SEED.map(s => [Number(s.id), s]));
   let changed = false;
@@ -59,14 +117,17 @@ function load() {
   ensureDir();
   if (!fs.existsSync(PRODUCTS_FILE)) {
     try { save(SEED); } catch (e) { /* fall through to in-memory seed */ }
+    // A store written from the seed IS at the current version — nothing to re-apply.
+    try { recordSyncVersion(SEED_SYNC_VERSION); } catch (e) { /* re-applying later is harmless */ }
     return SEED.map(p => ({ ...p }));
   }
   try {
     const arr = JSON.parse(fs.readFileSync(PRODUCTS_FILE, 'utf8'));
     if (!Array.isArray(arr)) return SEED.map(p => ({ ...p }));
-    // Persist the backfill so it happens once, not on every read.
-    if (backfillFromSeed(arr)) {
-      try { save(arr); } catch (e) { console.error('[products] backfill not saved:', e.message); }
+    // Persist both fix-ups so they happen once, not on every read.
+    const touched = [backfillFromSeed(arr), syncPricesFromSeed(arr)].some(Boolean);
+    if (touched) {
+      try { save(arr); } catch (e) { console.error('[products] seed fix-ups not saved:', e.message); }
     }
     return arr;
   } catch (e) {

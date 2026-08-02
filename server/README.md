@@ -294,6 +294,33 @@ card data never touches your page or server (keeps you in the simplest PCI scope
 **SAQ A**). PayPal and Venmo appear as buttons inside the same box once enabled on
 your merchant account.
 
+## Changing a price (read this before editing prices)
+
+The catalog has **two layers**, and only one of them is live:
+
+| Layer | File | Role |
+|---|---|---|
+| Seed | `js/products-data.js` | the built-in catalog, in git |
+| Store | `products.json` on `DATA_DIR` | what the shop actually reads and charges |
+
+The store is written **once**, on a server's first run. After that, editing the
+seed changes nothing on a running site — `/api/products` and `pricing.js` both
+read the store, so the shop keeps the old price and the edit looks applied.
+
+Two ways to change a price, both fine:
+
+1. **In the admin UI** — `admin-products.html` → edit → save. Live immediately,
+   no deploy. Best for one-off changes.
+2. **In the seed** — edit `js/products-data.js`, then **bump `SEED_SYNC_VERSION`
+   in `server/products.js`** and deploy. On the next read the seed's `price` and
+   `originalPrice` are re-applied to the built-in products *once*, and the
+   version applied is recorded in `products.sync.json` beside the store. Without
+   the bump, nothing happens. With it, the change is logged:
+   `[products] seed sync v2 · #3 GHK-Cu · price: 39.99 → 85`.
+
+Products an admin **added** are never touched by the sync, and a price an admin
+sets *after* a sync survives — the version has to move again to override it.
+
 ## Notes & next steps
 
 - **Pricing source of truth:** `pricing.js` + `../js/products-data.js`. Update
