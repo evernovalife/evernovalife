@@ -1,28 +1,28 @@
 <svg width="1200" height="630" viewBox="0 0 1200 630" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Ever Nova Life — Where Science Comes Home">
   <defs>
     <linearGradient id="brand" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#4f46e5"/><stop offset="50%" stop-color="#a855f7"/><stop offset="100%" stop-color="#fb7185"/>
+      <stop offset="0%" stop-color="#fbf1c7"/><stop offset="45%" stop-color="#e8c766"/><stop offset="100%" stop-color="#c8991f"/>
     </linearGradient>
     <radialGradient id="blob1" cx="20%" cy="20%" r="60%">
       <stop offset="0%" stop-color="#a855f7" stop-opacity="0.30"/><stop offset="100%" stop-color="#a855f7" stop-opacity="0"/>
     </radialGradient>
     <radialGradient id="blob2" cx="85%" cy="80%" r="60%">
-      <stop offset="0%" stop-color="#fb7185" stop-opacity="0.25"/><stop offset="100%" stop-color="#fb7185" stop-opacity="0"/>
+      <stop offset="0%" stop-color="#d4af37" stop-opacity="0.18"/><stop offset="100%" stop-color="#d4af37" stop-opacity="0"/>
     </radialGradient>
     <radialGradient id="blob3" cx="70%" cy="15%" r="55%">
-      <stop offset="0%" stop-color="#06b6d4" stop-opacity="0.20"/><stop offset="100%" stop-color="#06b6d4" stop-opacity="0"/>
+      <stop offset="0%" stop-color="#7c3aed" stop-opacity="0.26"/><stop offset="100%" stop-color="#7c3aed" stop-opacity="0"/>
     </radialGradient>
   </defs>
 
   <!-- background -->
-  <rect width="1200" height="630" fill="#1e1b4b"/>
+  <rect width="1200" height="630" fill="#07040f"/>
   <rect width="1200" height="630" fill="url(#blob1)"/>
   <rect width="1200" height="630" fill="url(#blob2)"/>
   <rect width="1200" height="630" fill="url(#blob3)"/>
 
   <!-- big compass logo -->
   <svg x="110" y="180" width="280" height="280" viewBox="0 0 100 100">
-    <defs><linearGradient id="ogStarDark" gradientUnits="userSpaceOnUse" x1="50" y1="2" x2="50" y2="98"><stop offset="0%" stop-color="#7c3aed"/><stop offset="50%" stop-color="#a21caf"/><stop offset="100%" stop-color="#d6308a"/></linearGradient><linearGradient id="ogStarLight" gradientUnits="userSpaceOnUse" x1="50" y1="2" x2="50" y2="98"><stop offset="0%" stop-color="#ede9fe"/><stop offset="50%" stop-color="#ffffff"/><stop offset="100%" stop-color="#fce7f3"/></linearGradient></defs>
+    <defs><linearGradient id="ogStarDark" gradientUnits="userSpaceOnUse" x1="50" y1="2" x2="50" y2="98"><stop offset="0%" stop-color="#7c3aed"/><stop offset="50%" stop-color="#a855f7"/><stop offset="100%" stop-color="#c084fc"/></linearGradient><linearGradient id="ogStarLight" gradientUnits="userSpaceOnUse" x1="50" y1="2" x2="50" y2="98"><stop offset="0%" stop-color="#ede9fe"/><stop offset="50%" stop-color="#ffffff"/><stop offset="100%" stop-color="#fce7f3"/></linearGradient></defs>
     <path d="M50.0 50.0 L50.00 0.00 L54.97 37.99 Z" fill="url(#ogStarDark)"/><path d="M50.0 50.0 L70.51 29.49 L62.01 45.03 Z" fill="url(#ogStarDark)"/><path d="M50.0 50.0 L100.00 50.00 L62.01 54.97 Z" fill="url(#ogStarDark)"/><path d="M50.0 50.0 L70.51 70.51 L54.97 62.01 Z" fill="url(#ogStarDark)"/><path d="M50.0 50.0 L50.00 100.00 L45.03 62.01 Z" fill="url(#ogStarDark)"/><path d="M50.0 50.0 L29.49 70.51 L37.99 54.97 Z" fill="url(#ogStarDark)"/><path d="M50.0 50.0 L0.00 50.00 L37.99 45.03 Z" fill="url(#ogStarDark)"/><path d="M50.0 50.0 L29.49 29.49 L45.03 37.99 Z" fill="url(#ogStarDark)"/><path d="M50.0 50.0 L45.03 37.99 L50.00 0.00 Z" fill="url(#ogStarLight)"/><path d="M50.0 50.0 L54.97 37.99 L70.51 29.49 Z" fill="url(#ogStarLight)"/><path d="M50.0 50.0 L62.01 45.03 L100.00 50.00 Z" fill="url(#ogStarLight)"/><path d="M50.0 50.0 L62.01 54.97 L70.51 70.51 Z" fill="url(#ogStarLight)"/><path d="M50.0 50.0 L54.97 62.01 L50.00 100.00 Z" fill="url(#ogStarLight)"/><path d="M50.0 50.0 L45.03 62.01 L29.49 70.51 Z" fill="url(#ogStarLight)"/><path d="M50.0 50.0 L37.99 54.97 L0.00 50.00 Z" fill="url(#ogStarLight)"/><path d="M50.0 50.0 L37.99 45.03 L29.49 29.49 Z" fill="url(#ogStarLight)"/><circle cx="50" cy="50" r="6" fill="url(#ogStarDark)"/><circle cx="50" cy="50" r="2.6" fill="#f5f3ff"/>
   </svg>
 

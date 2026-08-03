@@ -207,9 +207,9 @@ function createVialSVG(product) {
       <stop offset="100%" stop-color="rgba(0,0,0,0.44)"/>
     </linearGradient>
     <linearGradient id="nest_${uid}" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#4f46e5"/>
+      <stop offset="0%" stop-color="#6d28d9"/>
       <stop offset="50%" stop-color="#a855f7"/>
-      <stop offset="100%" stop-color="#fb7185"/>
+      <stop offset="100%" stop-color="#d4af37"/>
     </linearGradient>
     <path id="topArc_${uid}" d="${topArc}"/>
     <path id="botArc_${uid}" d="${botArc}"/>
@@ -273,22 +273,24 @@ function createVialSVG(product) {
    ⭐ PHOTOREALISTIC VIAL = real photo + Ever Nova Life label overlay
    (overlay covers the stock label; per-product name/qty)
    ============================================================ */
-/* Where a built-in product's vial photo lives. WebP at ~900px — a .png of the
-   same image sits beside it at the same size, both for older browsers (via the
-   onerror fallback path) and so nothing that still asks for .png downloads the
-   original 2.9MB master. The masters stay in assets/vials/_base/. */
+/* Where a built-in product's vial photo lives: a bottle-cropped 280×613 WebP
+   (~35KB), with a quantized .png of the same crop beside it for the onerror
+   fallback path. The uncropped 1440×720 masters stay in assets/vials/_base/.
+   VIAL_V busts Cloudflare when the artwork is replaced — bump it whenever the
+   files change, since the filenames never do. */
+const VIAL_V = 3;
 function vialPhotoSrc(id) {
-  return `assets/vials/${id}.webp`;
+  return `assets/vials/${id}.webp?v=${VIAL_V}`;
 }
 
 function createVialPhoto(product) {
   const uid = 'p' + (++_vialCounter);
   const name = product.name || '';
   const nameSize = name.length > 22 ? 13 : name.length > 14 ? 16 : 21;
-  // Use the real labelled-vial photo. WebP: ~64KB against the 2.9MB PNG these
-  // started as, at HIGHER fidelity — eight of them on the catalog page is the
-  // difference between a 23MB page and a 0.5MB one. A browser too old for WebP
-  // (pre-2020) trips the onerror below and lands on the generic vial + label.
+  // Use the real labelled-vial photo. WebP: ~35KB against the ~375KB master
+  // each started as — eight of them on the catalog page keeps it under 0.5MB.
+  // A browser too old for WebP (pre-2020) trips the onerror below and lands on
+  // the generic vial + label.
   const realSrc = product.image || vialPhotoSrc(product.id);
   return `
   <div class="vial-photo">
@@ -297,7 +299,7 @@ function createVialPhoto(product) {
     <svg class="vial-photo-label" viewBox="0 0 200 380" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" preserveAspectRatio="none" style="display:none">
       <defs>
         <linearGradient id="brand_${uid}" x1="0%" y1="0%" x2="100%" y2="0%">
-          <stop offset="0%" stop-color="#6d28d9"/><stop offset="50%" stop-color="#a855f7"/><stop offset="100%" stop-color="#ec4899"/>
+          <stop offset="0%" stop-color="#6d28d9"/><stop offset="50%" stop-color="#a855f7"/><stop offset="100%" stop-color="#d4af37"/>
         </linearGradient>
         <linearGradient id="sD_${uid}" gradientUnits="userSpaceOnUse" x1="50" y1="2" x2="50" y2="98">
           <stop offset="0%" stop-color="#6d28d9"/><stop offset="50%" stop-color="#a21caf"/><stop offset="100%" stop-color="#c0267e"/>
