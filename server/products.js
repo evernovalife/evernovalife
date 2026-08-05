@@ -53,23 +53,43 @@ const BACKFILL_FIELDS = ['coa'];
    HOW TO CHANGE A PRICE: edit js/products-data.js, bump the number below,
    deploy. (Or just edit it in admin-products.html and leave this alone.) */
 const SEED_SYNC_VERSION = 2;   // v2 (2026-08-02): MOTS-C → $100, was-price dropped
+
+/* ---- New products added to the static catalog ----
+   Same problem as the price sync, one step worse: products.json is written once,
+   so a product ADDED to js/products-data.js afterwards never appears on a live
+   deployment at all. Bump this and the next deploy appends the seed products
+   whose id isn't in the store yet, exactly once.
+
+   The trade-off matches the price sync: a bump also brings back a built-in an
+   admin had deleted. Bumping is the only way to publish a new built-in without
+   re-entering it in admin-products.html by hand. */
+const SEED_ADD_VERSION = 1;    // v1 (2026-08-05): HGH 36 IU (#9)
 const SYNC_FILE = path.join(DATA_DIR, 'products.sync.json');
 const SYNCED_FIELDS = ['price', 'originalPrice'];
 
-function lastSyncVersion() {
+function readSyncFile() {
   try {
-    const v = Number(JSON.parse(fs.readFileSync(SYNC_FILE, 'utf8')).version);
-    return Number.isFinite(v) ? v : 0;
+    const o = JSON.parse(fs.readFileSync(SYNC_FILE, 'utf8'));
+    return (o && typeof o === 'object') ? o : {};
   } catch (e) {
-    return 0;   // never synced (or unreadable) → treat as version 0
+    return {};   // never synced (or unreadable) → treat every version as 0
   }
 }
-function recordSyncVersion(v) {
+function lastVersion(key) {
+  const v = Number(readSyncFile()[key]);
+  return Number.isFinite(v) ? v : 0;
+}
+function lastSyncVersion() { return lastVersion('version'); }
+/* Merge, don't overwrite: the price sync and the new-product add each record
+   their own key in this one file, and either may run without the other. */
+function recordVersions(patch) {
   ensureDir();
   const tmp = SYNC_FILE + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify({ version: v, appliedAt: new Date().toISOString() }, null, 2));
+  const next = { ...readSyncFile(), ...patch, appliedAt: new Date().toISOString() };
+  fs.writeFileSync(tmp, JSON.stringify(next, null, 2));
   fs.renameSync(tmp, SYNC_FILE);
 }
+function recordSyncVersion(v) { recordVersions({ version: v }); }
 
 /* Re-apply seed pricing to the built-in products, once per version bump.
    Returns true when something actually changed (so the caller saves). */
@@ -95,6 +115,23 @@ function syncPricesFromSeed(list) {
   return changed;
 }
 
+/* Append seed products the store has never seen, once per version bump.
+   Returns true when something was added (so the caller saves). */
+function addNewSeedProducts(list) {
+  if (lastVersion('addVersion') >= SEED_ADD_VERSION) return false;
+  const have = new Set(list.map(p => Number(p.id)));
+  let changed = false;
+  for (const seed of SEED) {
+    if (have.has(Number(seed.id))) continue;
+    console.log(`[products] seed add v${SEED_ADD_VERSION} · #${seed.id} ${seed.name}`);
+    list.push({ ...seed });
+    changed = true;
+  }
+  try { recordVersions({ addVersion: SEED_ADD_VERSION }); }
+  catch (e) { console.error('[products] could not record the add version:', e.message); }
+  return changed;
+}
+
 function backfillFromSeed(list) {
   const seedById = new Map(SEED.map(s => [Number(s.id), s]));
   let changed = false;
@@ -117,15 +154,16 @@ function load() {
   ensureDir();
   if (!fs.existsSync(PRODUCTS_FILE)) {
     try { save(SEED); } catch (e) { /* fall through to in-memory seed */ }
-    // A store written from the seed IS at the current version — nothing to re-apply.
-    try { recordSyncVersion(SEED_SYNC_VERSION); } catch (e) { /* re-applying later is harmless */ }
+    // A store written from the seed IS at the current versions — nothing to re-apply.
+    try { recordVersions({ version: SEED_SYNC_VERSION, addVersion: SEED_ADD_VERSION }); }
+    catch (e) { /* re-applying later is harmless */ }
     return SEED.map(p => ({ ...p }));
   }
   try {
     const arr = JSON.parse(fs.readFileSync(PRODUCTS_FILE, 'utf8'));
     if (!Array.isArray(arr)) return SEED.map(p => ({ ...p }));
     // Persist both fix-ups so they happen once, not on every read.
-    const touched = [backfillFromSeed(arr), syncPricesFromSeed(arr)].some(Boolean);
+    const touched = [addNewSeedProducts(arr), backfillFromSeed(arr), syncPricesFromSeed(arr)].some(Boolean);
     if (touched) {
       try { save(arr); } catch (e) { console.error('[products] seed fix-ups not saved:', e.message); }
     }

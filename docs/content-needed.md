@@ -22,9 +22,13 @@ Status legend: **NEEDED** = no source found · **VERIFY** = a claim is on the si
 - **Returns policy** — VERIFY. Copy claims "30-day returns on unopened vials". Confirm the real window, conditions, and restocking terms.
 
 ## Quality / documentation (quality.html)
-- **Lots without a published COA** — NEEDED. The COA Library currently documents 5 lots (Retatrutide, MOTS-C, GHK-Cu, BPC-157/TB-500, KLOW). The catalog also lists **NAD+ and the Tesamorelin/Ipamorelin Blend**, which have **no third-party report on file** — their product pages show a "Pending" COA notice. Real Janoshik reports for the current NAD+ and Tesamorelin/Ipamorelin batches are REQUIRED to satisfy the "COA viewable for every product" compliance item. Bacteriostatic Water is exempt — it is a reagent, not a peptide, and its product page states "Not applicable" rather than "Pending".
+- **Lots without a published COA** — NEEDED. The COA Library currently documents 5 lots (Retatrutide, MOTS-C, GHK-Cu, BPC-157/TB-500, KLOW). The catalog also lists **NAD+, the Tesamorelin/Ipamorelin Blend, and HGH 36 IU**, which have **no third-party report on file** — their product pages show a "Pending" COA notice. Real Janoshik reports for the current NAD+, Tesamorelin/Ipamorelin, and HGH batches are REQUIRED to satisfy the "COA viewable for every product" compliance item. Bacteriostatic Water is exempt — it is a reagent, not a peptide, and its product page states "Not applicable" rather than "Pending".
 - **SDS (Safety Data Sheets)** — NEEDED. The footer links "Safety Data Sheets" to quality.html#sds, but no SDS documents exist on the site. Provide real SDS files or relabel the link.
 - **Purity for blends** — Confirmed N/A. Blend lots report identity + measured content only (no single %). This is already reflected in the COA Library.
+
+## Catalog
+- **HGH 36 IU (product #9) price** — NEEDED. Added to the catalog 2026-08-05 with a **placeholder $189.99**. Set the real price in admin-products.html (or edit `js/products-data.js` and bump `SEED_SYNC_VERSION` in `server/products.js`) before promoting the product.
+- **HGH 36 IU lot number** — NEEDED. Listed as `ENL-24009`, following the numbering of the other eight; confirm the real lot printed on the vials.
 
 ## Certifications / standards
 - **Any facility certifications or standards** (e.g. ISO, cGMP) — NEEDED only if you want to claim them. Do **not** publish any certification that cannot be evidenced.

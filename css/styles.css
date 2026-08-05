@@ -654,6 +654,30 @@ h1, h2, h3, h4 { line-height: 1.2; font-weight: 700; letter-spacing: -0.02em; }
   position: static; left: auto; top: auto; width: 100%; height: 100%;
 }
 .vial-photo-label { position: absolute; left: 9%; top: 31%; width: 82%; height: 62%; pointer-events: none; }
+/* turntable clip (assets/video/1–8) — same 280×613 box as the photo, so it
+   drops into the card, the product page and the tilt effect unchanged.
+   Two looks, picked by whether the browser decodes alpha video:
+   · .vial-photo-alpha — the matted WebM. Nothing behind the vial, so it takes
+     the photo's bottle-shaped drop-shadow and floats like the photo did.
+   · without it — the opaque mp4, which carries its own dark set, so it reads
+     as a rounded panel with a cast shadow instead. */
+.vial-photo-video {
+  position: absolute;
+  inset: 0;
+  width: 100%; height: 100%;
+  max-width: none;
+  object-fit: cover; display: block;
+  border-radius: 14px;
+  background: #07040f;
+  box-shadow: 0 16px 30px rgba(0,0,0,0.5);
+  pointer-events: none;         /* the card's own link keeps the click */
+}
+.vial-photo-alpha .vial-photo-video {
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  filter: drop-shadow(0 14px 20px rgba(0,0,0,0.42));
+}
 .product-media .vial-photo { height: 330px; transition: transform 0.4s var(--ease); }
 .product-card:hover .product-media .vial-photo { transform: translateY(-6px) scale(1.03); }
 .product-badge {
@@ -1677,7 +1701,8 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
   will-change:transform;
   -webkit-box-reflect:below 4px linear-gradient(transparent 62%, rgba(0,0,0,0.16));
 }
-.product-media .vial-photo .vial-photo-img{
+.product-media .vial-photo .vial-photo-img,
+.product-media .vial-photo-alpha .vial-photo-video{
   filter:drop-shadow(0 16px 22px rgba(0,0,0,0.48));
   transition:filter .4s var(--ease);
 }
@@ -1702,7 +1727,9 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
   animation-play-state:paused;
 }
 .product-card:hover .product-media .vial-photo .vial-photo-img,
-.product-card:focus-within .product-media .vial-photo .vial-photo-img{
+.product-card:focus-within .product-media .vial-photo .vial-photo-img,
+.product-card:hover .product-media .vial-photo-alpha .vial-photo-video,
+.product-card:focus-within .product-media .vial-photo-alpha .vial-photo-video{
   filter:drop-shadow(0 22px 30px rgba(0,0,0,0.58));
 }
 
@@ -1771,7 +1798,8 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
   -webkit-box-reflect:below 6px linear-gradient(transparent 60%, rgba(0,0,0,0.18));
 }
 /* (5) SILHOUETTE RIM-GLOW on the inner img (depth kept + indigo rim + warm-white key) */
-.product-detail-media .vial-photo .vial-photo-img{
+.product-detail-media .vial-photo .vial-photo-img,
+.product-detail-media .vial-photo-alpha .vial-photo-video{
   filter:drop-shadow(0 18px 26px rgba(0,0,0,0.5));
   transition:filter .3s var(--ease);
 }
@@ -1783,7 +1811,8 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
   animation-play-state:paused;
   width:36%; opacity:0.92; filter:blur(6px);
 }
-.product-detail-media:hover .vial-photo .vial-photo-img{
+.product-detail-media:hover .vial-photo .vial-photo-img,
+.product-detail-media:hover .vial-photo-alpha .vial-photo-video{
   filter:drop-shadow(0 24px 32px rgba(0,0,0,0.58));
 }
 
@@ -1872,6 +1901,23 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
   transition:transform .18s var(--ease);
 }
 
+/* ---- opaque clip boxes: the staging built for the cut-out photo stands down ----
+   The pedestal (float + mirror reflection) assumes a bottle with nothing behind
+   it. The opaque clip is a panel that already contains its own set and floor, so
+   the mirror would repeat that panel and the float would levitate a rectangle.
+   The halo, ground shadow, sheen and cursor tilt still read correctly and stay.
+   A matted clip (.vial-photo-alpha) IS a cut-out, so it keeps the full pedestal
+   and is excluded here. */
+.product-media .vial-photo-has-video:not(.vial-photo-alpha),
+.product-detail-media .vial-photo-has-video:not(.vial-photo-alpha){
+  -webkit-box-reflect:none;
+  animation:none;
+}
+/* hover still lifts, it just has no float to pause */
+.product-detail-media:hover .vial-photo-has-video:not(.vial-photo-alpha){
+  transform:translateY(-6px) rotateX(var(--pn-ty)) rotateY(var(--pn-tx)) !important;
+}
+
 /* ---- reduced-motion: explicitly null the float/breathing (global rule only clamps duration) ---- */
 @media (prefers-reduced-motion: reduce){
   .product-media .vial-photo,
@@ -1924,7 +1970,9 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
         pn-float + the hover tilt). Child transform composes on top of the
         parent float/tilt and never disturbs the reflection or label. ---- */
 .product-media .vial-photo .vial-photo-img.pn-pop,
-.product-detail-media .vial-photo .vial-photo-img.pn-pop{
+.product-detail-media .vial-photo .vial-photo-img.pn-pop,
+.product-media .vial-photo .vial-photo-video.pn-pop,
+.product-detail-media .vial-photo .vial-photo-video.pn-pop{
   animation:pn-cart-pop .42s var(--ease);
   will-change:transform;
 }
@@ -1999,6 +2047,8 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
 @media (prefers-reduced-motion: reduce){
   .product-media .vial-photo .vial-photo-img.pn-pop,
   .product-detail-media .vial-photo .vial-photo-img.pn-pop,
+  .product-media .vial-photo .vial-photo-video.pn-pop,
+  .product-detail-media .vial-photo .vial-photo-video.pn-pop,
   .cart-badge.pn-bump,
   .wish-btn.pn-burst svg,
   .wish-btn.pn-burst::before{ animation:none !important; }
@@ -2057,9 +2107,11 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
    shine uses the still-free ::before (clipped to the box, pointer-events:none
    → never blocks the click; the SVG label at z-index:3 stays on top). */
 .product-detail-media .vial-photo{ cursor:pointer; }   /* affords the click */
-.product-detail-media .vial-photo .vial-photo-img{ transform-origin:50% 90%; }
+.product-detail-media .vial-photo .vial-photo-img,
+.product-detail-media .vial-photo .vial-photo-video{ transform-origin:50% 90%; }
 
-.product-detail-media .vial-photo.pn-poke .vial-photo-img{
+.product-detail-media .vial-photo.pn-poke .vial-photo-img,
+.product-detail-media .vial-photo.pn-poke .vial-photo-video{
   animation:pn-poke .42s var(--ease);
   will-change:transform;
 }
@@ -2098,6 +2150,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
         :active keeps a faint instant cue without motion. ---- */
 @media (prefers-reduced-motion: reduce){
   .product-detail-media .vial-photo.pn-poke .vial-photo-img,
+  .product-detail-media .vial-photo.pn-poke .vial-photo-video,
   .product-detail-media .vial-photo.pn-poke::before{ animation:none !important; }
   .product-media a:active .vial-photo-img{ transform:scale(0.985); }
   .btn:active{ transform:scale(0.99); }

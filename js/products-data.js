@@ -1,6 +1,6 @@
 /* ============================================================
    EVER NOVA LIFE — Product Catalog
-   8 SKUs · For in-vitro research and laboratory use only
+   9 SKUs · For in-vitro research and laboratory use only
    Each product: id, name, category, categoryName, price,
    originalPrice, purity, quantity, description, specs{},
    coa{}, inStock, badge, featured, lot
@@ -280,6 +280,35 @@ const PRODUCTS = [
     inStock: true,
     badge: 'New',
     featured: false
+  },
+  {
+    id: 9,
+    name: 'HGH 36 IU',
+    category: 'growth',
+    categoryName: 'Growth Factors',
+    price: 189.99,
+    originalPrice: null,
+    purity: 'ID + content',
+    quantity: '36 IU',
+    lot: 'ENL-24009',
+    description: 'Recombinant 191-amino-acid human growth hormone (somatropin), supplied lyophilized at 36 IU per vial as a reference protein for in-vitro growth-factor-pathway research.',
+    specs: {
+      'Sequence': '191 amino acids (recombinant somatropin)',
+      'Molecular Weight': '22,124 Da',
+      'Potency': '36 IU per vial (≈12mg)',
+      'Form': 'Lyophilized powder',
+      'Storage': '-20°C, desiccated',
+      'Reconstitution': 'Bacteriostatic water'
+    },
+    coa: {
+      status: 'pending',
+      lab: 'Janoshik Analytical',
+      note: 'An independent report for the current HGH batch has not been published yet. This item is not released for order until its report is on file.',
+      verifyUrl: 'https://janoshik.com'
+    },
+    inStock: true,
+    badge: 'New',
+    featured: true
   }
 ];
 

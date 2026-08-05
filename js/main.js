@@ -278,15 +278,107 @@ function createVialSVG(product) {
    fallback path. The uncropped 1440×720 masters stay in assets/vials/_base/.
    VIAL_V busts Cloudflare when the artwork is replaced — bump it whenever the
    files change, since the filenames never do. */
-const VIAL_V = 3;
+const VIAL_V = 4;
 function vialPhotoSrc(id) {
   return `assets/vials/${id}.webp?v=${VIAL_V}`;
 }
 
-function createVialPhoto(product) {
+/* The turntable clip that stands in for the photo on the card and the product
+   page: a 420×920 bottle-crop of the master in assets/video/_base/. Two builds
+   of every clip ship:
+
+     N.webm  VP9 with an alpha channel — the set is matted out, so the vial
+             floats on the card exactly like the cut-out photo it replaced.
+     N.mp4   H.264, the original opaque frame, for browsers without alpha video.
+
+   Both are keyed by PRODUCT id — the 2026-08-04 masters are named in the order
+   they were shot, which is not the same order. Only the nine built-ins have
+   footage; anything added through the admin product manager keeps the still
+   photo.
+   VIDEO_V busts Cloudflare when a clip is re-published, since the filenames
+   never change. */
+const VIDEO_V = 2;
+const VIAL_VIDEO_IDS = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+function vialVideoSrc(id) { return `assets/video/${id}.webm?v=${VIDEO_V}`; }
+function vialPosterSrc(id) { return `assets/video/${id}-alpha.webp?v=${VIDEO_V}`; }
+function vialVideoSrcOpaque(id) { return `assets/video/${id}.mp4?v=${VIDEO_V}`; }
+function vialPosterSrcOpaque(id) { return `assets/video/${id}.jpg?v=${VIDEO_V}`; }
+function hasVialVideo(product) {
+  return !product.image && VIAL_VIDEO_IDS.indexOf(Number(product.id)) !== -1;
+}
+
+/* Does this browser DECODE alpha in WebM, or merely accept the container?
+   canPlayType can't answer that — Safari reports VP9/WebM as playable and then
+   throws the alpha channel away, which would paint our matted clips as a black
+   slab. So decode a 2-frame, fully transparent 8×8 clip and read the pixel back.
+   Resolves once, and the answer is shared by every clip on the page. */
+let _vialAlphaProbe = null;
+const VIAL_ALPHA_TEST = 'data:video/webm;base64,GkXfo59ChoEBQveBAULygQRC84EIQoKEd2VibUKHgQJChYECGFOAZwEAAAAAAAJDEU2bdLpNu4tTq4QVSalmU6yBoU27i1OrhBZUrmtTrIHWTbuMU6uEElTDZ1OsggEnTbuMU6uEHFO7a1OsggIt7AEAAAAAAABZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVSalmsCrXsYMPQkBNgIxMYXZmNjEuNy4xMDBXQYxMYXZmNjEuNy4xMDBEiYhAaQAAAAAAABZUrmvMrgEAAAAAAABD14EBc8WIeqDZlU65F3ScgQAitZyDdW5kiIEAhoVWX1ZQOYOBASPjg4QF9eEA4JSwgQi6gQiagQJTwIEBVbCEVbmBARJUw2dAf3Nzn2PAgGfImUWjh0VOQ09ERVJEh4xMYXZmNjEuNy4xMDBzc9pjwItjxYh6oNmVTrkXdGfIpUWjh0VOQ09ERVJEh5hMYXZjNjEuMTkuMTAwIGxpYnZweC12cDlnyKFFo4hEVVJBVElPTkSHkzAwOjAwOjAwLjIwMDAwMDAwMAAfQ7Z1/OeBAKDEoZ6BAAAAgkmDQgAAcAB2ADgkHBj2AAAgIAARv/+/YAB1oaGmn+6BAaWagkmDQgAAcAB2ADgkHBj2AAAgAAARv/82wACgsaGTgQBkAIYAQJIcAFkAAAMgAABLQHWhlqaU7oEBpY+GAECSHABZAAADIAAAS0D7gZwcU7trkbuPs4EAt4r3gQHxggGs8IED';
+function vialAlphaSupported() {
+  if (_vialAlphaProbe) return _vialAlphaProbe;
+  _vialAlphaProbe = new Promise(resolve => {
+    const v = document.createElement('video');
+    if (!v.canPlayType || !v.canPlayType('video/webm; codecs="vp9"')) return resolve(false);
+    let settled = false;
+    const done = ok => { if (!settled) { settled = true; resolve(ok); } };
+    setTimeout(() => done(false), 2500);          // never hang the page on this
+    v.muted = true; v.playsInline = true; v.preload = 'auto';
+    v.addEventListener('error', () => done(false));
+    v.addEventListener('loadeddata', () => {
+      try {
+        const c = document.createElement('canvas');
+        c.width = c.height = 8;
+        const ctx = c.getContext('2d');
+        ctx.clearRect(0, 0, 8, 8);
+        ctx.drawImage(v, 0, 0, 8, 8);
+        done(ctx.getImageData(4, 4, 1, 1).data[3] < 40);
+      } catch (e) { done(false); }                // tainted canvas etc.
+    });
+    v.src = VIAL_ALPHA_TEST;
+    v.load();
+  });
+  return _vialAlphaProbe;
+}
+
+/* A clip that won't load (404 after a product id changes, or a browser that
+   refuses the file) drops back to the still photo rather than an empty box. */
+function vialVideoFallback(video) {
+  const box = video.parentNode;
+  if (!box) return;
+  const still = video.getAttribute('data-still');
+  video.remove();
+  if (!still || box.querySelector('.vial-photo-img')) return;
+  box.classList.remove('vial-photo-has-video', 'vial-photo-alpha');
+  const img = document.createElement('img');
+  img.className = 'vial-photo-img';
+  img.src = still;
+  img.alt = video.getAttribute('data-alt') || '';
+  box.insertBefore(img, box.firstChild);
+}
+
+/* Opts: { video: true } on the surfaces big enough to be worth a clip (the
+   product card and the product page). Cart rows and the mini-cart thumb stay
+   on the still — they're 48–86px tall. */
+function createVialPhoto(product, opts) {
   const uid = 'p' + (++_vialCounter);
   const name = product.name || '';
   const nameSize = name.length > 22 ? 13 : name.length > 14 ? 16 : 21;
+
+  if (opts && opts.video && hasVialVideo(product)) {
+    // Starts on the matted build, because that is what most browsers can show
+    // and it is the one that matches the rest of the page. initVialVideos()
+    // swaps in the opaque pair below before anything plays if the alpha probe
+    // comes back negative.
+    return `
+  <div class="vial-photo vial-photo-has-video vial-photo-alpha">
+    <video class="vial-photo-video" src="${vialVideoSrc(product.id)}" poster="${vialPosterSrc(product.id)}"
+           muted loop playsinline preload="none" disablepictureinpicture tabindex="-1"
+           aria-label="${escapeHtml(name)} research vial, rotating"
+           data-mp4="${vialVideoSrcOpaque(product.id)}" data-poster="${vialPosterSrcOpaque(product.id)}"
+           data-still="${vialPhotoSrc(product.id)}" data-alt="${escapeHtml(name)} research vial"
+           onerror="vialVideoFallback(this)"></video>
+  </div>`;
+  }
   // Use the real labelled-vial photo. WebP: ~35KB against the ~375KB master
   // each started as — eight of them on the catalog page keeps it under 0.5MB.
   // A browser too old for WebP (pre-2020) trips the onerror below and lands on
@@ -342,6 +434,55 @@ function createVialPhoto(product) {
   </div>`;
 }
 
+/* Clips fetch nothing until they scroll into view (preload="none" + the
+   observer below), so a full catalog page still starts at its poster weight
+   and only the vials you actually reach cost a download. Off-screen clips are
+   paused again so background tabs and long pages stay cheap.
+
+   Reduced-motion does NOT suppress or shorten the clip — this is the product
+   itself, not decoration, and "Animation effects: off" is a common Windows
+   setting that would otherwise leave a big share of visitors looking at a
+   still. Every visitor gets the same continuous turntable; going off screen is
+   what stops it. Data Saver still gets the poster and no download at all. */
+let _vialVideoObserver = null;
+function playVialVideo(video) {
+  if (video.preload === 'none') video.preload = 'auto';
+  video.loop = true;
+  const p = video.play();
+  if (p && p.catch) p.catch(() => {});   // autoplay refused → the poster stands
+}
+function useOpaqueVialVideo(video) {
+  if (video.parentNode) video.parentNode.classList.remove('vial-photo-alpha');
+  if (video.dataset.poster) video.poster = video.dataset.poster;
+  if (video.dataset.mp4) video.src = video.dataset.mp4;
+}
+function initVialVideos(scope) {
+  const fresh = Array.prototype.slice
+    .call((scope || document).querySelectorAll('.vial-photo-video'))
+    .filter(v => !v.dataset.vvBound);
+  if (!fresh.length) return;
+  fresh.forEach(v => { v.dataset.vvBound = '1'; });
+
+  if (navigator.connection && navigator.connection.saveData) return;
+
+  // Settle the alpha question before anything is fetched — preload="none" means
+  // no clip has downloaded yet, so switching builds here costs nothing.
+  vialAlphaSupported().then(alpha => {
+    if (!alpha) fresh.forEach(useOpaqueVialVideo);
+
+    if (!('IntersectionObserver' in window)) { fresh.forEach(playVialVideo); return; }
+    if (!_vialVideoObserver) {
+      _vialVideoObserver = new IntersectionObserver(entries => {
+        entries.forEach(e => {
+          if (e.isIntersecting) playVialVideo(e.target);
+          else if (!e.target.paused) e.target.pause();
+        });
+      }, { rootMargin: '150px 0px', threshold: 0.2 });
+    }
+    fresh.forEach(v => _vialVideoObserver.observe(v));
+  });
+}
+
 /* ============================================================
    PRODUCT CARD
    ============================================================ */
@@ -377,7 +518,7 @@ function createProductCard(product) {
     <div class="product-media">
       ${badge}
       <button class="wish-btn ${wishlist.has(product.id) ? 'active' : ''}" data-id="${product.id}" aria-label="Save to wishlist" aria-pressed="${wishlist.has(product.id)}" onclick="toggleWishlist(${product.id}, this)">${iconHeart()}</button>
-      <a href="product.html?id=${product.id}" aria-label="${escapeHtml(product.name)}">${createVialPhoto(product)}</a>
+      <a href="product.html?id=${product.id}" aria-label="${escapeHtml(product.name)}">${createVialPhoto(product, { video: true })}</a>
     </div>
     <div class="product-info">
       <span class="product-cat">${escapeHtml(product.categoryName)}</span>
@@ -426,7 +567,7 @@ function pnCartCelebrate(sourceEl) {
   if (!media) media = document.querySelector('.product-detail-media');
   if (!media) return;
 
-  const img = media.querySelector('.vial-photo .vial-photo-img');
+  const img = media.querySelector('.vial-photo .vial-photo-img, .vial-photo .vial-photo-video');
   if (img) {
     img.classList.remove('pn-pop');
     void img.offsetWidth;            // restart the keyframe
@@ -479,6 +620,7 @@ function renderProducts(list, container) {
     return;
   }
   container.innerHTML = list.map(createProductCard).join('');
+  initVialVideos(container);
 }
 
 /* ============================================================
@@ -1046,7 +1188,7 @@ function initProductDetailPage() {
   root.innerHTML = `
     <div class="product-detail-side">
       <div class="product-detail-media glass">
-        <div class="detail-view detail-view-vial is-active">${createVialPhoto(product)}</div>
+        <div class="detail-view detail-view-vial is-active">${createVialPhoto(product, { video: true })}</div>
         <button type="button" class="detail-view detail-view-coa" hidden>
           <img class="detail-coa-img" alt="Certificate of analysis for ${escapeHtml(product.name)}">
           <span class="coa-doc-hint">Click to zoom</span>
@@ -1094,6 +1236,7 @@ function initProductDetailPage() {
     </div>`;
 
   initDetailGallery(root);
+  initVialVideos(root);
   renderProductNav(root, product);
   revealCoaDocument(root, product.coa);   // show the report only if the file is there
 
@@ -2095,6 +2238,7 @@ function renderWishlistPage() {
     return;
   }
   root.innerHTML = `<div class="products-grid">${items.map(createProductCard).join('')}</div>`;
+  initVialVideos(root);
 }
 
 /* ============================================================
@@ -2310,4 +2454,5 @@ if (typeof window !== 'undefined') {
   window.createProductCard = createProductCard;
   window.addToCartById = addToCartById;
   window.toggleWishlist = toggleWishlist;
+  window.vialVideoFallback = vialVideoFallback;   // called from the clip's onerror
 }
