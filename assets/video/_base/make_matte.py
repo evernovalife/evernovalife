@@ -15,16 +15,17 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SCRATCH = HERE   # previews land beside the masters
 SITE_BG = np.array([0x0f, 0x04, 0x07], np.float32)
 
-# product id -> master file stem. The 2026-08-04 masters arrived named in shoot
-# order (5/6/7 are products 6/7/5); the 2026-08-05 re-renders arrived named by
-# PRODUCT id instead, so they are stored as `p<id>.mp4` and no longer shuffle.
-MAP = {1: 'p1', 2: '2', 3: '3', 4: '4', 5: '7', 6: '5', 7: 'p7', 8: '8', 9: 'p9'}
+# product id -> master file stem. The 2026-08-06 re-shoot replaced every clip
+# and arrived named by PRODUCT id, so the mapping is now the identity and no
+# master ever needs re-shuffling. Earlier sets live in `_superseded/`.
+MAP = {i: f'p{i}' for i in range(1, 10)}
 
 # Ids whose master is framed by the BOTTLE (see fit_window) rather than by the
-# shared centred crop. The 2026-08-05 re-renders sit at three different zooms —
-# one is landscape, one has the bottle running past the frame edge — so a fixed
-# centre crop either clips them or leaves them tiny.
-FIT = {1, 7, 9}
+# shared centred crop. The 2026-08-06 masters are portrait and near-square-ish
+# in two different aspects (496x864, and 560x752 for KLOW), so a fixed centre
+# crop of the output aspect either clips the wider one or leaves the rest small.
+# Framing every clip from its own matte normalises the bottle to 88%.
+FIT = set(MAP)
 
 OW, OH = 420, 920
 ASPECT = 280 / 613

@@ -20,7 +20,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/styles.css?v=41">
+  <link rel="stylesheet" href="css/styles.css?v=42">
   <!-- 21+ age gate: runs before anything paints -->
   <script src="js/age-gate.js?v=37"></script>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Cpath d='M20.00 1.00 L21.91 15.38 L27.78 12.22 L24.62 18.09 L39.00 20.00 L24.62 21.91 L27.78 27.78 L21.91 24.62 L20.00 39.00 L18.09 24.62 L12.22 27.78 L15.38 21.91 L1.00 20.00 L15.38 18.09 L12.22 12.22 L18.09 15.38 Z' fill='%23a855f7'/%3E%3C/svg%3E">
@@ -86,12 +86,12 @@
       <div class="content-card glass">
         <h2>Our Testing Approach</h2>
         <p>Material offered by Ever Nova Life is analyzed by an independent laboratory, and the original reports are published in the COA Library below.</p>
-        <table class="rate-table">
+        <div class="table-scroll"><table class="rate-table">
           <tbody>
             <tr><td><strong>What is tested</strong></td><td>Identity and content (mg) for every listed lot; purity (%) is reported for single-peptide lots. Blend lots are analyzed for the identity and content of each component (purity not included).</td></tr>
             <tr><td><strong>Laboratory</strong></td><td>Janoshik Analytical (janoshik.com) — an independent third-party laboratory. Each report is verifiable by its task number at janoshik.com.</td></tr>
           </tbody>
-        </table>
+        </table></div>
         <p style="margin-top:1rem;font-size:.95rem;opacity:.85">The reports below are original third-party laboratory documents, provided in addition to and clearly distinguished from any internal release notes.</p>
       </div>
     </div>
@@ -141,7 +141,7 @@
         </form>
         <p style="font-size:.9rem;opacity:.8">Test Date = sample received · Report Date = analysis conducted. <strong>Purity</strong> is shown only where a percentage was actually reported; blend lots are reported by identity and measured content per component. <strong>Documentation</strong> is labeled Available, Pending, Not&nbsp;Provided, or Not&nbsp;Applicable.</p>
         <div style="overflow-x:auto">
-          <table class="rate-table">
+          <div class="table-scroll"><table class="rate-table">
             <thead>
               <tr>
                 <th>Product</th><th>Batch / Lot #</th><th>Report ID</th><th>Test Date</th><th>Report Date</th><th>Purity</th><th>Measured content</th><th>Documentation</th><th>Laboratory</th><th>Report</th>
@@ -164,20 +164,20 @@
                 <td>Retatrutide</td><td>CS-re10-0322</td><td>#137638</td><td>2026-04-07</td><td>2026-04-10</td><td>99.786%</td><td>Retatrutide 11.86 mg</td><td><strong style="color:#22c55e">Available</strong></td><td>Janoshik</td><td><a href="https://janoshik.com" target="_blank" rel="noopener">Verify #137638</a></td>
               </tr>
             </tbody>
-          </table>
+          </table></div>
         </div>
         <p style="margin-top:1rem;font-size:.9rem;opacity:.85">All reports above are original documents issued by Janoshik, an independent laboratory. Each is verifiable by its task number at <a href="https://janoshik.com" target="_blank" rel="noopener">janoshik.com</a>. They reference batches produced by the manufacturing source (cocerpeptides.com).</p>
         <h3 style="margin-top:1.75rem">Other catalog items</h3>
         <p style="font-size:.9rem;opacity:.85">Documentation status for catalog items not listed above:</p>
         <div style="overflow-x:auto">
-          <table class="rate-table">
+          <div class="table-scroll"><table class="rate-table">
             <thead><tr><th>Product</th><th>Documentation</th><th>Note</th></tr></thead>
             <tbody>
               <tr><td>Bacteriostatic Water</td><td><strong style="opacity:.7">Not applicable</strong></td><td>Laboratory reagent; identity/purity COA does not apply.</td></tr>
               <tr><td>Tesamorelin / Ipamorelin (blend)</td><td><strong style="color:#f59e0b">Pending</strong></td><td>Independent report not yet published for the current batch.</td></tr>
               <tr><td>NAD+</td><td><strong style="color:#f59e0b">Pending</strong></td><td>Independent report not yet published for the current batch.</td></tr>
             </tbody>
-          </table>
+          </table></div>
         </div>
       </div>
     </div>
@@ -256,6 +256,6 @@
   <script src="js/products-data.js?v=35"></script>
   <script src="js/config.js?v=35"></script>
   <script src="js/cart.js?v=35"></script>
-  <script src="js/main.js?v=40"></script>
+  <script src="js/main.js?v=42"></script>
 </body>
 </html>

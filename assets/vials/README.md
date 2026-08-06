@@ -1,35 +1,40 @@
 # Product vial photos
 
-**Drop new masters in `_base/`, not here.** `_base/N.png` holds the render exactly
-as exported; `N.webp` + `N.png` in this folder are the published, bottle-cropped
-web copies generated from it. The site loads `N.webp`.
+**These are generated from the video masters — there is no separate photo
+render any more.** As of 2026-08-06 every `N.webp` + `N.png` here is the matted
+first frame of `assets/video/_base/p<id>.mp4`, cut with exactly the rectangle the
+clip uses and scaled to 280×613. The site loads `N.webp`; the quantized `N.png`
+beside it is the `onerror` fallback.
 
-Current masters (2026-08-03, black/gold/violet label) are 1440×720 with the
-bottle at bbox **580,54 → 860,667**. To republish after replacing a master:
+That is deliberate. The old stills came from their own 1440×720 render (`_base/`,
+2026-08-03) whose label artwork drifted from the footage — gold caps against the
+clip's violet ones, and a tight crop that ran the product name off the label —
+so a cart row showed a visibly different bottle than the card above it.
+
+To republish after replacing a master (which now means replacing the **video**
+master):
+
+```bash
+python assets/video/_base/publish_still.py        # all nine
+python assets/video/_base/publish_still.py 3 7    # or just these ids
+```
+
+then quantize the fallback PNGs, which the script writes full-colour:
 
 ```python
 from PIL import Image
-BOX = (580, 54, 860, 667)          # re-derive if the render framing changes
-for i in range(1, 9):
-    im = Image.open(f'_base/{i}.png').convert('RGBA').crop(BOX)
-    im.save(f'{i}.webp', 'WEBP', quality=88, method=6)
-    im.quantize(colors=256, method=Image.FASTOCTREE).save(f'{i}.png', 'PNG', optimize=True)
-```
-
-`9.*` has **no PNG master** — HGH was only ever rendered as video, so its still
-is the matted first frame of `assets/video/_base/p9.mp4`, padded out to the
-280×613 box so the vial keeps its true proportions:
-
-```python
-# from assets/video/_base/
-from make_matte import read_frames, best_matte
-fs = read_frames('p9.mp4'); a, *_ = best_matte(fs)   # alpha for the whole clip
-# crop fs[0]+a to the matte bbox, pad to 280/613, resize, save .webp + quantized .png
+for i in range(1, 10):
+    Image.open(f'{i}.png').convert('RGBA') \
+        .quantize(colors=256, method=Image.FASTOCTREE) \
+        .save(f'{i}.png', 'PNG', optimize=True)     # ~155KB -> ~34KB
 ```
 
 Then bump `VIAL_V` in `js/main.js` (and the `?v=` in `admin-products.html`) —
 the filenames never change, so Cloudflare will otherwise serve the old artwork.
-`.vial-photo`'s `aspect-ratio` in `css/styles.css` must match the crop.
+`.vial-photo`'s `aspect-ratio` in `css/styles.css` must match the 280×613 crop.
+
+`_base/` (the superseded 2026-08-03 photo render) and `_superseded/` (the stills
+published from it) are local-only history; nothing reads them.
 
 Files are named by **product id**:
 
@@ -51,13 +56,11 @@ the product card and the product detail page the turntable clip in
 `assets/video/` now plays in their place (see that folder's README).
 
 ## Tips
-- **Transparent PNG** works best (the vial gets a soft drop-shadow that follows
-  its shape). A solid background also works but the shadow becomes a rectangle.
-- Keep the **same framing across all of them** — one shared crop box is applied to
-  every master, so a bottle photographed at a different scale will look off.
-- Export the bottle at **≥1200px tall** if you can. The current masters put it
-  at 606px, which is only ~1.1× the 560px detail-page slot, so it softens on
-  high-DPI screens.
+- Framing is no longer a shared crop box — `fit_window` sizes each one from its
+  own matte, so masters at different zooms still come out matched.
+- Export the bottle at **≥1200px tall** if you can. The 2026-08-06 video masters
+  put it at ~860px, still short of 2× the 560px detail-page slot, so it softens
+  a little on high-DPI screens.
 - Any product without a file here automatically falls back to the generic vial
   with the generated Aura label, so the site never shows a broken image.
 

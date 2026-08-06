@@ -7,18 +7,18 @@ still — they're 48–86px tall and a clip there is wasted bandwidth.
 **Drop new masters in `_base/`, not here.** `_base/N.mp4` is the render exactly
 as exported; everything in this folder is generated from it.
 
-The 2026-08-04 masters arrived named in the order they were shot, which is
-**not** product order, so the publish step maps them (masters 5/6/7 are products
-6/7/5). The 2026-08-05 re-renders arrived named by PRODUCT id instead, so they
-are stored as **`p<id>.mp4`** and never need re-mapping: `p1` Retatrutide,
-`p7` KLOW Blend, `p9` HGH 36 IU (which is now product #9 in the catalog). The
-old `_base/9.mp4` is the superseded HGH render and nothing maps to it.
+The 2026-08-06 re-shoot replaced **all nine** clips and arrived named by product
+id, so masters are stored as **`p<id>.mp4`** and `MAP` is now the identity — no
+master ever needs re-mapping again. Everything before it (the 2026-08-04 shoot,
+whose filenames were in shoot order, and the 2026-08-05 partial re-render) is
+kept in `_base/_superseded/` and nothing maps to it.
 
-Both scripts take product ids, so a re-render only re-publishes its own clip:
+The three scripts take product ids, so a re-render only re-publishes its own clip:
 
 ```bash
 python assets/video/_base/publish_opaque.py 1 7 9
 python assets/video/_base/publish_alpha.py  1 7 9
+python assets/video/_base/publish_still.py  1 7 9
 ```
 
 ## The two builds
@@ -29,6 +29,12 @@ python assets/video/_base/publish_alpha.py  1 7 9
 | `N-alpha.webp` | its transparent first frame, used as the poster | ” |
 | `N.mp4` | H.264, the original opaque frame including its set | browsers with no alpha video (Safari) |
 | `N.jpg` | its opaque first frame, used as the poster | ” |
+
+`publish_still.py` writes a fourth output that does **not** live here:
+`assets/vials/N.webp` + `N.png`, the matted first frame at 280×613. The still
+photo used to come from a separate render whose label artwork drifted from the
+footage, so cart rows showed a different bottle than the card; both now come
+from the same master.
 
 The site decides between them at runtime and styles the box to match — the
 matted clip gets the photo's drop-shadow, float and mirror reflection; the
@@ -50,24 +56,26 @@ python assets/video/_base/publish_opaque.py     # N.mp4 + N.jpg
 python assets/video/_base/publish_alpha.py      # N.webm + N-alpha.webp
 ```
 
-Both frame each master to the 280 × 613 bottle crop the photos use and scale it
-to 420 × 920. Two framings exist, and `FIT` in `_base/make_matte.py` decides
-which a product gets:
+All three frame each master to the 280 × 613 bottle crop the photos use, then
+scale it — to 420 × 920 for the clips, 280 × 613 for the still. Two framings
+exist, and `FIT` in `_base/make_matte.py` decides which a product gets:
 
-- **centred** — full frame height, output aspect, centred. What the 2026-08-04
-  masters use, since they were all shot at the same zoom.
-- **bottle fit** (`fit_window`, ids 1/7/9) — the crop is sized and positioned
-  from the **matte's bounding box** so the vial fills 88% of the height (or 92%
-  of the width, whichever binds first). The 2026-08-05 re-renders are at three
-  different zooms — one landscape, one with the vial running past the bottom
-  edge — and a centred crop either clips them or leaves them small. Where the
-  window falls outside the frame it is padded: transparent in the matted build,
-  edge-replicated in the opaque one, which is invisible on these flat sets.
+- **centred** — full frame height, output aspect, centred. Right only when every
+  master is at the same zoom; nothing currently uses it.
+- **bottle fit** (`fit_window`, currently **every** id) — the crop is sized and
+  positioned from the **matte's bounding box** so the vial fills 88% of the
+  height (or 92% of the width, whichever binds first). The 2026-08-06 masters
+  are portrait 496×864 except KLOW at 560×752, and GHK-Cu is shot noticeably
+  further out, so a fixed centre crop would leave the vials at different sizes.
+  Where the window falls outside the frame it is padded: transparent in the
+  matted build, edge-replicated in the opaque one, which is invisible on these
+  flat sets.
 
 The opaque build is H.264 CRF 27
-(~0.3–0.7MB); the matted build is VP9 CRF 40 (~0.45–0.75MB, `VP9_CRF=` to
-override). Neither has audio, and both start before the file finishes
-downloading.
+(~0.3–0.6MB); the matted build is VP9 CRF 40 (~0.37–0.7MB, `VP9_CRF=` to
+override — clip 5's rotating DNA coil costs enough motion that it is published
+at `VP9_CRF=44` to stay in that band). Neither has audio, and both start before
+the file finishes downloading.
 
 Then bump `VIDEO_V` in `js/main.js` — the filenames never change, so Cloudflare
 will otherwise keep serving the old clip for up to four hours.
@@ -109,13 +117,11 @@ bits. Partially-transparent edge pixels keep their true colour (straight alpha,
 
 ## Framing
 
-The masters are shot at different zooms. The 2026-08-04 set keeps the shared
-centred crop, so the bottle fills 79–94% of the frame depending on the clip;
-the 2026-08-05 re-renders are normalised to 88% by `fit_window`, which is why
-clips 1/7/9 sit slightly larger than their neighbours. Shoot new masters at a
-**consistent zoom with the bottle centred, fully inside the frame** and the
-question disappears — the KLOW re-render (`p7.mp4`) runs past the bottom edge,
-so its base is padded rather than filmed.
+The masters are shot at different zooms, so every clip is normalised to 88% by
+`fit_window` and they all match on the card. Shoot new masters at a **consistent
+zoom with the bottle centred, fully inside the frame** and the question
+disappears — KLOW (`p7.mp4`) runs past the bottom edge, so its base is padded
+rather than filmed.
 
 If you can get the vials re-rendered **with a transparent background**, skip
 `make_matte.py` entirely and encode the alpha straight from the source — a
@@ -126,15 +132,15 @@ matte recovered from a lit set will never beat one that was never lost.
 | File | Master | Product | Framing |
 |------|--------|---------|---------|
 | `1.*` | `_base/p1.mp4` | Retatrutide | bottle fit |
-| `2.*` | `_base/2.mp4` | Bacteriostatic Water | centred |
-| `3.*` | `_base/3.mp4` | GHK-Cu (Copper Peptide) | centred |
-| `4.*` | `_base/4.mp4` | Tesamorelin / Ipamorelin Blend | centred |
-| `5.*` | `_base/7.mp4` | MOTS-C | centred |
-| `6.*` | `_base/5.mp4` | BPC-157 / TB-500 Blend | centred |
+| `2.*` | `_base/p2.mp4` | Bacteriostatic Water | bottle fit |
+| `3.*` | `_base/p3.mp4` | GHK-Cu (Copper Peptide) | bottle fit |
+| `4.*` | `_base/p4.mp4` | Tesamorelin / Ipamorelin Blend | bottle fit |
+| `5.*` | `_base/p5.mp4` | MOTS-C | bottle fit |
+| `6.*` | `_base/p6.mp4` | BPC-157 / TB-500 Blend | bottle fit |
 | `7.*` | `_base/p7.mp4` | KLOW Blend | bottle fit |
-| `8.*` | `_base/8.mp4` | NAD+ | centred |
+| `8.*` | `_base/p8.mp4` | NAD+ | bottle fit |
 | `9.*` | `_base/p9.mp4` | HGH 36 IU | bottle fit |
-| —     | `_base/1.mp4`, `_base/6.mp4`, `_base/9.mp4` | superseded by the `p*` re-renders | — |
+| —     | `_base/_superseded/*` | the 2026-08-04 and 2026-08-05 shoots | — |
 
 `VIAL_VIDEO_IDS` in `js/main.js` lists the ids that have a clip. A product added
 through the admin product manager has no clip and keeps its still photo; so does

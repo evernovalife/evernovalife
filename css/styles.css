@@ -361,16 +361,19 @@ h1, h2, h3, h4 { line-height: 1.2; font-weight: 700; letter-spacing: -0.02em; }
   display: none;
   align-items: flex-start;
   justify-content: center;
-  padding-top: 18vh;
+  padding: 18vh 1rem 0;
 }
 .search-overlay.open { display: flex; }
 .search-box {
-  width: min(620px, 90vw);
+  /* 90vw ignores the padding of whatever holds it — on quality.html that put
+     the COA search 9px past the right edge of a 360px screen */
+  width: min(620px, 100%);
   display: flex;
   gap: 0.5rem;
 }
 .search-box input {
   flex: 1;
+  min-width: 0;              /* or the field's intrinsic width pushes Search off a phone */
   padding: 1rem 1.4rem;
   border-radius: var(--radius-pill);
   background: var(--glass-bg);
@@ -840,6 +843,15 @@ h1, h2, h3, h4 { line-height: 1.2; font-weight: 700; letter-spacing: -0.02em; }
   gap: 2rem;
   align-items: start;
 }
+/* A grid item's automatic minimum is its MIN-CONTENT width, so the toolbar's
+   search + Filters + sort row (~460px min-content) was widening the whole
+   column past the phone viewport — and, in the one-column layout, dragging the
+   filters panel out with it. Let the items be narrower than their contents and
+   the wrapping rules below take over. */
+.catalog-layout > * { min-width: 0; }
+/* Same rule for every other one-column-on-mobile grid: the checkout form and
+   the order summary were each 373px wide inside a 360px screen. */
+.checkout-layout > *, .cart-layout > *, .account-layout > *, .product-detail > * { min-width: 0; }
 .filters-sidebar { padding: 1.5rem; position: sticky; top: calc(var(--header-h) + 1rem); }
 .filter-group { margin-bottom: 1.75rem; }
 .filter-group:last-child { margin-bottom: 0; }
@@ -862,6 +874,16 @@ h1, h2, h3, h4 { line-height: 1.2; font-weight: 700; letter-spacing: -0.02em; }
   flex-wrap: wrap;
 }
 .catalog-toolbar .result-count { color: var(--dark-text-muted); font-size: 0.92rem; }
+.catalog-toolbar-controls { display: flex; gap: 0.6rem; align-items: center; }
+.catalog-search { min-width: 160px; }
+@media (max-width: 640px) {
+  /* one full-width search line, then Filters + Sort sharing the next */
+  .catalog-toolbar { gap: 0.75rem; }
+  .catalog-toolbar-controls { width: 100%; flex-wrap: wrap; }
+  .catalog-search { flex: 1 1 100%; min-width: 0; }
+  .catalog-toolbar-controls .filter-toggle-btn,
+  .catalog-toolbar-controls .select-field { flex: 1 1 0; min-width: 0; }
+}
 .select-field {
   background: var(--glass-bg);
   border: 1px solid var(--glass-border-strong);
@@ -1389,6 +1411,10 @@ body.coa-lightbox-open { overflow: hidden; }
 .value-card p { font-size: 0.9rem; color: var(--dark-text-muted); }
 
 /* Shipping table */
+/* A seven-column report table has a min-content width of ~1000px, which no
+   phone has. It scrolls sideways inside its own box instead of widening the
+   page — every .rate-table in the markup is wrapped in one of these. */
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .rate-table { width: 100%; border-collapse: collapse; margin: 1.5rem 0; }
 .rate-table th, .rate-table td { padding: 0.9rem 1rem; text-align: left; border-bottom: 1px solid var(--glass-border); font-size: 0.92rem; }
 .rate-table th { color: #fff; font-weight: 700; background: var(--glass-bg); }
@@ -1629,8 +1655,45 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
   .newsletter-form input { background: var(--glass-bg); border: 1px solid var(--glass-border-strong); border-radius: var(--radius-pill); }
   .cart-row { grid-template-columns: 70px 1fr; }
   .cart-row-controls { grid-column: 1 / -1; flex-direction: row; justify-content: space-between; }
-  .logo-text { font-size: 0.92rem; letter-spacing: 0.12em; }
   .detail-cta { flex-direction: column; }
+}
+
+/* ============================================================
+   PHONE HEADER
+   The header row is logo + five 42px icon buttons (search, account,
+   wishlist, cart, menu — the last three injected by main.js). At its
+   desktop size that row measures ~430px, so on any phone it pushed the
+   document 56px wider than the viewport: every section then sat in a
+   sideways-scrolling page and read as "misaligned" rather than as the
+   overflow it was. Nothing here is decorative — each step buys the width
+   the next screen size no longer has.
+   ============================================================ */
+@media (max-width: 640px) {
+  .header-inner { gap: 0.5rem; }
+  .logo { gap: 0.4rem; }
+  .logo svg { width: 34px; height: 34px; }
+  .logo-text { font-size: 0.82rem; letter-spacing: 0.1em; }
+  .header-actions { gap: 0.1rem; }
+  .icon-btn, .hamburger { width: 38px; height: 38px; }
+  .icon-btn svg { width: 20px; height: 20px; }
+  /* The dropdown is 320px anchored to the right of a button that now sits at
+     the screen edge, so on a 360px phone it hung 14px off the LEFT side. Pin
+     it to the viewport instead of to the button. */
+  .mini-cart {
+    position: fixed;
+    top: calc(var(--header-h) + 8px);
+    left: 0.75rem; right: 0.75rem;
+    width: auto; max-width: none;
+  }
+}
+@media (max-width: 430px) {
+  /* Wishlist is the one action with a home elsewhere (account page + footer),
+     so it is the icon that goes when four no longer fit. */
+  .header-actions .wishlist-link { display: none; }
+  .icon-btn, .hamburger { width: 36px; height: 36px; }
+}
+@media (max-width: 359px) {
+  .logo-text { display: none; }   /* star mark only — still links home */
 }
 
 /* ============================================================

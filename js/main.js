@@ -278,7 +278,7 @@ function createVialSVG(product) {
    fallback path. The uncropped 1440×720 masters stay in assets/vials/_base/.
    VIAL_V busts Cloudflare when the artwork is replaced — bump it whenever the
    files change, since the filenames never do. */
-const VIAL_V = 4;
+const VIAL_V = 5;
 function vialPhotoSrc(id) {
   return `assets/vials/${id}.webp?v=${VIAL_V}`;
 }
@@ -291,13 +291,13 @@ function vialPhotoSrc(id) {
              floats on the card exactly like the cut-out photo it replaced.
      N.mp4   H.264, the original opaque frame, for browsers without alpha video.
 
-   Both are keyed by PRODUCT id — the 2026-08-04 masters are named in the order
-   they were shot, which is not the same order. Only the nine built-ins have
-   footage; anything added through the admin product manager keeps the still
-   photo.
+   Both are keyed by PRODUCT id, as are the masters since the 2026-08-06 shoot.
+   Only the nine built-ins have footage; anything added through the admin product
+   manager keeps the still photo — which, since that shoot, is itself the matted
+   first frame of the same master, so card and cart row show one bottle.
    VIDEO_V busts Cloudflare when a clip is re-published, since the filenames
    never change. */
-const VIDEO_V = 2;
+const VIDEO_V = 3;
 const VIAL_VIDEO_IDS = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 function vialVideoSrc(id) { return `assets/video/${id}.webm?v=${VIDEO_V}`; }
 function vialPosterSrc(id) { return `assets/video/${id}-alpha.webp?v=${VIDEO_V}`; }
@@ -762,10 +762,21 @@ function initProductsPage() {
   priceRange && priceRange.addEventListener('input', apply);
   stockOnly && stockOnly.addEventListener('change', apply);
 
-  // mobile filter toggle
+  /* Mobile filter toggle. Below the 1024px breakpoint the sidebar is stacked
+     ABOVE the results, so leaving it open pushed the first product a full
+     screen down on a phone — it starts collapsed there and the Filters button
+     (which only exists at that size) opens it. Resizing past the breakpoint
+     drops the class, since the desktop layout has a column for it. */
   const ftBtn = document.getElementById('filterToggle');
   const sidebar = document.getElementById('filtersSidebar');
-  if (ftBtn && sidebar) ftBtn.addEventListener('click', () => sidebar.classList.toggle('collapsed'));
+  if (ftBtn && sidebar) {
+    const narrow = window.matchMedia('(max-width: 1024px)');
+    const syncSidebar = () => sidebar.classList.toggle('collapsed', narrow.matches);
+    syncSidebar();
+    narrow.addEventListener ? narrow.addEventListener('change', syncSidebar)
+                            : narrow.addListener(syncSidebar);   // older Safari
+    ftBtn.addEventListener('click', () => sidebar.classList.toggle('collapsed'));
+  }
 
   // expose the re-filter so the catalog can repaint after products load from the API
   window._applyProductFilters = apply;
