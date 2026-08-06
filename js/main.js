@@ -290,6 +290,10 @@ function vialPhotoSrc(id) {
      N.webm  VP9 with an alpha channel — the set is matted out, so the vial
              floats on the card exactly like the cut-out photo it replaced.
      N.mp4   H.264, the original opaque frame, for browsers without alpha video.
+             Safari is the one that matters, and it gets the set cut away with
+             N-alpha.webp as a CSS mask — one matte serves the whole clip, so a
+             still mask is the same cut-out the WebM carries. See
+             useOpaqueVialVideo().
 
    Both are keyed by PRODUCT id, as are the masters since the 2026-08-06 shoot.
    Only the nine built-ins have footage; anything added through the admin product
@@ -348,7 +352,8 @@ function vialVideoFallback(video) {
   const still = video.getAttribute('data-still');
   video.remove();
   if (!still || box.querySelector('.vial-photo-img')) return;
-  box.classList.remove('vial-photo-has-video', 'vial-photo-alpha');
+  box.classList.remove('vial-photo-has-video', 'vial-photo-alpha', 'vial-photo-mask');
+  box.style.removeProperty('--vial-mask');
   const img = document.createElement('img');
   img.className = 'vial-photo-img';
   img.src = still;
@@ -375,6 +380,7 @@ function createVialPhoto(product, opts) {
            muted loop playsinline preload="none" disablepictureinpicture tabindex="-1"
            aria-label="${escapeHtml(name)} research vial, rotating"
            data-mp4="${vialVideoSrcOpaque(product.id)}" data-poster="${vialPosterSrcOpaque(product.id)}"
+           data-mask="${vialPosterSrc(product.id)}"
            data-still="${vialPhotoSrc(product.id)}" data-alt="${escapeHtml(name)} research vial"
            onerror="vialVideoFallback(this)"></video>
   </div>`;
@@ -451,9 +457,35 @@ function playVialVideo(video) {
   const p = video.play();
   if (p && p.catch) p.catch(() => {});   // autoplay refused → the poster stands
 }
+/* Can the browser mask an element with an image's alpha channel? Safari has done
+   this under -webkit- since long before it could decode alpha video, so the two
+   never both fail. */
+let _vialMaskOk = null;
+function vialMaskSupported() {
+  if (_vialMaskOk === null) {
+    _vialMaskOk = !!(window.CSS && CSS.supports &&
+      (CSS.supports('mask-image', 'url(a.webp)') ||
+       CSS.supports('-webkit-mask-image', 'url(a.webp)')));
+  }
+  return _vialMaskOk;
+}
+
+/* No alpha video here. Swap to the opaque mp4 — but if the browser can mask,
+   keep the matted poster and cut the set away with the clip's own matte, which
+   is a single still (one matte serves every frame), so the result matches what
+   the WebM shows everywhere else. Otherwise the mp4 stands on its own set. */
 function useOpaqueVialVideo(video) {
-  if (video.parentNode) video.parentNode.classList.remove('vial-photo-alpha');
-  if (video.dataset.poster) video.poster = video.dataset.poster;
+  const box = video.parentNode;
+  const mask = video.dataset.mask;
+  const masked = mask && vialMaskSupported();
+  if (box) {
+    box.classList.remove('vial-photo-alpha');
+    if (masked) {
+      box.style.setProperty('--vial-mask', `url("${mask}")`);
+      box.classList.add('vial-photo-mask');
+    }
+  }
+  if (!masked && video.dataset.poster) video.poster = video.dataset.poster;
   if (video.dataset.mp4) video.src = video.dataset.mp4;
 }
 function initVialVideos(scope) {

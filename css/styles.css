@@ -659,11 +659,16 @@ h1, h2, h3, h4 { line-height: 1.2; font-weight: 700; letter-spacing: -0.02em; }
 .vial-photo-label { position: absolute; left: 9%; top: 31%; width: 82%; height: 62%; pointer-events: none; }
 /* turntable clip (assets/video/1–8) — same 280×613 box as the photo, so it
    drops into the card, the product page and the tilt effect unchanged.
-   Two looks, picked by whether the browser decodes alpha video:
+   Three looks, picked by what the browser can do:
    · .vial-photo-alpha — the matted WebM. Nothing behind the vial, so it takes
      the photo's bottle-shaped drop-shadow and floats like the photo did.
-   · without it — the opaque mp4, which carries its own dark set, so it reads
-     as a rounded panel with a cast shadow instead. */
+   · .vial-photo-mask — Safari, which decodes no alpha video at all: the opaque
+     mp4 with the SAME matte applied as a CSS mask. One matte serves the whole
+     clip (see _base/publish_alpha.py), so a static mask image is exactly the
+     WebM's alpha channel and the vial floats there too. The shadow moves to the
+     wrapper, because mask is applied after filter and would clip it away.
+   · neither — the opaque mp4 alone, which carries its own set, so it reads as
+     a rounded panel with a cast shadow instead. */
 .vial-photo-video {
   position: absolute;
   inset: 0;
@@ -680,6 +685,17 @@ h1, h2, h3, h4 { line-height: 1.2; font-weight: 700; letter-spacing: -0.02em; }
   background: none;
   box-shadow: none;
   filter: drop-shadow(0 14px 20px rgba(0,0,0,0.42));
+}
+.vial-photo-mask { filter: drop-shadow(0 14px 20px rgba(0,0,0,0.42)); }
+.vial-photo-mask .vial-photo-video {
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  -webkit-mask-image: var(--vial-mask); mask-image: var(--vial-mask);
+  -webkit-mask-size: 100% 100%; mask-size: 100% 100%;
+  -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+  -webkit-mask-position: center; mask-position: center;
+  mask-mode: alpha;             /* WebKit's -webkit- prefix already means alpha */
 }
 .product-media .vial-photo { height: 330px; transition: transform 0.4s var(--ease); }
 .product-card:hover .product-media .vial-photo { transform: translateY(-6px) scale(1.03); }
