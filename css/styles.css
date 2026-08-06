@@ -312,7 +312,10 @@ h1, h2, h3, h4 { line-height: 1.2; font-weight: 700; letter-spacing: -0.02em; }
   transition: all 0.25s var(--ease);
 }
 .icon-btn:hover { background: var(--glass-bg); color: #fff; }
-.icon-btn svg { width: 22px; height: 22px; }
+/* .hamburger rides along: an inline SVG with only a viewBox collapses to zero in
+   Safari inside a flex button, so the icon was invisible there (still clickable)
+   while Chrome stretched it to the button. Size it explicitly. */
+.icon-btn svg, .hamburger svg { width: 22px; height: 22px; }
 
 /* signed-in user's name + admin button in the header (injected by main.js) */
 .header-user {
@@ -1696,7 +1699,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
   .logo-text { font-size: 0.82rem; letter-spacing: 0.1em; }
   .header-actions { gap: 0.1rem; }
   .icon-btn, .hamburger { width: 38px; height: 38px; }
-  .icon-btn svg { width: 20px; height: 20px; }
+  .icon-btn svg, .hamburger svg { width: 20px; height: 20px; }
   /* The dropdown is 320px anchored to the right of a button that now sits at
      the screen edge, so on a 360px phone it hung 14px off the LEFT side. Pin
      it to the viewport instead of to the button. */
