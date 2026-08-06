@@ -354,6 +354,7 @@ function vialVideoFallback(video) {
   if (!still || box.querySelector('.vial-photo-img')) return;
   box.classList.remove('vial-photo-has-video', 'vial-photo-alpha', 'vial-photo-mask');
   box.style.removeProperty('--vial-mask');
+  if (video._vvCanvas) video._vvCanvas.remove();
   const img = document.createElement('img');
   img.className = 'vial-photo-img';
   img.src = still;
@@ -457,36 +458,72 @@ function playVialVideo(video) {
   const p = video.play();
   if (p && p.catch) p.catch(() => {});   // autoplay refused → the poster stands
 }
-/* Can the browser mask an element with an image's alpha channel? Safari has done
-   this under -webkit- since long before it could decode alpha video, so the two
-   never both fail. */
-let _vialMaskOk = null;
-function vialMaskSupported() {
-  if (_vialMaskOk === null) {
-    _vialMaskOk = !!(window.CSS && CSS.supports &&
-      (CSS.supports('mask-image', 'url(a.webp)') ||
-       CSS.supports('-webkit-mask-image', 'url(a.webp)')));
-  }
-  return _vialMaskOk;
-}
+/* Cut the set out of the opaque mp4 with the clip's own matte, for the browser
+   that can't decode alpha video — Safari, in practice.
 
-/* No alpha video here. Swap to the opaque mp4 — but if the browser can mask,
-   keep the matted poster and cut the set away with the clip's own matte, which
-   is a single still (one matte serves every frame), so the result matches what
-   the WebM shows everywhere else. Otherwise the mp4 stands on its own set. */
+   A CSS mask would be free, but WebKit gives a <video> its own compositing layer
+   and drops the mask, painting nothing at all. So the frames go through a canvas
+   instead: draw the video, then draw the matte with `destination-in`, which
+   keeps only what the matte is opaque over. One matte serves the whole clip (the
+   vial only spins), so this is exactly the WebM's alpha channel.
+
+   The video itself stays in the DOM and keeps decoding — it is the frame source
+   — but CSS paints none of it. */
+function paintVialCanvas(video) {
+  const box = video.parentNode;
+  const canvas = video._vvCanvas;
+  const mask = video._vvMask;
+  if (!box || !canvas || !mask) return;
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.clearRect(0, 0, w, h);
+  ctx.drawImage(video, 0, 0, w, h);
+  ctx.globalCompositeOperation = 'destination-in';
+  ctx.drawImage(mask, 0, 0, w, h);
+}
+function runVialCanvas(video) {
+  if (video._vvRaf) return;
+  const step = () => {
+    if (!video._vvCanvas || !video._vvCanvas.isConnected) { video._vvRaf = 0; return; }
+    if (video.readyState >= 2) paintVialCanvas(video);
+    if (video.paused || video.ended) { video._vvRaf = 0; return; }   // idle costs nothing
+    video._vvRaf = requestAnimationFrame(step);
+  };
+  video._vvRaf = requestAnimationFrame(step);
+}
+function maskVialVideo(video, box, maskSrc) {
+  const img = new Image();
+  img.onload = () => {
+    if (!video.isConnected) return;
+    const canvas = document.createElement('canvas');
+    // Half the 420×920 source is still sharp at the 250–560px the box is ever
+    // drawn at, and it is a quarter of the per-frame pixel cost on a phone.
+    canvas.width = 210; canvas.height = 460;
+    canvas.className = 'vial-photo-canvas';
+    canvas.setAttribute('aria-hidden', 'true');
+    video._vvCanvas = canvas;
+    video._vvMask = img;
+    box.style.setProperty('--vial-mask', `url("${maskSrc}")`);
+    box.classList.add('vial-photo-mask');
+    box.appendChild(canvas);
+    video.addEventListener('play', () => runVialCanvas(video));
+    video.addEventListener('seeked', () => paintVialCanvas(video));
+    if (!video.paused) runVialCanvas(video);
+  };
+  img.onerror = () => { if (video.dataset.poster) video.poster = video.dataset.poster; };
+  img.src = maskSrc;
+}
 function useOpaqueVialVideo(video) {
   const box = video.parentNode;
-  const mask = video.dataset.mask;
-  const masked = mask && vialMaskSupported();
-  if (box) {
-    box.classList.remove('vial-photo-alpha');
-    if (masked) {
-      box.style.setProperty('--vial-mask', `url("${mask}")`);
-      box.classList.add('vial-photo-mask');
-    }
-  }
-  if (!masked && video.dataset.poster) video.poster = video.dataset.poster;
+  const maskSrc = video.dataset.mask;
+  if (box) box.classList.remove('vial-photo-alpha');
   if (video.dataset.mp4) video.src = video.dataset.mp4;
+  if (box && maskSrc && document.createElement('canvas').getContext) {
+    maskVialVideo(video, box, maskSrc);      // matted poster comes in with the class
+  } else if (video.dataset.poster) {
+    video.poster = video.dataset.poster;     // no canvas: the mp4 on its own set
+  }
 }
 function initVialVideos(scope) {
   const fresh = Array.prototype.slice
