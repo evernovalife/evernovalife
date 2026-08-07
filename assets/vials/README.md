@@ -1,42 +1,45 @@
 # Product vial photos
 
-**These are generated from the video masters — there is no separate photo
-render any more.** As of 2026-08-06 every `N.webp` + `N.png` here is the matted
-first frame of `assets/video/_base/p<id>.mp4`, cut with exactly the rectangle the
-clip uses and scaled to 280×613. The site loads `N.webp`; the quantized `N.png`
-beside it is the `onerror` fallback.
+`N.webp` is what the site loads on every surface — product card, product page,
+cart row, mini-cart thumb. `N.png` beside it is the `onerror` fallback for a
+browser too old for WebP. Both are 420×920 cut-outs: the bottle with its set
+removed, so it floats on the dark card instead of sitting in a light panel.
 
-That is deliberate. The old stills came from their own 1440×720 render (`_base/`,
-2026-08-03) whose label artwork drifted from the footage — gold caps against the
-clip's violet ones, and a tight crop that ran the product name off the label —
-so a cart row showed a visibly different bottle than the card above it.
+Turntable video clips used to play on the card and the product page. They were
+dropped on 2026-08-07 — iOS Safari decodes no alpha video, and every way of
+cutting the set out of the opaque build failed there too (WebKit drops a CSS
+mask on a `<video>`, and the canvas composite that replaced it was one more
+moving part for a thing that only ever spun). One still now serves every
+surface. `assets/video/` is dead weight; nothing reads it.
 
-To republish after replacing a master (which now means replacing the **video**
-master):
+## Republishing after new artwork
+
+Drop the new full-frame renders in `_base/` named by **product id**, then:
 
 ```bash
-python assets/video/_base/publish_still.py        # all nine
-python assets/video/_base/publish_still.py 3 7    # or just these ids
+python assets/vials/_base/publish.py        # all nine
+python assets/vials/_base/publish.py 3 7    # or just these ids
 ```
 
-then quantize the fallback PNGs, which the script writes full-colour:
-
-```python
-from PIL import Image
-for i in range(1, 10):
-    Image.open(f'{i}.png').convert('RGBA') \
-        .quantize(colors=256, method=Image.FASTOCTREE) \
-        .save(f'{i}.png', 'PNG', optimize=True)     # ~155KB -> ~34KB
-```
+It mattes each master (flat background plate subtracted, cast shadow dropped),
+frames the crop on the bottle itself so masters shot at different zooms come out
+matched, and writes `../N.webp` + a quantized `../N.png`. It also writes
+`_base/matte_check.png`, the nine cut-outs composited on the site background —
+**look at that before shipping**, it is where a leaked set edge or a clipped cap
+shows up.
 
 Then bump `VIAL_V` in `js/main.js` (and the `?v=` in `admin-products.html`) —
 the filenames never change, so Cloudflare will otherwise serve the old artwork.
-`.vial-photo`'s `aspect-ratio` in `css/styles.css` must match the 280×613 crop.
+`.vial-photo`'s `aspect-ratio` in `css/styles.css` must match the script's
+`OW`/`OH`.
 
-`_base/` (the superseded 2026-08-03 photo render) and `_superseded/` (the stills
-published from it) are local-only history; nothing reads them.
+Proofread the label on every new master against `js/products-data.js` before
+publishing: the name and the mg/IU pill are baked into the artwork, and a wrong
+dose on a bottle is the kind of thing nobody notices until a customer does.
 
-Files are named by **product id**:
+## Files
+
+Named by **product id**:
 
 | File           | Product                          |
 |----------------|----------------------------------|
@@ -50,19 +53,13 @@ Files are named by **product id**:
 | `8.png`        | NAD+                             |
 | `9.png`        | HGH 36 IU                        |
 
-These photos are used across the whole site — cart rows, the mini-cart, the
-detail-page thumbnail, and as the fallback wherever a product has no clip. On
-the product card and the product detail page the turntable clip in
-`assets/video/` now plays in their place (see that folder's README).
+`_base/` holds the masters `publish.py` reads. `_superseded/` is local-only
+history; nothing reads it.
 
 ## Tips
-- Framing is no longer a shared crop box — `fit_window` sizes each one from its
-  own matte, so masters at different zooms still come out matched.
-- Export the bottle at **≥1200px tall** if you can. The 2026-08-06 video masters
-  put it at ~860px, still short of 2× the 560px detail-page slot, so it softens
-  a little on high-DPI screens.
-- Any product without a file here automatically falls back to the generic vial
-  with the generated Aura label, so the site never shows a broken image.
-
-To use a different filename for a product, set an `image:` field on that product
-in `js/products-data.js` (e.g. `image: 'assets/vials/retatrutide.png'`).
+- Framing is not a shared crop box — `fit_window()` sizes each one from its own
+  matte, so masters at different zooms still come out matched.
+- The glass body keeps the set's own light tone showing through it. That is
+  correct — it reads as clear glass. Only what is *outside* the bottle is cut.
+- The cast shadow is removed on purpose: the card draws its own float and mirror
+  reflection, and a baked-in shadow fights both.

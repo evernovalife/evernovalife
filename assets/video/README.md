@@ -1,7 +1,20 @@
-# Product vial clips
+# Product vial clips — RETIRED 2026-08-07
 
-Six-second turntable loops that stand in for the still photo on the **product
-card** and the **product detail page**. Cart rows and the mini-cart keep the
+**Nothing on the site loads these any more.** The clips were pulled because no
+build of them worked on iOS Safari: it decodes no alpha in WebM, so the matted
+build painted a black slab, and every way of cutting the set out of the opaque
+build failed too — WebKit gives a `<video>` its own compositing layer and drops
+a CSS mask, and the canvas composite that replaced it was a lot of moving parts
+for a bottle that only spins. Product card and product page now show the same
+cut-out still as the cart rows: see `assets/vials/`.
+
+The folder and the scripts below are kept as-is in case the clips ever come
+back. The rest of this file describes how they were built.
+
+---
+
+Six-second turntable loops that stood in for the still photo on the **product
+card** and the **product detail page**. Cart rows and the mini-cart kept the
 still — they're 48–86px tall and a clip there is wasted bandwidth.
 
 **Drop new masters in `_base/`, not here.** `_base/N.mp4` is the render exactly
