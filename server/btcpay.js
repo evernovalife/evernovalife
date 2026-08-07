@@ -10,7 +10,7 @@
 
 const crypto = require('crypto');
 
-// Base URL of YOUR BTCPay instance, e.g. https://pay.evernovalife.com
+// Base URL of YOUR BTCPay instance, e.g. https://btcpay.evernovalife.com
 const BASE_URL = (process.env.BTCPAY_URL || '').replace(/\/+$/, ''); // trim trailing slash
 const API_KEY = process.env.BTCPAY_API_KEY || '';
 const STORE_ID = process.env.BTCPAY_STORE_ID || '';

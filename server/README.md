@@ -114,7 +114,7 @@ Browser (checkout.html)
    `BTCPAY_API_KEY`.
 2. **Store id** — BTCPay → *Store Settings* (also in the store URL). Put it in
    `BTCPAY_STORE_ID`.
-3. **Instance URL** — e.g. `https://pay.evernovalife.com` → `BTCPAY_URL`
+3. **Instance URL** — e.g. `https://btcpay.evernovalife.com` → `BTCPAY_URL`
    (no trailing slash).
 4. **Webhook** — BTCPay → *Store → Settings → Webhooks → Create*. Payload URL:
    `https://<this-api>/api/crypto/webhook`. Copy the generated secret into
