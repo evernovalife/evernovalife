@@ -273,35 +273,46 @@ function createVialSVG(product) {
    ⭐ PHOTOREALISTIC VIAL = real photo + Ever Nova Life label overlay
    (overlay covers the stock label; per-product name/qty)
    ============================================================ */
-/* Where a built-in product's vial photo lives: a bottle-cropped 420×920 WebP
-   (~50KB) cut out of its set, with a quantized .png of the same crop beside it
-   for the onerror fallback path. The full-frame masters stay in
-   assets/vials/_base/; assets/vials/_base/publish.py mattes and crops them.
-   VIAL_V busts Cloudflare when the artwork is replaced — bump it whenever the
-   files change, since the filenames never do. */
-const VIAL_V = 6;
+/* Where a built-in product's vial photo lives: a bottle-cropped cut-out in two
+   widths — 630×920 (~115KB, as sharp as the master gets) and 420×920 (~58KB) —
+   with a quantized .png beside them for the onerror fallback path. The
+   full-frame masters stay in assets/vials/_base/; publish.py there mattes and
+   crops them. VIAL_V busts Cloudflare when the artwork is replaced — bump it
+   whenever the files change, since the filenames never do. */
+const VIAL_V = 7;
 function vialPhotoSrc(id) {
   return `assets/vials/${id}.webp?v=${VIAL_V}`;
+}
+function vialPhotoSrcSet(id) {
+  return `assets/vials/${id}-sm.webp?v=${VIAL_V} 420w, assets/vials/${id}.webp?v=${VIAL_V} 630w`;
 }
 
 /* Every surface — card, product page, cart row, mini-cart thumb — shows this
    one still. Turntable clips used to play on the two big surfaces; they were
    dropped on 2026-08-07 because no build of them survived iOS Safari, which
-   decodes no alpha video and drops a CSS mask on a <video>. */
-function createVialPhoto(product) {
+   decodes no alpha video and drops a CSS mask on a <video>.
+
+   Opts: { width } is the CSS width the bottle is drawn at on this surface, so
+   the browser can pick between the two files. The box is sized by HEIGHT in CSS
+   (250px card / 560px product page / 86px cart row, aspect 420:920), which
+   srcset can't read, so the caller states it. Left off, it defaults to the card.
+   A product added through the admin manager has one uploaded image and no
+   second width, so it just gets `src`. */
+const VIAL_W = { card: 160, detail: 260, thumb: 44 };
+function createVialPhoto(product, opts) {
   const uid = 'p' + (++_vialCounter);
   const name = product.name || '';
   const nameSize = name.length > 22 ? 13 : name.length > 14 ? 16 : 21;
 
-  // Use the real labelled-vial photo. WebP: ~50KB against the ~1.3MB master
-  // each started as — nine of them on the catalog page keeps it under 0.5MB.
-  // A browser too old for WebP (pre-2020) trips the onerror below and lands on
-  // the generic vial + label.
+  // Use the real labelled-vial photo. A browser too old for WebP (pre-2020)
+  // trips the onerror below and lands on the generic vial + label.
   const realSrc = product.image || vialPhotoSrc(product.id);
+  const responsive = product.image ? '' :
+    ` srcset="${vialPhotoSrcSet(product.id)}" sizes="${(opts && opts.width) || VIAL_W.card}px"`;
   return `
   <div class="vial-photo">
-    <img class="vial-photo-img" src="${realSrc}" alt="${escapeHtml(name)} research vial" loading="lazy"
-         onerror="this.onerror=null;this.src='assets/vial.png?v=3';this.parentNode.classList.add('vial-fallback');var l=this.parentNode.querySelector('.vial-photo-label');if(l)l.style.display='block'">
+    <img class="vial-photo-img" src="${realSrc}"${responsive} alt="${escapeHtml(name)} research vial" loading="lazy"
+         onerror="this.onerror=null;this.removeAttribute('srcset');this.src='assets/vial.png?v=3';this.parentNode.classList.add('vial-fallback');var l=this.parentNode.querySelector('.vial-photo-label');if(l)l.style.display='block'">
     <svg class="vial-photo-label" viewBox="0 0 200 380" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" preserveAspectRatio="none" style="display:none">
       <defs>
         <linearGradient id="brand_${uid}" x1="0%" y1="0%" x2="100%" y2="0%">
@@ -1063,7 +1074,7 @@ function initProductDetailPage() {
   root.innerHTML = `
     <div class="product-detail-side">
       <div class="product-detail-media glass">
-        <div class="detail-view detail-view-vial is-active">${createVialPhoto(product)}</div>
+        <div class="detail-view detail-view-vial is-active">${createVialPhoto(product, { width: VIAL_W.detail })}</div>
         <button type="button" class="detail-view detail-view-coa" hidden>
           <img class="detail-coa-img" alt="Certificate of analysis for ${escapeHtml(product.name)}">
           <span class="coa-doc-hint">Click to zoom</span>
@@ -1183,7 +1194,7 @@ function renderCartPage() {
     const product = getProductById(item.id) || item;
     return `
     <div class="cart-row glass" data-id="${item.id}">
-      <div class="cart-row-media">${createVialPhoto(product)}</div>
+      <div class="cart-row-media">${createVialPhoto(product, { width: VIAL_W.thumb })}</div>
       <div class="cart-row-info">
         <span class="product-cat">${escapeHtml(item.category || '')}</span>
         <h4><a href="product.html?id=${item.id}">${escapeHtml(item.name)}</a></h4>
@@ -2125,7 +2136,7 @@ function renderMiniCart(panel) {
   const rows = cart.items.map(i => {
     const p = getProductById(i.id) || i;
     return `<a class="mini-cart-row" href="product.html?id=${i.id}">
-      <span class="mini-cart-thumb">${createVialPhoto(p)}</span>
+      <span class="mini-cart-thumb">${createVialPhoto(p, { width: VIAL_W.thumb })}</span>
       <span class="mini-cart-info"><strong>${escapeHtml(i.name)}</strong><small>${i.quantity} × ${formatPrice(i.price)}</small></span>
     </a>`;
   }).join('');

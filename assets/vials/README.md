@@ -1,9 +1,18 @@
 # Product vial photos
 
-`N.webp` is what the site loads on every surface — product card, product page,
-cart row, mini-cart thumb. `N.png` beside it is the `onerror` fallback for a
-browser too old for WebP. Both are 420×920 cut-outs: the bottle with its set
-removed, so it floats on the dark card instead of sitting in a light panel.
+Every surface — product card, product page, cart row, mini-cart thumb — shows
+the same cut-out: the bottle with its studio set removed, so it floats on the
+dark card instead of sitting in a light panel. Two widths ship, offered through
+`srcset`, and the browser picks by how big the bottle is actually drawn:
+
+| File          | Size     | Who gets it                                   |
+|---------------|----------|-----------------------------------------------|
+| `N.webp`      | 630×1380 | the product page, and any surface at 2×+       |
+| `N-sm.webp`   | 420×920  | cards, cart rows, mini-cart thumbs             |
+| `N.png`       | 420×920  | `onerror` fallback, browsers too old for WebP  |
+
+630×1380 is as sharp as the artwork gets — the masters hold ~685×1500 of real
+detail inside the crop box, so nothing here is upscaled.
 
 Turntable video clips used to play on the card and the product page. They were
 dropped on 2026-08-07 — iOS Safari decodes no alpha video, and every way of
@@ -23,7 +32,7 @@ python assets/vials/_base/publish.py 3 7    # or just these ids
 
 It mattes each master (flat background plate subtracted, cast shadow dropped),
 frames the crop on the bottle itself so masters shot at different zooms come out
-matched, and writes `../N.webp` + a quantized `../N.png`. It also writes
+matched, and writes both widths plus a quantized `../N.png`. It also writes
 `_base/matte_check.png`, the nine cut-outs composited on the site background —
 **look at that before shipping**, it is where a leaked set edge or a clipped cap
 shows up.

@@ -26,7 +26,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.dirname(HERE)
 
 IDS = range(1, 10)
-OW, OH = 420, 920
+# Two widths of the same crop. The masters carry ~685x1500 of real detail inside
+# the crop box, so 630x1380 is as sharp as the artwork gets — no upscaling — and
+# covers the product page at 2x. 420x920 covers a card or a cart row at 2x for a
+# third of the bytes; main.js offers both through srcset and the browser picks.
+OW, OH = 630, 1380
+SW, SH = 420, 920
 ASPECT = OW / OH
 SITE_BG = np.array([0x0f, 0x04, 0x07], np.float32)   # BGR of --dark-bg
 
@@ -126,14 +131,19 @@ def publish(pid):
     a = matte(img)
     rect = fit_window(a)
     rgba = np.dstack([img, (a * 255).round().astype(np.uint8)])
-    cut = cv2.resize(take(rgba, rect), (OW, OH), interpolation=cv2.INTER_AREA)
+    full = take(rgba, rect)
+    cut = cv2.resize(full, (OW, OH), interpolation=cv2.INTER_AREA)
+    small = cv2.resize(full, (SW, SH), interpolation=cv2.INTER_AREA)
     # Premultiplied edges would fringe against the dark card, so keep the colour
-    # straight and let the encoder carry alpha beside it.
-    cv2.imwrite(os.path.join(OUT, f"{pid}.webp"), cut, [cv2.IMWRITE_WEBP_QUALITY, 82])
-    # The fallback only ever loads on a browser too old for WebP, so trade its
-    # colour depth for size: 256 colours takes it from ~600KB to ~50KB, and the
-    # bottle is mostly greys anyway.
-    Image.fromarray(cv2.cvtColor(cut, cv2.COLOR_BGRA2RGBA)) \
+    # straight and let the encoder carry alpha beside it. Quality 90: the label's
+    # fine type and the glass gradients are what this artwork is for, and WebP
+    # spends the bytes on exactly those.
+    cv2.imwrite(os.path.join(OUT, f"{pid}.webp"), cut, [cv2.IMWRITE_WEBP_QUALITY, 90])
+    cv2.imwrite(os.path.join(OUT, f"{pid}-sm.webp"), small, [cv2.IMWRITE_WEBP_QUALITY, 86])
+    # The fallback only ever loads on a browser too old for WebP (pre-2020), so
+    # trade its colour depth for size: 256 colours takes it from ~600KB to ~60KB,
+    # and the bottle is mostly greys anyway.
+    Image.fromarray(cv2.cvtColor(small, cv2.COLOR_BGRA2RGBA)) \
         .quantize(colors=256, method=Image.FASTOCTREE) \
         .save(os.path.join(OUT, f"{pid}.png"), 'PNG', optimize=True)
     return cut
