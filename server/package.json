@@ -1,7 +1,7 @@
 {
   "name": "evernovalife-server",
   "version": "1.0.0",
-  "description": "Ever Nova Life — Braintree payment backend (Drop-in)",
+  "description": "Ever Nova Life — payment backend (BTCPay crypto + manual Zelle)",
   "main": "server.js",
   "type": "commonjs",
   "scripts": {
@@ -14,7 +14,6 @@
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
-    "braintree": "^3.38.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",

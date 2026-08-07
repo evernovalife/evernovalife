@@ -1124,10 +1124,7 @@ body.coa-lightbox-open { overflow: hidden; }
 .form-msg.success { color: var(--accent-mint); }
 .form-msg.error { color: var(--accent-coral); }
 
-/* Braintree Drop-in (cards / PayPal / Venmo) renders its own themed UI */
-#dropin-container { margin-top: 0.5rem; }
-
-/* ---- Alternative payment methods (crypto, Zelle) below the card form ---- */
+/* ---- Payment methods (crypto, Zelle) ---- */
 .alt-pay-divider {
   display: flex; align-items: center; gap: 0.75rem;
   margin: 1.4rem 0 1.1rem; opacity: 0.55; font-size: 0.85rem;

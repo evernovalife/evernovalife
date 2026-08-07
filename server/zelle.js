@@ -64,12 +64,12 @@ function assertPayable({ order, shipping }) {
   // The browser sends `countryCode`; accept `country` too so any caller works.
   const country = String((shipping && (shipping.countryCode || shipping.country)) || '').trim().toUpperCase();
   if (country && country !== 'US' && country !== 'USA' && country !== 'UNITED STATES') {
-    throw new Error('Zelle only works between US bank accounts. Please pay by card or crypto instead.');
+    throw new Error('Zelle only works between US bank accounts. Please pay with Bitcoin or Lightning instead.');
   }
   if (MAX_TOTAL > 0 && order.total > MAX_TOTAL) {
     throw new Error(
       `Zelle is available on orders up to $${MAX_TOTAL.toFixed(2)} — this one is $${order.total.toFixed(2)}. ` +
-      'Please pay by card or crypto instead.'
+      'Please pay with Bitcoin or Lightning instead.'
     );
   }
 }

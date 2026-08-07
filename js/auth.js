@@ -320,7 +320,7 @@
 
   /* ============================================================
      AUTO-SHIP CARD — the customer's own controls over repeating
-     orders. Every action here changes what they get charged, so
+     orders. Every action here changes what they get billed for, so
      each one confirms out loud and re-reads the plan from the
      server rather than guessing at the new state.
      ============================================================ */
@@ -350,9 +350,9 @@
 
     const failed = Number(s.failCount) || 0;
     const alert = failed > 0
-      ? `<p class="sub-alert">We couldn't take the last payment${s.lastError ? ` (${esc(s.lastError)})` : ''}.
+      ? `<p class="sub-alert">We couldn't prepare your last shipment${s.lastError ? ` (${esc(s.lastError)})` : ''}.
          ${status === 'paused'
-           ? 'The plan is paused — update your card at your next checkout, then resume it here.'
+           ? 'The plan is paused — nothing was billed. Resume it here when you\'re ready.'
            : 'We\'ll try again automatically.'}</p>`
       : '';
 
@@ -376,7 +376,7 @@
         <span class="sub-next">${headline}</span>
         <span class="sub-status ${esc(status)}">${esc(status.charAt(0).toUpperCase() + status.slice(1))}</span>
       </div>
-      <p class="sub-meta">${esc(everyPhrase(s.intervalDays))} · ${esc(s.paymentLabel || 'saved payment method')}${
+      <p class="sub-meta">${esc(everyPhrase(s.intervalDays))} · ${esc(s.paymentLabel || 'Bitcoin / Lightning invoice')}${
         s.runCount ? ` · ${s.runCount} shipment${s.runCount === 1 ? '' : 's'} sent` : ''} · ${esc(s.id)}</p>
       <ul class="sub-items">${rows}</ul>
       <p class="sub-meta">≈ ${esc(money(itemsTotal))} in products per shipment, plus shipping and tax at the rates in effect on the day.</p>
@@ -426,7 +426,7 @@
 
     // Cancelling stops a service the customer is relying on — always ask first.
     if (action === 'cancel' &&
-        !window.confirm('Cancel this auto-ship plan? Nothing more will ship and your card won\'t be charged again. This can\'t be undone — you\'d need to start a new plan.')) {
+        !window.confirm('Cancel this auto-ship plan? Nothing more will ship and you won\'t be invoiced again. This can\'t be undone — you\'d need to start a new plan.')) {
       return;
     }
 
@@ -439,13 +439,13 @@
       let done = '';
       if (action === 'cancel') {
         await Auth.cancelSubscription(id);
-        done = 'Auto-ship cancelled. You won\'t be charged again.';
+        done = 'Auto-ship cancelled. You won\'t be invoiced again.';
       } else if (action === 'skip') {
         const s = await Auth.updateSubscription(id, { skipNext: true });
         done = `Skipped. Your next shipment is now ${longDate(s.nextRunAt)}.`;
       } else if (action === 'pause') {
         await Auth.updateSubscription(id, { status: 'paused' });
-        done = 'Paused. Nothing will ship or be charged until you resume.';
+        done = 'Paused. Nothing will ship or be invoiced until you resume.';
       } else if (action === 'resume') {
         const s = await Auth.updateSubscription(id, { status: 'active' });
         done = `Resumed. Your next shipment is ${longDate(s.nextRunAt)}.`;

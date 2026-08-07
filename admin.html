@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/styles.css?v=47">
+  <link rel="stylesheet" href="css/styles.css?v=48">
   <!-- 21+ age gate: runs before anything paints -->
   <script src="js/age-gate.js?v=37"></script>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Cpath d='M20.00 1.00 L21.91 15.38 L27.78 12.22 L24.62 18.09 L39.00 20.00 L24.62 21.91 L27.78 27.78 L21.91 24.62 L20.00 39.00 L18.09 24.62 L12.22 27.78 L15.38 21.91 L1.00 20.00 L15.38 18.09 L12.22 12.22 L18.09 15.38 Z' fill='%23a855f7'/%3E%3C/svg%3E">
@@ -105,16 +105,17 @@
       </div>
 
       <!-- AUTO-SHIP — every repeating order, soonest first, plus a manual
-           trigger so a due charge can be run now instead of waiting for the
-           scheduled ping (handy while testing). -->
+           trigger so a due shipment can be invoiced now instead of waiting for
+           the scheduled ping (handy while testing). -->
       <div class="account-card glass" id="adminAutoshipCard" style="margin-top:1.5rem">
         <div class="rewards-head" style="margin-bottom:0.75rem">
           <h3 id="autoship">Auto-Ship Plans</h3>
           <button class="btn btn-ghost btn-sm" type="button" id="runDueBtn">▶ Run due now</button>
         </div>
         <p class="text-muted" style="font-size:0.85rem;margin:0 0 1rem">
-          Every customer's repeating order, soonest first. “Run due now” charges anything already past its date —
-          the same thing the hourly scheduled trigger does.
+          Every customer's repeating order, soonest first. “Run due now” emails a crypto invoice for anything already
+          past its date — the same thing the hourly scheduled trigger does. The order stays unpaid until the customer
+          pays that invoice.
         </p>
         <div id="autoshipStatus" class="form-msg"></div>
         <div id="autoshipResults" class="admin-table-wrap"></div>
@@ -411,12 +412,12 @@
         });
       }
 
-      /* Bring a plan's next shipment forward to right now. It doesn't charge —
+      /* Bring a plan's next shipment forward to right now. It doesn't invoice —
          it just makes the plan due, so "Run due now" (or the hourly trigger)
          picks it up. Used for testing the cycle and for "send mine early". */
       async function dueNow(id, btn) {
         if (!window.confirm('Move this plan\'s next shipment to right now?\n\n' +
-            'It will be charged on the next run — including if you press “Run due now”.')) return;
+            'It will be invoiced on the next run — including if you press “Run due now”.')) return;
         btn.disabled = true;
         btn.textContent = '…';
         try {
@@ -424,7 +425,7 @@
             { method: 'POST', headers: headers(lastKey) });
           var data = await res.json().catch(function () { return {}; });
           if (!res.ok) throw new Error(data.error || 'Could not move that plan.');
-          setSubStatus('That plan is now due. Press “Run due now” to charge it.', 'success');
+          setSubStatus('That plan is now due. Press “Run due now” to invoice it.', 'success');
           loadSubscriptions();
         } catch (e) {
           setSubStatus(e.message || 'Could not move that plan.', 'error');
@@ -435,8 +436,8 @@
 
       if (runDueBtn) {
         runDueBtn.addEventListener('click', async function () {
-          if (!window.confirm('Charge every auto-ship plan that is past its shipment date now?\n\n' +
-              'This takes real payments — the same thing the scheduled trigger does on its own.')) return;
+          if (!window.confirm('Invoice every auto-ship plan that is past its shipment date now?\n\n' +
+              'This emails real customers a real bill — the same thing the scheduled trigger does on its own.')) return;
           var label = runDueBtn.textContent;
           runDueBtn.disabled = true;
           runDueBtn.textContent = 'Running…';
@@ -445,7 +446,7 @@
             var data = await res.json().catch(function () { return {}; });
             if (!res.ok) throw new Error(data.error || 'The run failed.');
             setSubStatus('Ran ' + data.due + ' due plan' + (data.due === 1 ? '' : 's') + ' · ' +
-              data.charged + ' charged · ' + data.failed + ' failed · ' + data.reminded + ' reminder email' +
+              data.invoiced + ' invoiced · ' + data.failed + ' failed · ' + data.reminded + ' reminder email' +
               (data.reminded === 1 ? '' : 's') + ' sent.', data.failed ? 'error' : 'success');
             loadSubscriptions();
           } catch (e) {

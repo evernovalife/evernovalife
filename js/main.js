@@ -1269,11 +1269,14 @@ function checkoutHref() {
 }
 
 /* ============================================================
-   CHECKOUT PAGE  — real payment via Braintree Drop-in
-   The browser renders Braintree's Drop-in (cards / PayPal /
-   Venmo) to get a payment nonce, then our backend prices the
-   cart server-side and runs the sale. Card data never touches
-   this page (Braintree-hosted iframes → PCI scope SAQ A).
+   CHECKOUT PAGE
+   Two payment paths, neither of which takes money on this page:
+     · Bitcoin / Lightning — our backend opens a BTCPay invoice and
+       we redirect to it; the buyer pays on BTCPay's hosted page
+     · Zelle — the buyer transfers from their own bank; we just
+       place the order and show them the details
+   Both are priced entirely on the server. Nothing resembling a
+   payment credential is ever handled here.
    ============================================================ */
 const API_BASE = (typeof window !== 'undefined' && window.PEPTIDE_API_BASE) || '';
 
@@ -1386,31 +1389,14 @@ function collectCheckout(form) {
   };
 }
 
-/* dynamically load the Braintree Drop-in script */
-function loadBraintreeDropin() {
-  return new Promise((resolve, reject) => {
-    if (window.braintree && window.braintree.dropin) return resolve(window.braintree.dropin);
-    const s = document.createElement('script');
-    s.src = 'https://js.braintreegateway.com/web/dropin/1.43.0/js/dropin.min.js';
-    s.onload = () => (window.braintree && window.braintree.dropin)
-      ? resolve(window.braintree.dropin)
-      : reject(new Error('Braintree Drop-in failed to initialise.'));
-    s.onerror = () => reject(new Error('Could not load the secure checkout.'));
-    document.head.appendChild(s);
-  });
-}
-
 /* ============================================================
    LOYALTY POINTS — redeem at checkout
    Signed-in buyers with a points balance can apply it as money off.
-   The discount is folded into the amount we ask Braintree to charge,
-   but the SERVER re-prices authoritatively and only spends the points
-   once the charge succeeds. State lives in window._enlRedeem so the
-   summary, the pay button and the Drop-in amount all agree.
+   The discount is folded into the invoice amount, but the SERVER
+   re-prices authoritatively; it holds the points when the order opens
+   and hands them back if the invoice is never paid. State lives in
+   window._enlRedeem so the summary and the pay button agree.
    ============================================================ */
-let _dropinInstance = null;   // current Braintree Drop-in (so we can rebuild it)
-let _redeemBusy = false;      // guard against overlapping rebuilds
-
 function round2(n) { return Math.round(((Number(n) || 0) + Number.EPSILON) * 100) / 100; }
 function enlRedeem() { return window._enlRedeem || { points: 0, discount: 0 }; }
 
@@ -1470,7 +1456,7 @@ function renderCheckoutSummary(el) {
         <input type="checkbox" id="redeemPoints" ${redeemActive ? 'checked' : ''}>
         <span>Use my <strong>${loy.balance} points</strong> (−${formatPrice(maxRedeem)})</span>
       </label>` : ''}
-    ${redeemActive ? `<p class="summary-note">Points apply to <strong>card payment</strong>. You'll still earn points on this order.</p>` : ''}
+    ${redeemActive ? `<p class="summary-note">Points come off your <strong>Bitcoin / Lightning</strong> total. You'll still earn points on this order.</p>` : ''}
     <p class="summary-note">🔒 Secure checkout · Research use only</p>`;
 
   const chk = document.getElementById('redeemPoints');
@@ -1480,8 +1466,8 @@ function renderCheckoutSummary(el) {
   updateAutoshipTerms();
 }
 
-/* Toggle points redemption on/off, then re-price everything: summary, the
-   crypto option (hidden while points are applied), and the Drop-in amount. */
+/* Toggle points redemption on/off, then re-price everything: the summary, the
+   pay button's amount, and which payment options still apply. */
 function onRedeemToggle(checked) {
   const loy = window._enlLoyalty;
   if (checked && loy) {
@@ -1493,38 +1479,48 @@ function onRedeemToggle(checked) {
   } else {
     window._enlRedeem = { points: 0, discount: 0 };
   }
-  const form = document.getElementById('checkoutForm');
   renderCheckoutSummary(document.getElementById('checkoutSummary'));
   updateAltPayVisibility();
-  refreshPayment(form);
 }
 
-/* Show or hide the non-card payment options. Neither crypto nor Zelle can apply
-   a points discount (there's no charge of ours to reduce), and neither can be
-   saved for a repeating charge — so both step aside while either is active. On
-   top of that each one respects what the server said it has configured
-   (/api/health → window._cryptoAvailable / window._zelleAvailable). When
-   nothing is left, the whole block including the "or" divider goes away. */
+/* Keep the crypto button showing the amount it will actually invoice, so the
+   discount and the button can never disagree. */
+function updatePayButtonAmount() {
+  const amt = document.getElementById('payBtnAmount');
+  if (amt) amt.textContent = formatPrice(checkoutTotals().total);
+}
+
+/* Show or hide each payment option. Crypto is the primary path and handles
+   everything — points discounts and auto-ship included. Zelle steps aside for
+   both: the money arrives by hand, so there's no invoice to discount, and no
+   way to schedule a repeat. Each option also respects what the server said it
+   has configured (/api/health → window._cryptoAvailable / _zelleAvailable). */
 function updateAltPayVisibility() {
   const wrap = document.getElementById('altPaySection');
   const crypto = document.getElementById('cryptoPaySection');
   const zelle = document.getElementById('zellePaySection');
-  const blocked = (enlRedeem().points || 0) > 0 || autoshipSelection().enabled;
+  const divider = document.querySelector('#altPaySection .alt-pay-divider');
+  const none = document.getElementById('noPayMethods');
+  const zelleBlocked = (enlRedeem().points || 0) > 0 || autoshipSelection().enabled;
 
-  const showCrypto = window._cryptoAvailable !== false && !blocked;
-  const showZelle = window._zelleAvailable !== false && !blocked;
+  const showCrypto = window._cryptoAvailable !== false;
+  const showZelle = window._zelleAvailable !== false && !zelleBlocked;
   if (crypto) crypto.style.display = showCrypto ? '' : 'none';
   if (zelle) zelle.style.display = showZelle ? '' : 'none';
-  if (wrap) wrap.style.display = (showCrypto || showZelle) ? '' : 'none';
+  // The divider only earns its place when there's something on both sides of it.
+  if (divider) divider.style.display = (showCrypto && showZelle) ? '' : 'none';
+  if (none) none.style.display = (showCrypto || showZelle) ? 'none' : '';
+  if (wrap) wrap.style.display = '';
+  updatePayButtonAmount();
 }
 
 /* ============================================================
    AUTO-SHIP — opt in at checkout
    Ticking the box turns this order into a standing one: the same
-   items, charged to the card being used now, every N days. The
-   server does the actual work (vaulting the card and scheduling);
-   all this does is collect the choice and state the terms plainly
-   before the buyer commits to a repeating charge.
+   items every N days. Crypto can't be debited on a schedule, so
+   each repeat arrives as an emailed invoice the buyer chooses to
+   pay — which makes the terms easier to state honestly, not harder.
+   The server schedules it; all this does is collect the choice.
    ============================================================ */
 const AUTOSHIP_MIN_DAYS = 7;
 const AUTOSHIP_MAX_DAYS = 180;
@@ -1542,8 +1538,10 @@ function autoshipSelection() {
   return { enabled: true, intervalDays };
 }
 
-/* Spell out the recurring charge: how much, how often, starting when, and how
-   to stop it. Shown before payment, not after. */
+/* Spell out the repeat: how much, how often, starting when, and how to stop it.
+   Shown before payment, not after. The one thing to keep unmissable is that
+   nothing is ever taken automatically — that's the whole difference between
+   this and a card subscription, and it's in the buyer's favour. */
 function updateAutoshipTerms() {
   const el = document.getElementById('autoshipTerms');
   if (!el) return;
@@ -1553,10 +1551,11 @@ function updateAutoshipTerms() {
   const first = new Date(Date.now() + sel.intervalDays * 86400000)
     .toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
   el.innerHTML =
-    `By ticking this box you authorise Ever Nova Life to charge your payment method ` +
-    `<strong>about ${escapeHtml(total)} every ${escapeHtml(every)}</strong> for these items, ` +
-    `starting <strong>${escapeHtml(first)}</strong>, until you cancel. Prices are charged at the ` +
-    `rate in effect on each shipment date. We'll email you 3 days before every charge, and you can ` +
+    `We'll prepare these items <strong>every ${escapeHtml(every)}</strong> and email you a ` +
+    `Bitcoin / Lightning invoice for <strong>about ${escapeHtml(total)}</strong>, starting ` +
+    `<strong>${escapeHtml(first)}</strong>. <strong>Nothing is ever charged automatically</strong> — ` +
+    `each shipment goes out once you pay its invoice, so skipping one costs you nothing. ` +
+    `Prices are the rate in effect on each shipment date. We'll remind you 3 days beforehand, and you can ` +
     `change the frequency, skip a shipment, pause or cancel any time from ` +
     `<a href="account.html#autoship">your account</a> — no minimum, no cancellation fee.`;
 
@@ -1580,7 +1579,7 @@ function initAutoshipCheckout() {
   const days = document.getElementById('autoshipDays');
 
   if (!signedIn) {
-    // A repeating charge needs an account to manage and cancel it.
+    // A standing order needs an account to manage and cancel it.
     if (toggle) toggle.closest('.autoship-toggle').style.display = 'none';
     if (guest) guest.style.display = '';
     return;
@@ -1611,33 +1610,15 @@ function initAutoshipCheckout() {
   sync();
 }
 
-/* Rebuild the Drop-in so the PayPal/Venmo amount matches the discounted total
-   (card charges are server-priced regardless). Guarded so rapid toggles queue. */
-async function refreshPayment(form) {
-  if (_redeemBusy) return;
-  _redeemBusy = true;
-  const container = document.getElementById('dropin-container');
-  const payBtn = document.getElementById('payBtn');
-  const loading = document.getElementById('dropinLoading');
-  try {
-    if (_dropinInstance) {
-      try { await _dropinInstance.teardown(); } catch (e) { /* already gone */ }
-      _dropinInstance = null;
-    }
-    if (container) container.innerHTML = '';
-    if (payBtn) payBtn.style.display = 'none';
-    if (loading) { loading.className = 'form-hint'; loading.style.display = ''; loading.textContent = 'Updating secure checkout…'; }
-    await renderBraintreeDropin(form);
-  } finally {
-    _redeemBusy = false;
-  }
-}
-
-function showOrderConfirmation(transactionId, pointsEarned, result) {
+/* ---- Crypto (BTCPay) confirmation shown when the buyer is redirected
+   back to checkout.html?paid=crypto after paying. `ref` is what we stashed
+   before the redirect, so the confirmation can name the order and repeat the
+   auto-ship terms they agreed to. ---- */
+function showCryptoConfirmation(ref) {
   cart.clearCart();
-  const earned = Number(pointsEarned) || 0;
-  const sub = result && result.subscription;
   const wrap = document.getElementById('checkoutMain');
+  if (!wrap) return;
+  const sub = ref && ref.subscription;
 
   // Be straight about auto-ship either way: confirm the schedule when it's set
   // up, and say so plainly when it wasn't — never leave them assuming a repeat
@@ -1646,36 +1627,16 @@ function showOrderConfirmation(transactionId, pointsEarned, result) {
   if (sub) {
     const when = new Date(sub.nextRunAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
     const every = sub.intervalDays === 1 ? 'day' : `${sub.intervalDays} days`;
-    autoshipNote = `<p class="text-muted">🔁 <strong>Auto-ship is on.</strong> We'll send these items again every
-      ${escapeHtml(every)} — next on <strong>${escapeHtml(when)}</strong> — and email you 3 days before each charge.
+    autoshipNote = `<p class="text-muted">🔁 <strong>Auto-ship is on.</strong> We'll prepare these items again every
+      ${escapeHtml(every)} — next on <strong>${escapeHtml(when)}</strong> — and email you an invoice to pay each time,
+      with a reminder 3 days before. Nothing is ever charged automatically.
       Change, skip or cancel any time in <a href="account.html#autoship" style="color:var(--accent-purple)">your account</a>.</p>`;
-  } else if (result && result.autoshipFailed) {
-    autoshipNote = `<p class="text-muted">⚠️ Your payment went through, but we couldn't set up the auto-ship
-      schedule. <strong>No repeating charge has been created.</strong> You can start one from
+  } else if (ref && ref.autoshipFailed) {
+    autoshipNote = `<p class="text-muted">⚠️ Your order went through, but we couldn't set up the auto-ship
+      schedule. <strong>No repeating order has been created.</strong> You can start one from
       <a href="account.html#autoship" style="color:var(--accent-purple)">your account</a>, or contact us and we'll sort it out.</p>`;
   }
 
-  if (wrap) {
-    wrap.innerHTML = `
-      <div class="empty-state glass">
-        <div class="empty-icon">✅</div>
-        <h3>Payment received — welcome to the Nest!</h3>
-        <p>Thank you. Your payment was processed securely by Braintree (a PayPal service).${transactionId
-          ? ` Your transaction reference is <strong>${escapeHtml(transactionId)}</strong>.` : ''}</p>
-        ${earned > 0 ? `<p class="text-muted">🎉 You earned <strong>${earned} reward points</strong> on this order — see your balance in <a href="account.html" style="color:var(--accent-purple)">your account</a>.</p>` : ''}
-        ${autoshipNote}
-        <p class="text-muted">We've recorded your order and will ship to the address you provided. Keep your transaction reference for your records.</p>
-        <a class="btn btn-primary" href="index.html">Back to Home</a>
-      </div>`;
-  }
-}
-
-/* ---- Crypto (BTCPay) confirmation shown when the buyer is redirected
-   back to checkout.html?paid=crypto after paying. ---- */
-function showCryptoConfirmation(ref) {
-  cart.clearCart();
-  const wrap = document.getElementById('checkoutMain');
-  if (!wrap) return;
   wrap.innerHTML = `
     <div class="empty-state glass">
       <div class="empty-icon">✅</div>
@@ -1683,13 +1644,16 @@ function showCryptoConfirmation(ref) {
       <p>Thank you! Your crypto payment has been received${ref && ref.orderId
         ? ` — your order reference is <strong>${escapeHtml(ref.orderId)}</strong>` : ''}.
         On-chain payments may take a few minutes to fully confirm.</p>
+      ${autoshipNote}
       <p class="text-muted">Once the transaction settles we'll ship to the address you provided. Keep your order reference for your records.</p>
       <a class="btn btn-primary" href="index.html">Back to Home</a>
     </div>`;
 }
 
 /* validate the form, open a BTCPay invoice on our server, then send the
-   buyer to the hosted crypto checkout. Prices come from the server. */
+   buyer to the hosted crypto checkout. Prices come from the server — the
+   browser sends what it WANTS applied (points, a repeat interval) and the
+   server decides what actually happens. */
 async function submitCryptoOrder(form, btn) {
   if (cart.items.length === 0) { checkoutSetMsg('Your cart is empty.', 'error'); return; }
   if (!validateCheckout(form)) { checkoutSetMsg('Please complete the highlighted fields first.', 'error'); return; }
@@ -1705,13 +1669,24 @@ async function submitCryptoOrder(form, btn) {
       body: JSON.stringify({
         items: cart.items.map(i => ({ id: i.id, quantity: i.quantity })),
         shipping: checkout,
-        email: checkout.email
+        email: checkout.email,
+        pointsToRedeem: enlRedeem().points || 0,   // server clamps to the real balance
+        autoship: autoshipSelection()
       })
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok || !body.checkoutLink) throw new Error(body.error || 'Could not start crypto checkout.');
-    // remember the order so we can show a proper confirmation on redirect back
-    try { sessionStorage.setItem('enl_crypto_order', JSON.stringify({ orderId: body.orderId, invoiceId: body.invoiceId })); } catch (e) {}
+    // Remember the order so we can show a proper confirmation on redirect back.
+    // The subscription rides along because the confirmation is rendered after a
+    // full page navigation, with none of this scope left.
+    try {
+      sessionStorage.setItem('enl_crypto_order', JSON.stringify({
+        orderId: body.orderId,
+        invoiceId: body.invoiceId,
+        subscription: body.subscription || null,
+        autoshipFailed: !!body.autoshipFailed
+      }));
+    } catch (e) {}
     window.location.href = body.checkoutLink;   // → hosted BTCPay invoice
   } catch (err) {
     console.error('[crypto checkout]', err);
@@ -1814,113 +1789,6 @@ async function submitZelleOrder(form, btn) {
   }
 }
 
-/* run the sale on our server (priced server-side) using the Drop-in nonce */
-async function submitOrder(form, payload) {
-  const checkout = collectCheckout(form);
-  const res = await fetch(API_BASE + '/api/checkout', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeader() },
-    body: JSON.stringify({
-      items: cart.items.map(i => ({ id: i.id, quantity: i.quantity })),
-      shipping: checkout,
-      email: checkout.email,
-      nonce: payload.nonce,
-      deviceData: payload.deviceData,
-      pointsToRedeem: enlRedeem().points || 0,   // server clamps to the real balance
-      autoship: autoshipSelection()              // ignored unless signed in
-    })
-  });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok || !body.success) throw new Error(body.error || 'Payment could not be completed.');
-  return body;
-}
-
-/* validate the form, ask the Drop-in for a payment nonce, then charge it */
-async function onPay(instance, form, payBtn) {
-  if (cart.items.length === 0) { checkoutSetMsg('Your cart is empty.', 'error'); return; }
-  if (!validateCheckout(form)) { checkoutSetMsg('Please complete the highlighted fields first.', 'error'); return; }
-  checkoutSetMsg('');
-  payBtn.disabled = true;
-  payBtn.textContent = 'Processing…';
-  try {
-    const payload = await instance.requestPaymentMethod();
-    checkoutSetMsg('Finalising your payment…', 'success');
-    const body = await submitOrder(form, payload);
-    showOrderConfirmation(body.transactionId, body.pointsEarned, body);
-  } catch (err) {
-    console.error('[checkout pay]', err);
-    const noMethod = /no payment method/i.test((err && err.message) || '');
-    checkoutSetMsg(
-      noMethod ? 'Please choose a payment method above first.'
-               : ((err && err.message) || 'Payment could not be completed. Please try again.'),
-      'error'
-    );
-    payBtn.disabled = false;
-    payBtn.innerHTML = 'Pay <span id="payBtnAmount">' + escapeHtml(formatPrice(checkoutTotals().total)) + '</span>';
-  }
-}
-
-async function renderBraintreeDropin(form) {
-  const loading = document.getElementById('dropinLoading');
-  const container = document.getElementById('dropin-container');
-  const payBtn = document.getElementById('payBtn');
-  if (!container) return;
-
-  try {
-    // 1) get a client token from our backend
-    let tokRes;
-    try {
-      tokRes = await fetch(API_BASE + '/api/client-token');
-    } catch (netErr) {
-      throw new Error('Can\'t reach the payment server' +
-        (API_BASE ? ' at ' + API_BASE : '') + '. Make sure it\'s running (npm start in /server).');
-    }
-    const tok = await tokRes.json().catch(() => ({}));
-    if (tokRes.status === 500) {
-      throw new Error(tok.error || 'Payment server has no Braintree keys yet — set up server/.env, then restart it.');
-    }
-    if (!tokRes.ok || !tok.clientToken) {
-      throw new Error(tok.error || ('Payment server returned HTTP ' + tokRes.status + '.'));
-    }
-
-    // 2) load the Drop-in and create the instance (cards + PayPal + Venmo)
-    const dropin = await loadBraintreeDropin();
-    const amount = checkoutTotals().total.toFixed(2);   // reflects any points discount
-    const currency = tok.currency || 'USD';
-    const baseOpts = { authorization: tok.clientToken, container: '#dropin-container', dataCollector: true };
-
-    let instance;
-    try {
-      instance = await dropin.create({
-        ...baseOpts,
-        paypal: { flow: 'checkout', amount: amount, currency: currency },
-        venmo: { allowDesktop: true }
-      });
-    } catch (e) {
-      // PayPal/Venmo not enabled on this merchant account → fall back to cards only
-      console.warn('[checkout] PayPal/Venmo unavailable, using cards only:', e && e.message);
-      instance = await dropin.create(baseOpts);
-    }
-
-    _dropinInstance = instance;   // remember it so a points-toggle can rebuild it
-
-    if (loading) loading.style.display = 'none';
-    if (payBtn) {
-      const amt = document.getElementById('payBtnAmount');
-      if (amt) amt.textContent = formatPrice(checkoutTotals().total);
-      payBtn.style.display = 'block';
-      // assign (not addEventListener) so a Drop-in rebuild can't stack handlers
-      payBtn.onclick = () => onPay(instance, form, payBtn);
-    }
-  } catch (err) {
-    console.error('[checkout]', err);
-    if (loading) {
-      loading.className = 'form-msg error';
-      loading.textContent = err.message || 'Payment is temporarily unavailable.';
-    }
-  }
-}
-
 /* Replace the checkout form with a sign-in / register prompt. The cart is
    untouched — it's synced to the account on sign-in, so nothing is lost. */
 function showCheckoutAccountGate() {
@@ -1990,39 +1858,33 @@ function initCheckoutPage() {
   const consent = form.querySelector('.form-check input[required]');
   if (consent) consent.addEventListener('change', () => { const r = consent.closest('.form-check'); if (r) r.classList.toggle('invalid', !consent.checked); });
 
-  // Non-card options (BTCPay, Zelle) — each works independently of the Drop-in
   const altSection = document.getElementById('altPaySection');
   const cryptoBtn = document.getElementById('cryptoPayBtn');
   const zelleBtn = document.getElementById('zellePayBtn');
 
-  // empty cart → don't bother loading the payment form
+  // empty cart → nothing to pay for
   if (cart.items.length === 0) {
-    const loading = document.getElementById('dropinLoading');
-    if (loading) loading.textContent = 'Add items to your cart to check out.';
     if (altSection) altSection.style.display = 'none';
     return;
   }
 
   initAutoshipCheckout();
+  updatePayButtonAmount();
 
   if (cryptoBtn) cryptoBtn.addEventListener('click', () => submitCryptoOrder(form, cryptoBtn));
   if (zelleBtn) zelleBtn.addEventListener('click', () => submitZelleOrder(form, zelleBtn));
 
   // Ask the server which payment methods it actually has keys for, and drop the
-  // ones it doesn't. (They also stay hidden while points are being redeemed or
-  // auto-ship is ticked — see updateAltPayVisibility.)
-  if (altSection) {
-    fetch(API_BASE + '/api/health')
-      .then(r => r.json())
-      .then(h => {
-        window._cryptoAvailable = !(h && h.crypto === false);
-        window._zelleAvailable = !(h && h.zelle === false);
-        updateAltPayVisibility();
-      })
-      .catch(() => { /* leave visible; a click will surface any real error */ });
-  }
-
-  renderBraintreeDropin(form);
+  // ones it doesn't, so a buyer is never offered a button that can only fail.
+  // (Zelle also steps aside for points/auto-ship — see updateAltPayVisibility.)
+  fetch(API_BASE + '/api/health')
+    .then(r => r.json())
+    .then(h => {
+      window._cryptoAvailable = !(h && h.crypto === false);
+      window._zelleAvailable = !(h && h.zelle === false);
+      updateAltPayVisibility();
+    })
+    .catch(() => { /* leave visible; a click will surface any real error */ });
 }
 
 /* ============================================================

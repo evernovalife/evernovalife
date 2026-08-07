@@ -40,10 +40,10 @@ process.env.ZELLE_RECIPIENT = 'pay@evernovalife.com';
 process.env.ZELLE_NAME = 'Ever Nova Life LLC';
 process.env.ZELLE_MAX_TOTAL = '5000';
 
-// Blank (but present) Braintree keys so nothing can reach a live gateway.
-process.env.BRAINTREE_MERCHANT_ID = '';
-process.env.BRAINTREE_PUBLIC_KEY = '';
-process.env.BRAINTREE_PRIVATE_KEY = '';
+// Blank (but present) BTCPay keys so nothing can reach a live gateway.
+process.env.BTCPAY_URL = '';
+process.env.BTCPAY_API_KEY = '';
+process.env.BTCPAY_STORE_ID = '';
 
 const loyalty = require('../loyalty.js');
 const app = require('../server.js');

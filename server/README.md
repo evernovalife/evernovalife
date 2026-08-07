@@ -1,52 +1,47 @@
-# Ever Nova Life — Braintree payment backend
+# Ever Nova Life — payment backend
 
-Real payments for the Ever Nova Life store, using **Braintree** (PayPal's payment
-gateway) with the **Drop-in UI**. One checkout box accepts **debit/credit cards,
-PayPal, and Venmo**. The browser renders the Drop-in and produces a payment
-*nonce*; this server **recomputes prices from the product catalog** and runs the
-sale, so the amount charged can never be altered from the browser.
+Real payments for the Ever Nova Life store. Two methods, **no card processor**:
+
+- **Bitcoin / Lightning** via a self-hosted **BTCPay Server** — the primary method
+- **Zelle** bank transfer — manual, confirmed by hand in `admin.html`
+
+Both share one rule: this server **recomputes prices from the product catalog**,
+so the amount owed can never be altered from the browser. Both also confirm
+*after* the order is created — there is no card-style synchronous capture, so
+every order starts unpaid and is settled by a webhook (crypto) or by the owner
+(Zelle).
 
 ```
 Browser (checkout.html)
-   │  GET  /api/client-token      ── server returns a Drop-in client token
-   │  ◄ client token
-   │  buyer picks card / PayPal / Venmo in the Drop-in → gets a payment nonce
-   │  POST /api/checkout          ── server prices the cart + runs the sale
+   │  POST /api/crypto/checkout   ── server prices the cart + opens a BTCPay invoice
+   │  ◄ { checkoutLink }
+   │  redirect → hosted BTCPay checkout
    ▼
-Braintree gateway
+BTCPay Server ── POST /api/crypto/webhook (signed) ──► order marked paid
 ```
 
-## 1. Get Braintree API credentials
+> **Why no cards?** Card processing was removed deliberately. See
+> *A note on this product category* near the end of this file — high-risk
+> classification made a card gateway a liability rather than an asset.
 
-1. Create / sign in to a Braintree account at **https://www.braintreepayments.com**
-   (this goes through PayPal/Braintree approval).
-2. In the **Control Panel → Settings → API Keys**, copy your:
-   - **Merchant ID**
-   - **Public Key**
-   - **Private Key**
-3. Use the **sandbox** Control Panel (https://sandbox.braintreegateway.com) for
-   testing, and your **production** Control Panel keys when you go live.
-
-## 2. Configure
+## 1. Configure
 
 ```bash
 cd server
 cp .env.example .env      # then edit .env
 ```
 
-Fill in `.env`:
+The essentials:
 
-| Variable                 | What to put                                              |
-|--------------------------|---------------------------------------------------------|
-| `BRAINTREE_ENV`          | `sandbox` while testing, `production` for real payments  |
-| `BRAINTREE_MERCHANT_ID`  | Merchant ID for the selected environment                 |
-| `BRAINTREE_PUBLIC_KEY`   | Public Key for the selected environment                  |
-| `BRAINTREE_PRIVATE_KEY`  | Private Key for the selected environment                 |
-| `CURRENCY`               | `USD` (must be enabled on your merchant account)         |
-| `PORT`                   | API port (default `4242`)                                |
-| `ALLOWED_ORIGINS`        | `*` for local dev; your real origin in production        |
+| Variable            | What to put                                              |
+|---------------------|----------------------------------------------------------|
+| `BTCPAY_*`          | Your BTCPay instance — see the crypto section below       |
+| `CURRENCY`          | `USD` (what prices and invoices are denominated in)       |
+| `PORT`              | API port (default `4242`)                                 |
+| `ALLOWED_ORIGINS`   | `*` for local dev; your real origin in production         |
+| `JWT_SECRET`        | Long random string — accounts are required to check out   |
 
-## 3. Run
+## 2. Run
 
 ```bash
 cd server
@@ -57,46 +52,32 @@ npm start
 You'll see:
 
 ```
-Ever Nova Life payment server (Braintree)
-  env:   sandbox
-  api:   http://localhost:4242/api
-  site:  http://localhost:4242/  (serving ...)
+Ever Nova Life payment server
+  crypto: BTCPay ready → https://pay.example.com
+  zelle:  not configured (set ZELLE_RECIPIENT + ZELLE_NAME in .env)
+  auth:   accounts ready
+  api:    http://localhost:4242/api
 ```
 
 The server also serves the static site, so open **http://localhost:4242/checkout.html**
 — same origin means `window.PEPTIDE_API_BASE` can stay `""`.
 
-## 4. Test the full flow (sandbox)
+## 3. Go live
 
-1. Add products to the cart, go to checkout, fill the form, tick the consent box.
-2. In the Drop-in, pay with a **sandbox test card** (e.g. Visa `4111 1111 1111 1111`,
-   any future expiry, any CVV) or the sandbox **PayPal / Venmo** options.
-   Full list of test card numbers:
-   https://developer.paypal.com/braintree/docs/reference/general/testing
-3. Click **Pay**. You should land on the "Payment received" confirmation with a
-   transaction reference, and see the transaction in your sandbox Control Panel
-   under **Transactions** (status `Submitted for Settlement`).
-
-## 5. Go live
-
-1. Set `BRAINTREE_ENV=production` and swap in your **production** Merchant ID +
-   Public/Private keys.
+1. Point `BTCPAY_*` at your production BTCPay store and register the webhook
+   (below). `GET /api/health` must report `"crypto": true`.
 2. Set `ALLOWED_ORIGINS` to your real site origin (e.g. `https://evernovalife.com`).
 3. If the site is hosted separately from this API, set
-   `window.PEPTIDE_API_BASE` in `checkout.html` to the API origin
-   (e.g. `https://api.evernovalife.com`) and make sure that origin is in
-   `ALLOWED_ORIGINS`.
-4. Serve everything over **HTTPS** (required for live card entry).
-5. In the Control Panel, enable the payment methods you want in the Drop-in
-   (cards are on by default; enable **PayPal** and **Venmo** under
-   **Settings → Processing**).
+   `window.PEPTIDE_API_BASE` in `js/config.js` to the API origin, and make sure
+   that origin is in `ALLOWED_ORIGINS`.
+4. Serve everything over **HTTPS**.
+5. Set `CRON_KEY` and point an external scheduler at
+   `POST /api/subscriptions/run-due` so auto-ship invoices go out.
 
 ## Endpoints
 
 | Method | Path                   | Purpose                                          |
 |--------|------------------------|--------------------------------------------------|
-| GET    | `/api/client-token`    | Short-lived token the Drop-in needs to start     |
-| POST   | `/api/checkout`        | Price the cart server-side and run the card sale |
 | POST   | `/api/crypto/checkout` | Price the cart + open a BTCPay crypto invoice    |
 | POST   | `/api/crypto/webhook`  | BTCPay → us: invoice state changes (signed)      |
 | POST   | `/api/zelle/checkout`  | Price the cart + open an unpaid Zelle order      |
@@ -108,27 +89,14 @@ The server also serves the static site, so open **http://localhost:4242/checkout
 | GET    | `/api/auth/me`         | Current user (needs `Authorization: Bearer …`)   |
 | GET    | `/api/health`          | Liveness + which methods are configured          |
 
-`POST /api/checkout` body:
-
-```json
-{
-  "items":   [{ "id": 1, "quantity": 2 }],
-  "shipping":{ "name": "...", "address": "...", "city": "...",
-               "state": "...", "postalCode": "...", "countryCode": "US" },
-  "email":   "you@lab.com",
-  "nonce":   "<payment nonce from the Drop-in>",
-  "deviceData": "<device data from the Drop-in>"
-}
-```
-
 ## Crypto payments — Bitcoin / Lightning (BTCPay Server)
 
-Runs alongside cards. The buyer clicks **Pay with Bitcoin / Lightning**, we price
-the cart server-side (same `pricing.js` as cards), open a **hosted BTCPay
-invoice**, and redirect them to it. BTCPay is **non-custodial** — funds settle
-straight to the wallet connected in your BTCPay store; this server never touches
-the money, and there are **no processing fees** (unlike the 5–8% high-risk card
-rates for this product category).
+The store's primary payment method. The buyer clicks **Pay with Bitcoin /
+Lightning**, we price the cart server-side, open a **hosted BTCPay invoice**, and
+redirect them to it. BTCPay is **non-custodial** — funds settle straight to the
+wallet connected in your BTCPay store; this server never touches the money, and
+there are **no processing fees** (against the 5–8% high-risk card rates this
+product category attracts).
 
 ```
 Browser (checkout.html)
@@ -161,18 +129,24 @@ Browser (checkout.html)
   "items":   [{ "id": 1, "quantity": 2 }],
   "shipping":{ "name": "...", "address": "...", "city": "...",
                "state": "...", "postalCode": "...", "countryCode": "US" },
-  "email":   "you@lab.com"
+  "email":   "you@lab.com",
+  "pointsToRedeem": 500,
+  "autoship": { "enabled": true, "intervalDays": 30 }
 }
 ```
 
 The order id + full price breakdown + ship-to are stored in the invoice
 `metadata`, so you can reconcile and ship right from the BTCPay invoice screen
-(handy since this app has no order database yet).
+as well as from `admin.html`.
 
-> **Fulfilment hook:** `/api/crypto/webhook` verifies the signature and logs the
-> event. When you add an order store, act on `InvoiceSettled` (paid & confirmed)
-> to mark the order paid / trigger shipping. Volatility tip: set your BTCPay
-> store to auto-convert or settle in a stablecoin if you don't want to hold BTC.
+**Order lifecycle.** The order is recorded as `pending` when the invoice opens.
+`/api/crypto/webhook` then verifies the signature and acts on the state:
+`InvoiceSettled` → paid (points earned, referral rewards granted, buyer
+emailed); `InvoiceExpired` / `InvoiceInvalid` → cancelled, and any loyalty
+points held against the discount are returned.
+
+> Volatility tip: set your BTCPay store to auto-convert or settle in a
+> stablecoin if you don't want to hold BTC.
 
 ## Zelle — manual bank transfer (US only)
 
@@ -216,8 +190,9 @@ You (admin.html → "Payments to Confirm")
 - **There is no chargeback, in either direction.** Money that arrives is yours;
   money that never arrives is simply an order to cancel. Refunds are a transfer
   you send back by hand.
-- **Points redemption and auto-ship are hidden for Zelle** — there's no charge of
-  ours to discount and no stored method to charge again.
+- **Points redemption and auto-ship are hidden for Zelle** — there's no invoice of
+  ours to discount, and no way to schedule a repeat around a manual transfer.
+  Both live on the crypto path.
 - **US only.** Non-US shipping addresses are refused at `/api/zelle/checkout`
   before an order is created.
 
@@ -287,13 +262,6 @@ Errors are JSON `{ "error": "…" }` with a matching status: `409` duplicate ema
 > email provider. The account page's orders/stats are still placeholder demo data
 > until an order database exists.
 
-## Cards / PayPal / Venmo — all in one box
-
-The Drop-in UI handles all three. Card fields are Braintree-hosted iframes, so
-card data never touches your page or server (keeps you in the simplest PCI scope,
-**SAQ A**). PayPal and Venmo appear as buttons inside the same box once enabled on
-your merchant account.
-
 ## Changing a price (read this before editing prices)
 
 The catalog has **two layers**, and only one of them is live:
@@ -324,15 +292,16 @@ sets *after* a sync survives — the version has to move again to override it.
 ## Notes & next steps
 
 - **Pricing source of truth:** `pricing.js` + `../js/products-data.js`. Update
-  prices in one place and both the store and the charge stay in sync.
-- **A note on this product category:** card processors (incl. PayPal/Braintree —
-  they are the **same company**) often restrict research-peptide sales. Confirm
-  your account is approved for this category before going live, or payments may be
-  held or reversed. Switching gateways within PayPal/Braintree does **not** change
-  this underwriting.
-- **Recommended hardening for production:** add a Braintree **webhook** listener
-  to record settled transactions server-side, persist orders to a database, and
-  send your own confirmation email. (`transaction.sale` here authorizes **and**
-  submits for settlement in one step.)
-- **Optional:** add Braintree **line items** to `braintree.js` for Level 2/3
-  interchange data — omitted here to keep the sale call simple and robust.
+  prices in one place and both the store and the invoice stay in sync.
+- **A note on this product category — why there is no card processor.** Card
+  processors (including PayPal/Braintree, which are the **same company**)
+  routinely restrict research-peptide sales. An account can be approved and then
+  have funds held or reversed once the category is noticed, which makes a card
+  gateway an unpredictable dependency rather than a safety net. Crypto settles
+  non-custodially with no processing fee and no chargeback; Zelle covers buyers
+  who won't touch crypto. Removing Braintree was a deliberate choice, not an
+  outage — don't "restore" it without re-doing that underwriting question.
+- **Adding a card/ACH processor later.** The scheduler is the only place that
+  assumes push-only payment. Give the subscription record a `method` other than
+  `crypto` and branch in `runOneSubscription` (server.js) — the claim/recovery,
+  scheduling and email machinery around it are payment-agnostic already.

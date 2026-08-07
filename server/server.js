@@ -1,9 +1,11 @@
 /* ============================================================
-   EVER NOVA LIFE — payment API server (Braintree Drop-in)
-   Endpoints:
-     GET  /api/client-token   → short-lived token the Drop-in UI needs
-     POST /api/checkout       → price the cart server-side + run the sale
-     GET  /api/health         → liveness probe
+   EVER NOVA LIFE — payment API server
+   Every payment path prices the cart HERE; the browser never sends
+   a total. Two methods, both of which confirm AFTER the order is
+   created (there is no card-style synchronous capture):
+     POST /api/crypto/checkout → open a BTCPay invoice  (webhook confirms)
+     POST /api/zelle/checkout  → open an unpaid order   (admin confirms)
+     GET  /api/health          → liveness probe
    Also (optionally) serves the static site from the repo root,
    so the whole store runs from one origin during development.
    ============================================================ */
@@ -15,7 +17,6 @@ const express = require('express');
 const cors = require('cors');
 
 const { buildOrder } = require('./pricing.js');
-const braintree = require('./braintree.js');
 const btcpay = require('./btcpay.js');
 const zelle = require('./zelle.js');
 const auth = require('./auth.js');
@@ -47,30 +48,18 @@ app.use(express.json({
   verify: (req, _res, buf) => { req.rawBody = buf; }
 }));
 
-/* ---- client token: the browser Drop-in exchanges this to talk to Braintree ---- */
-app.get('/api/client-token', async (req, res) => {
-  if (!braintree.CONFIGURED) {
-    return res.status(500).json({ error: 'Server is missing Braintree API keys (see server/.env).' });
-  }
-  try {
-    const clientToken = await braintree.generateClientToken();
-    res.json({ clientToken, currency: braintree.CURRENCY, env: braintree.ENV });
-  } catch (err) {
-    console.error('[client-token] failed:', err.message);
-    res.status(500).json({ error: 'Could not initialise the payment form. Check your Braintree keys.' });
-  }
-});
-
+/* The checkout reads this to decide which payment buttons to show, so a
+   method that isn't configured is never offered rather than failing on click. */
 app.get('/api/health', (req, res) => res.json({
   ok: true,
-  env: braintree.ENV,
-  card: braintree.CONFIGURED,     // Braintree (cards / PayPal / Venmo) ready?
   crypto: btcpay.CONFIGURED,      // BTCPay (Bitcoin / Lightning) ready?
   zelle: zelle.CONFIGURED,        // Zelle (manual bank transfer) ready?
   auth: true,                     // email/password accounts always available
   email: mailer.CONFIGURED,       // reset + welcome emails (Gmail SMTP) ready?
-  autoship: braintree.CONFIGURED, // recurring shipments need the card vault
-  cron: !!CRON_KEY                // is the scheduled-charge trigger armed?
+  // Auto-ship re-invoices through BTCPay, so it rides on the same config —
+  // and on email, which is how the customer receives each pay link.
+  autoship: btcpay.CONFIGURED,
+  cron: !!CRON_KEY                // is the scheduled-invoice trigger armed?
 }));
 
 /* ============================================================
@@ -287,10 +276,14 @@ app.get('/api/referral', auth.requireAuth, (req, res) => {
 /* ============================================================
    AUTO-SHIP — repeating shipments ("subscriptions")
    A customer turns a checkout into a standing order: the same
-   items, re-charged to the card they saved, every N days of their
-   choosing. Nothing about the money is trusted from the browser —
-   every run re-prices against the live catalog and charges a token
-   held in Braintree's vault.
+   items, re-invoiced every N days of their choosing. Nothing about
+   the money is trusted from the browser — every run re-prices
+   against the live catalog.
+
+   Crypto is push-only: we cannot debit a wallet on a schedule, so
+   a due plan opens a fresh BTCPay invoice and emails the pay link
+   instead of charging silently. The plan is the schedule; the
+   customer still authorises each payment.
 
    The scheduler lives further down (runDueSubscriptions); these
    routes are the customer's controls over their own plans.
@@ -308,52 +301,21 @@ app.get('/api/subscriptions', auth.requireAuth, (req, res) => {
 });
 
 /* ---- start a plan outside of a checkout ----
-   Either vaults a fresh Drop-in nonce, or reuses a card already saved on one
-   of this account's other plans. No charge happens now — the first recurring
-   shipment lands one interval from today. */
+   Nothing is paid now: the first invoice goes out one interval from today.
+   There's no payment method to collect up front — each shipment is paid from
+   its own BTCPay invoice when it's issued. */
 app.post('/api/subscriptions', auth.requireAuth, async (req, res) => {
   try {
     const body = req.body || {};
+    if (!btcpay.CONFIGURED) {
+      return res.status(503).json({ error: 'Auto-ship is unavailable right now (crypto payments are not set up).' });
+    }
     const order = buildOrder(body.items);   // validates ids/quantities + previews the price
-
-    // Check the request is complete before touching the payment gateway — a
-    // missing field is the caller's problem, not something to spend a
-    // round-trip (and a stray Braintree customer record) discovering.
-    if (!body.nonce && !body.paymentMethodToken) {
-      return res.status(400).json({ error: 'A payment method is required to start auto-ship.' });
-    }
-
-    const customerId = await braintree.findOrCreateCustomer({
-      id: req.user.id,
-      email: body.email || req.user.email,
-      firstName: req.user.firstName,
-      lastName: req.user.lastName
-    });
-
-    let token = '';
-    let label = 'Saved payment method';
-    if (body.nonce) {
-      const vaulted = await braintree.vaultPaymentMethod({
-        customerId, nonce: body.nonce, deviceData: body.deviceData
-      });
-      token = vaulted.token;
-      label = vaulted.label;
-    } else if (body.paymentMethodToken) {
-      // Never take the caller's word for it — confirm the vault entry is on
-      // THIS customer before pointing a recurring charge at it.
-      const owned = await braintree.paymentMethodBelongsTo(body.paymentMethodToken, customerId);
-      if (!owned) return res.status(400).json({ error: 'That saved payment method is not on your account.' });
-      token = body.paymentMethodToken;
-      const known = subscriptions.listForUser(req.user.id).find(s => s.paymentMethodToken === token);
-      if (known && known.paymentLabel) label = known.paymentLabel;
-    }
+    if (body.shipping) assertUsShipping(body.shipping);
 
     const sub = subscriptions.create(req.user.id, {
       items: orderToSubscriptionItems(order),
       intervalDays: body.intervalDays,
-      paymentMethodToken: token,
-      paymentLabel: label,
-      braintreeCustomerId: customerId,
       email: body.email || req.user.email,
       shippingAddress: body.shipping
     });
@@ -383,7 +345,7 @@ app.patch('/api/subscriptions/:id', auth.requireAuth, (req, res) => {
   }
 });
 
-/* ---- cancel a plan (kept as history; never charged again) ---- */
+/* ---- cancel a plan (kept as history; never invoiced again) ---- */
 app.delete('/api/subscriptions/:id', auth.requireAuth, (req, res) => {
   const cancelled = subscriptions.cancel(req.params.id, req.user.id);
   if (!cancelled) return res.status(404).json({ error: 'No auto-ship plan with that id.' });
@@ -477,15 +439,15 @@ app.delete('/api/admin/users/:id', requireAdmin, (req, res) => {
   try { store.deleteUserData(id); } catch (e) { console.error('[admin delete] cleanup failed:', e.message); }
   try { loyalty.deleteUser(id); } catch (e) { console.error('[admin delete] loyalty cleanup failed:', e.message); }
   // Critical: drop their auto-ship plans too, or the scheduler would keep
-  // charging a card for an account that no longer exists.
+  // invoicing an account that no longer exists.
   try { subscriptions.deleteUserData(id); } catch (e) { console.error('[admin delete] autoship cleanup failed:', e.message); }
   res.json({ success: true, deleted: removed });
 });
 
 /* ---- ADMIN: bring a plan's next shipment forward to now ----
    Two real uses: testing the whole cycle without waiting weeks, and customer
-   service ("send my next one early"). It only moves the DATE — the charge still
-   goes through the normal scheduled run, with all its guards. */
+   service ("send my next one early"). It only moves the DATE — the invoice still
+   goes out through the normal scheduled run, with all its guards. */
 app.post('/api/admin/subscriptions/:id/due-now', requireAdmin, (req, res) => {
   const sub = subscriptions.get(req.params.id);
   if (!sub) return res.status(404).json({ error: 'No auto-ship plan with that id.' });
@@ -600,10 +562,11 @@ app.post('/api/auth/reset', async (req, res) => {
 
 /* ---- LOYALTY / REFERRAL bookkeeping helpers ----
    Turn a validated redemption request into a discount BEFORE pricing, so the
-   amount we charge already reflects it. We work out the actual points to spend
+   amount we bill already reflects it. We work out the actual points to spend
    from the discount pricing.js ends up applying (it clamps to the subtotal), so
-   points and dollars can never drift apart. The points are only DEDUCTED after
-   the charge succeeds (see the checkout handlers). Guests can't redeem. */
+   points and dollars can never drift apart. The points are held the moment the
+   order is opened and returned if it dies unpaid — see reserveLoyaltyPoints /
+   refundReservedPoints. Guests can't redeem. */
 function plannedDiscount(user, pointsToRedeem) {
   if (!user) return 0;
   const requested = Math.max(0, Math.floor(Number(pointsToRedeem) || 0));
@@ -612,22 +575,42 @@ function plannedDiscount(user, pointsToRedeem) {
   return loyalty.pointsToDollars(usePoints);
 }
 
-/* After a paid order: deduct redeemed points, grant earned points, and process
-   any pending referral reward. Returns { pointsEarned, pointsRedeemed } for the
-   stored record + the API response. */
-function settleLoyaltyForPaidOrder(userId, orderId, order) {
-  let pointsRedeemed = 0, pointsEarned = 0;
+/* Hold the points a discount was priced against, at the moment the order is
+   opened. Every payment method here confirms later (a BTCPay invoice, a Zelle
+   transfer), so waiting until "paid" to debit would let one balance discount
+   several open orders. Returns the points taken, for the stored record.
+
+   Points are EARNED separately, in markOrderPaid — nothing is granted for an
+   order that was never paid for. */
+function reserveLoyaltyPoints(userId, order, orderId) {
+  if (!userId || !order || !(order.discount > 0)) return 0;
   try {
-    pointsRedeemed = order.discount > 0 ? loyalty.centsToPoints(Math.round(order.discount * 100)) : 0;
-    if (pointsRedeemed > 0) loyalty.redeem(userId, pointsRedeemed, 'Redeemed at checkout', { orderId });
-    // earn on the cash actually spent on product (subtotal minus any discount)
-    pointsEarned = loyalty.earnForAmount(order.subtotal - order.discount);
-    if (pointsEarned > 0) loyalty.earn(userId, pointsEarned, 'Order ' + orderId, { orderId });
+    const points = loyalty.centsToPoints(Math.round(order.discount * 100));
+    if (points > 0) loyalty.redeem(userId, points, 'Redeemed at checkout', { orderId });
+    return points;
   } catch (e) {
-    console.error('[loyalty] settle failed:', e.message);
+    console.error('[loyalty] could not reserve points:', e.message);
+    return 0;
   }
-  awardReferral(userId);
-  return { pointsEarned, pointsRedeemed };
+}
+
+/* Give held points back when an order dies unpaid (an expired or invalid
+   BTCPay invoice, an admin cancelling a Zelle order that never landed).
+   Idempotent: the refund is stamped on the order, so a repeated webhook
+   delivery can't credit the same points twice. */
+function refundReservedPoints(orderId) {
+  const found = store.listAllOrders().find(o => o.orderId === orderId);
+  if (!found || found.userId === store.GUEST_KEY) return 0;
+  const points = Number(found.pointsRedeemed) || 0;
+  if (!points || found.pointsRefunded) return 0;
+  try {
+    loyalty.earn(found.userId, points, 'Refund — order ' + orderId + ' was not paid', { orderId });
+    store.updateOrderStatus(orderId, null, { pointsRefunded: points });
+    return points;
+  } catch (e) {
+    console.error('[loyalty] could not refund reserved points:', e.message);
+    return 0;
+  }
 }
 
 /* Referral reward — granted once, on the referred buyer's first paid order.
@@ -669,116 +652,6 @@ async function sendReferralRewardEmail(referrerId, points) {
   return mailer.sendMail({ to: referrer.email, subject, text, html });
 }
 
-/* ---- checkout: price it HERE (never trust the browser's total), then sell ---- */
-app.post('/api/checkout', auth.requireAuth, async (req, res) => {
-  try {
-    const body = req.body || {};
-    assertResearchDetails(body.shipping);
-    assertUsShipping(body.shipping);                      // U.S. addresses only
-    // Loyalty redemption (signed-in only) is folded into the price up-front so
-    // the charge already reflects it; the points are spent only on success.
-    const discount = plannedDiscount(req.user, body.pointsToRedeem);
-    const order = buildOrder(body.items, { discount });   // authoritative price
-    const orderId = newOrderId();
-
-    /* Auto-ship opt-in. Signed-in only — a repeating charge needs an account
-       to manage and cancel it. When they opt in we attach this sale to a
-       Braintree customer and keep the payment method in the vault, so the
-       scheduler can charge it again without the card ever touching our server.
-       If any of that fails we let the one-off sale go through anyway rather
-       than blocking a purchase over a convenience feature. */
-    const wantsAutoship = !!(req.user && body.autoship && body.autoship.enabled);
-    let customerId = '';
-    if (wantsAutoship) {
-      try {
-        customerId = await braintree.findOrCreateCustomer({
-          id: req.user.id,
-          email: body.email || req.user.email,
-          firstName: req.user.firstName,
-          lastName: req.user.lastName
-        });
-      } catch (e) {
-        console.error('[autoship] could not prepare the saved card:', e.message);
-      }
-    }
-
-    const transaction = await braintree.createTransaction({
-      order,
-      nonce: body.nonce,
-      deviceData: body.deviceData,
-      shipping: body.shipping,
-      email: body.email,
-      orderId,
-      // The card networks want the first sale in a series flagged as such;
-      // scheduled charges later go out as 'recurring'.
-      ...(customerId ? { customerId, storeInVault: true, source: 'recurring_first' } : {})
-    });
-
-    let pointsEarned = 0, pointsRedeemed = 0;
-
-    // Signed in? Record the order on their account and empty their saved cart.
-    if (req.user) {
-      try {
-        ({ pointsEarned, pointsRedeemed } = settleLoyaltyForPaidOrder(req.user.id, orderId, order));
-        store.addOrder(req.user.id, buildOrderRecord({
-          orderId, order, method: 'card', status: 'paid',
-          email: body.email, shipping: body.shipping,
-          transactionId: transaction.id,
-          pointsEarned, pointsRedeemed
-        }));
-        store.clearCart(req.user.id);
-      } catch (e) {
-        console.error('[checkout] could not save order:', e.message);
-      }
-    }
-
-    // The sale is done and recorded — now set up the repeat, if they asked for
-    // one. This order IS the first shipment, so the plan's first recurring
-    // charge is one full interval away.
-    let subscription = null;
-    if (wantsAutoship && customerId) {
-      try {
-        const vaulted = braintree.vaultedMethodFrom(transaction);
-        if (!vaulted) throw new Error('Braintree did not return a saved payment method.');
-        const sub = subscriptions.create(req.user.id, {
-          items: orderToSubscriptionItems(order),
-          intervalDays: body.autoship.intervalDays,
-          paymentMethodToken: vaulted.token,
-          paymentLabel: vaulted.label,
-          braintreeCustomerId: customerId,
-          email: body.email || req.user.email,
-          shippingAddress: body.shipping,
-          firstOrderId: orderId
-        });
-        subscription = subscriptions.publicSubscription(sub);
-        sendSubscriptionCreatedEmail(req.user, sub)
-          .catch(err => console.error('[autoship email] failed:', err.message));
-      } catch (e) {
-        console.error('[autoship] could not start the plan:', e.message);
-      }
-    }
-
-    res.status(201).json({
-      success: true,
-      orderId,
-      transactionId: transaction.id,
-      status: transaction.status,                          // e.g. "submitted_for_settlement"
-      amount: transaction.amount,
-      total: order.total,
-      discount: order.discount,
-      pointsEarned,
-      pointsRedeemed,
-      subscription,
-      // Tell the browser when auto-ship was asked for but couldn't be set up,
-      // so the confirmation can be honest instead of silently dropping it.
-      autoshipFailed: wantsAutoship && !subscription
-    });
-  } catch (err) {
-    console.error('[checkout] failed:', err.message);
-    res.status(400).json({ error: err.message });
-  }
-});
-
 /* Shape a stored order record from a priced order + payment details.
    `order.shipping` is the shipping COST (from pricing.js); the delivery
    address arrives separately as `shipping`, stored as shippingAddress so
@@ -807,9 +680,9 @@ function buildOrderRecord({ orderId, order, method, status, email, shipping, tra
 
 /* ============================================================
    CRYPTO CHECKOUT — Bitcoin / Lightning via BTCPay Server
-   Same rule as cards: price the cart HERE, never trust the
-   browser's total. We open a hosted BTCPay invoice and hand the
-   browser its checkoutLink to redirect to.
+   The store's primary payment method. Price the cart HERE, never
+   trust the browser's total. We open a hosted BTCPay invoice and
+   hand the browser its checkoutLink to redirect to.
    ============================================================ */
 
 /* ---- open a BTCPay invoice for the (server-priced) cart ---- */
@@ -821,7 +694,13 @@ app.post('/api/crypto/checkout', auth.requireAuth, async (req, res) => {
     const body = req.body || {};
     assertResearchDetails(body.shipping);
     assertUsShipping(body.shipping);                            // U.S. addresses only
-    const order = buildOrder(body.items);                       // authoritative price
+    // Loyalty redemption is folded into the invoice amount, so the buyer pays
+    // the discounted total. The points are HELD (debited now) and returned if
+    // the invoice expires unpaid — see refundReservedPoints below. Holding
+    // rather than spending-on-settle is what stops the same balance funding
+    // two open invoices at once.
+    const discount = plannedDiscount(req.user, body.pointsToRedeem);
+    const order = buildOrder(body.items, { discount });         // authoritative price
     const orderId = newOrderId();
 
     // Build a same-site return URL so BTCPay can send the buyer back to us.
@@ -839,20 +718,45 @@ app.post('/api/crypto/checkout', auth.requireAuth, async (req, res) => {
       redirectUrl
     });
 
-    // Signed in? Record the order as pending now; the webhook flips it to
-    // paid once BTCPay confirms the on-chain payment. Empty their saved cart
-    // so the same items don't linger after they've committed to buying.
-    if (req.user) {
+    /* Auto-ship opt-in. Signed-in only — a standing order needs an account to
+       manage and cancel it. The plan is created now, alongside the unpaid
+       invoice: it holds no money and charges nothing, so an invoice the buyer
+       abandons costs them a plan they can cancel, not a payment. The first
+       repeat invoice is one full interval away. */
+    const wantsAutoship = !!(body.autoship && body.autoship.enabled);
+    let subscription = null;
+    if (wantsAutoship) {
       try {
-        store.addOrder(req.user.id, buildOrderRecord({
-          orderId, order, method: 'crypto', status: 'pending',
-          email: body.email, shipping: body.shipping,
-          invoiceId: invoice.id
-        }));
-        store.clearCart(req.user.id);
+        const sub = subscriptions.create(req.user.id, {
+          items: orderToSubscriptionItems(order),
+          intervalDays: body.autoship.intervalDays,
+          email: body.email || req.user.email,
+          shippingAddress: body.shipping,
+          firstOrderId: orderId
+        });
+        subscription = subscriptions.publicSubscription(sub);
+        sendSubscriptionCreatedEmail(req.user, sub)
+          .catch(err => console.error('[autoship email] failed:', err.message));
       } catch (e) {
-        console.error('[crypto checkout] could not save order:', e.message);
+        console.error('[autoship] could not start the plan:', e.message);
       }
+    }
+
+    // Record the order as pending now; the webhook flips it to paid once
+    // BTCPay confirms the payment. Empty their saved cart so the same items
+    // don't linger after they've committed to buying.
+    const pointsRedeemed = reserveLoyaltyPoints(req.user.id, order, orderId);
+    try {
+      store.addOrder(req.user.id, buildOrderRecord({
+        orderId, order, method: 'crypto', status: 'pending',
+        email: body.email, shipping: body.shipping,
+        invoiceId: invoice.id,
+        pointsRedeemed,
+        subscriptionId: subscription ? subscription.id : ''
+      }));
+      store.clearCart(req.user.id);
+    } catch (e) {
+      console.error('[crypto checkout] could not save order:', e.message);
     }
 
     res.status(201).json({
@@ -860,7 +764,13 @@ app.post('/api/crypto/checkout', auth.requireAuth, async (req, res) => {
       orderId,
       invoiceId: invoice.id,
       checkoutLink: invoice.checkoutLink,
-      total: order.total
+      total: order.total,
+      discount: order.discount,
+      pointsRedeemed,
+      subscription,
+      // Be honest when auto-ship was asked for but couldn't be set up, rather
+      // than silently dropping it.
+      autoshipFailed: wantsAutoship && !subscription
     });
   } catch (err) {
     console.error('[crypto checkout] failed:', err.message);
@@ -891,6 +801,9 @@ app.post('/api/crypto/webhook', (req, res) => {
   if (evt.type === 'InvoiceSettled') {
     markOrderPaid(orderId);
   } else if (evt.type === 'InvoiceExpired' || evt.type === 'InvoiceInvalid') {
+    // Nobody paid — hand back any loyalty points the discount was held against
+    // BEFORE cancelling, so the stored pointsRedeemed is still there to read.
+    refundReservedPoints(orderId);
     store.updateOrderStatus(orderId, 'cancelled');
   }
 
@@ -1038,6 +951,7 @@ app.post('/api/admin/orders/:orderId/cancel', requireAdmin, (req, res) => {
   if (String(existing.status).toLowerCase() === 'paid') {
     return res.status(400).json({ error: 'That order is already paid — refund it in your bank, then adjust it here.' });
   }
+  refundReservedPoints(req.params.orderId);   // give back any held loyalty points
   const upd = store.updateOrderStatus(req.params.orderId, 'cancelled', {
     cancelledAt: new Date().toISOString(),
     cancelledBy: (req.user && req.user.email) || 'admin key'
@@ -1086,7 +1000,7 @@ async function sendZelleInstructionsEmail({ email, orderId, order, instructions 
       extraHtml: `<p style="font-size:14px">Send it from your bank's app or website — look for <em>"Send money with Zelle"</em>. ` +
         `Please put <strong>${escapeHtmlSrv(instructions.memo)}</strong> in the memo; that's how we match your payment to your order.</p>
         <p style="color:#6b7280;font-size:14px">Order reference: <strong>${escapeHtmlSrv(orderId)}</strong> · Total: <strong>$${escapeHtmlSrv(order.total.toFixed(2))}</strong><br>
-        We'll email you the moment it lands, and ship after that. Nothing has been charged to any card.</p>`
+        We'll email you the moment it lands, and ship after that. Nothing has been taken from you yet.</p>`
     })
   });
 }
@@ -1139,27 +1053,33 @@ async function sendPaymentConfirmedEmail(order) {
 
 /* ============================================================
    AUTO-SHIP SCHEDULER
-   Charges every plan whose next shipment is due. Nothing here
-   trusts stored money: each run re-prices the plan's items against
-   the live catalog, so a price change or a delisted product is
-   picked up automatically.
+   Issues an invoice for every plan whose next shipment is due.
+   Nothing here trusts stored money: each run re-prices the plan's
+   items against the live catalog, so a price change or a delisted
+   product is picked up automatically.
 
-   Safety properties that matter when real cards are involved:
+   Crypto is push-only, so a run does NOT move money — it opens a
+   BTCPay invoice and emails the customer its pay link. The order
+   lands as `pending` and the ordinary BTCPay webhook marks it paid
+   when the coins arrive, exactly like a manual crypto checkout.
+   "Success" here therefore means *invoiced*, not *paid*.
+
+   Safety properties:
      · one plan is claimed for the duration of its run, so two
-       overlapping triggers can't both charge it
-     · the order reference is stamped on the Braintree transaction
-       BEFORE charging, so a run interrupted mid-charge recognises
-       the completed payment instead of taking the money twice
-     · a decline retries a few times, then pauses the plan and
-       emails the customer rather than hammering a dead card
+       overlapping triggers can't both invoice it
+     · the order reference is stamped on the plan BEFORE the invoice
+       is opened, so a run interrupted mid-flight reuses that
+       reference instead of issuing a second invoice
+     · a failure to invoice retries a few times, then pauses the
+       plan and emails the customer
      · the schedule advances from the date it was DUE, not from
-       "now", so a late trigger never drifts the billing date
+       "now", so a late trigger never drifts the shipment date
    ============================================================ */
 
 const CRON_KEY = process.env.CRON_KEY || '';
-const SUB_RUN_LIMIT = 25;   // plans charged per trigger — keeps one run bounded
+const SUB_RUN_LIMIT = 25;   // plans invoiced per trigger — keeps one run bounded
 
-/* Charge one plan. Never throws: every outcome comes back as a result object
+/* Invoice one plan. Never throws: every outcome comes back as a result object
    so one bad plan can't abort the whole batch. */
 async function runOneSubscription(sub) {
   const claimed = subscriptions.claim(sub.id);
@@ -1173,12 +1093,16 @@ async function runOneSubscription(sub) {
   }
 
   try {
-    // Recovering an interrupted run: did the charge actually go through?
+    if (!btcpay.CONFIGURED) throw new Error('Crypto payments are not configured on the server.');
+
+    // Recovering an interrupted run: was the invoice already opened and
+    // recorded? If the order exists, this plan has been served — don't send
+    // the customer a second bill for the same shipment.
     if (claimed.pendingOrderId) {
-      const already = await braintree.findTransactionByOrderId(claimed.pendingOrderId);
+      const already = store.listAllOrders().find(o => o.orderId === claimed.pendingOrderId);
       if (already) {
         subscriptions.recordSuccess(claimed.id, claimed.pendingOrderId);
-        console.warn(`[autoship] ${claimed.id}: recovered an already-charged order ${claimed.pendingOrderId}`);
+        console.warn(`[autoship] ${claimed.id}: recovered an already-invoiced order ${claimed.pendingOrderId}`);
         return { id: sub.id, status: 'recovered', orderId: claimed.pendingOrderId };
       }
     }
@@ -1186,41 +1110,37 @@ async function runOneSubscription(sub) {
     const order = buildOrder(claimed.items);            // authoritative, re-priced now
     const orderId = claimed.pendingOrderId || newOrderId();
 
-    // Write the reference down BEFORE the money moves, so a crash between
+    // Write the reference down BEFORE the invoice exists, so a crash between
     // these two lines is recoverable by the check above.
     subscriptions.update(claimed.id, null, { pendingOrderId: orderId });
 
-    const transaction = await braintree.createTransaction({
+    const invoice = await btcpay.createInvoice({
       order,
-      paymentMethodToken: claimed.paymentMethodToken,
-      customerId: claimed.braintreeCustomerId,
-      source: 'recurring',                              // merchant-initiated, stored credential
-      orderId,
+      email: claimed.email || user.email,
       shipping: claimed.shippingAddress,
-      email: claimed.email || user.email
+      orderId,
+      redirectUrl: `${SITE()}/account.html#autoship`
     });
 
-    let pointsEarned = 0, pointsRedeemed = 0;
     try {
-      ({ pointsEarned, pointsRedeemed } = settleLoyaltyForPaidOrder(user.id, orderId, order));
       store.addOrder(user.id, buildOrderRecord({
-        orderId, order, method: 'card', status: 'paid',
+        orderId, order, method: 'crypto', status: 'pending',
         email: claimed.email || user.email,
         shipping: claimed.shippingAddress,
-        transactionId: transaction.id,
-        pointsEarned, pointsRedeemed,
+        invoiceId: invoice.id,
         subscriptionId: claimed.id
       }));
     } catch (e) {
-      // The charge succeeded — a bookkeeping failure must not look like a decline.
-      console.error(`[autoship] ${claimed.id}: charged but could not record the order:`, e.message);
+      // The invoice is live — a bookkeeping failure must not look like a
+      // failure to invoice, or the next run would bill them twice.
+      console.error(`[autoship] ${claimed.id}: invoiced but could not record the order:`, e.message);
     }
 
     const updated = subscriptions.recordSuccess(claimed.id, orderId);
-    sendSubscriptionChargedEmail(user, updated || claimed, order, orderId)
+    sendSubscriptionInvoicedEmail(user, updated || claimed, order, orderId, invoice.checkoutLink)
       .catch(err => console.error('[autoship email] failed:', err.message));
 
-    return { id: sub.id, status: 'charged', orderId, total: order.total, transactionId: transaction.id };
+    return { id: sub.id, status: 'invoiced', orderId, total: order.total, invoiceId: invoice.id };
   } catch (err) {
     const { sub: updated, paused } = subscriptions.recordFailure(claimed.id, err.message);
     sendSubscriptionFailedEmail(user, updated || claimed, err.message, paused)
@@ -1250,12 +1170,12 @@ async function sendDueReminders(now) {
   return pending.length;
 }
 
-/* The whole tick: charge what's due, then send the advance notices. */
+/* The whole tick: invoice what's due, then send the advance notices. */
 async function runDueSubscriptions(now = Date.now()) {
   const due = subscriptions.listDue(now).slice(0, SUB_RUN_LIMIT);
   const results = [];
   for (const sub of due) {
-    results.push(await runOneSubscription(sub));   // sequential: keeps card traffic calm
+    results.push(await runOneSubscription(sub));   // sequential: keeps BTCPay traffic calm
   }
   let reminded = 0;
   try {
@@ -1263,16 +1183,18 @@ async function runDueSubscriptions(now = Date.now()) {
   } catch (e) {
     console.error('[autoship] reminders failed:', e.message);
   }
-  const charged = results.filter(r => r.status === 'charged' || r.status === 'recovered').length;
+  const invoiced = results.filter(r => r.status === 'invoiced' || r.status === 'recovered').length;
   const failed = results.filter(r => r.status === 'failed').length;
   if (due.length || reminded) {
-    console.log(`[autoship] due ${due.length} · charged ${charged} · failed ${failed} · reminders ${reminded}`);
+    console.log(`[autoship] due ${due.length} · invoiced ${invoiced} · failed ${failed} · reminders ${reminded}`);
   }
-  return { due: due.length, charged, failed, reminded, results };
+  return { due: due.length, invoiced, failed, reminded, results };
 }
 
 /* The trigger is open to the scheduled pinger (CRON_KEY) or to an admin —
-   the admin path is what powers the "Run due now" button while testing. */
+   the admin path is what powers the "Run due now" button while testing.
+   Re-running it is safe: a plan already invoiced for this cycle is recognised
+   by its pendingOrderId and skipped. */
 function requireCron(req, res, next) {
   const key = req.get('x-cron-key') || req.query.cronKey || '';
   if (CRON_KEY && key && key === CRON_KEY) return next();
@@ -1315,7 +1237,7 @@ function autoshipEmailHtml({ heading, intro, sub, extraHtml }) {
     <p>${intro}</p>
     <table style="border-collapse:collapse;margin:12px 0">${rows}</table>
     <p style="color:#6b7280;font-size:14px">Frequency: <strong>${escapeHtmlSrv(everyPhrase(sub.intervalDays))}</strong><br>
-    Payment: ${escapeHtmlSrv(sub.paymentLabel || 'your saved payment method')}<br>
+    Payment: ${escapeHtmlSrv(sub.paymentLabel || 'Bitcoin / Lightning invoice')}<br>
     Plan reference: ${escapeHtmlSrv(sub.id)}</p>
     ${extraHtml || ''}
     <p><a href="${SITE()}/account.html#autoship" style="display:inline-block;background:#6d28d9;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600">Manage auto-ship</a></p>
@@ -1330,18 +1252,19 @@ async function sendSubscriptionCreatedEmail(user, sub) {
     to: user.email,
     subject: 'Your Ever Nova Life auto-ship is set up',
     text: `Hi ${user.firstName || 'there'},\n\n` +
-      `Your auto-ship plan is active. We'll send the same items ${everyPhrase(sub.intervalDays)}, ` +
-      `and your card (${sub.paymentLabel}) will be charged on each shipment date.\n\n` +
+      `Your auto-ship plan is active. We'll prepare the same items ${everyPhrase(sub.intervalDays)} and ` +
+      `email you a Bitcoin / Lightning invoice on each shipment date — nothing is taken automatically, ` +
+      `you approve every payment.\n\n` +
       `Next shipment: ${when}\nPlan reference: ${sub.id}\n\n` +
-      `We'll email you ${subscriptions.REMINDER_DAYS} days before each charge. You can change the ` +
+      `We'll remind you ${subscriptions.REMINDER_DAYS} days before each one. You can change the ` +
       `frequency, skip a shipment, pause or cancel any time at ${SITE()}/account.html#autoship\n\n` +
       `— The Ever Nova Life team`,
     html: autoshipEmailHtml({
       heading: 'Your auto-ship is set up ✅',
-      intro: `Hi ${escapeHtmlSrv(user.firstName || 'there')}, we'll send these items <strong>${escapeHtmlSrv(everyPhrase(sub.intervalDays))}</strong> and charge your saved payment method on each shipment date.`,
+      intro: `Hi ${escapeHtmlSrv(user.firstName || 'there')}, we'll prepare these items <strong>${escapeHtmlSrv(everyPhrase(sub.intervalDays))}</strong> and email you an invoice to pay on each shipment date. Nothing is ever taken automatically — you approve every payment.`,
       sub,
       extraHtml: `<p style="color:#6b7280;font-size:14px">Next shipment: <strong>${escapeHtmlSrv(when)}</strong><br>
-        We'll remind you ${subscriptions.REMINDER_DAYS} days before each charge.</p>`
+        We'll remind you ${subscriptions.REMINDER_DAYS} days before each one.</p>`
     })
   });
 }
@@ -1353,36 +1276,44 @@ async function sendSubscriptionReminderEmail(user, sub) {
     to: user.email,
     subject: `Your next Ever Nova Life shipment is on ${when}`,
     text: `Hi ${user.firstName || 'there'},\n\n` +
-      `A heads-up that your auto-ship order is scheduled for ${when}, when we'll charge ` +
-      `${sub.paymentLabel}.\n\nIf you'd like to skip this one, change the items, or stop the plan, ` +
-      `do it before that date at ${SITE()}/account.html#autoship\n\nPlan reference: ${sub.id}\n\n` +
+      `A heads-up that your auto-ship order is scheduled for ${when}. We'll email you an ` +
+      `invoice to pay on that date.\n\nIf you'd like to skip this one, change the items, or stop the plan, ` +
+      `do it before then at ${SITE()}/account.html#autoship\n\nPlan reference: ${sub.id}\n\n` +
       `— The Ever Nova Life team`,
     html: autoshipEmailHtml({
       heading: 'Your next shipment is coming up 📦',
-      intro: `Hi ${escapeHtmlSrv(user.firstName || 'there')}, your auto-ship order is scheduled for <strong>${escapeHtmlSrv(when)}</strong>. We'll charge your saved payment method on that date.`,
+      intro: `Hi ${escapeHtmlSrv(user.firstName || 'there')}, your auto-ship order is scheduled for <strong>${escapeHtmlSrv(when)}</strong>. We'll email you an invoice to pay on that date.`,
       sub,
       extraHtml: `<p style="color:#6b7280;font-size:14px">Want to skip this one, swap the items, or stop the plan? Do it before ${escapeHtmlSrv(when)}.</p>`
     })
   });
 }
 
-async function sendSubscriptionChargedEmail(user, sub, order, orderId) {
+/* The one email the whole crypto auto-ship flow hangs on: it carries the pay
+   link. Without it the customer has a scheduled order and no way to pay it, so
+   this is the piece to check first if shipments stop confirming. */
+async function sendSubscriptionInvoicedEmail(user, sub, order, orderId, checkoutLink) {
   if (!mailer.CONFIGURED || !user || !user.email) return;
   const next = prettyDate(sub.nextRunAt);
   const total = Number(order.total).toFixed(2);
   return mailer.sendMail({
     to: user.email,
-    subject: `Ever Nova Life auto-ship order ${orderId} — $${total}`,
+    subject: `Your Ever Nova Life auto-ship order is ready to pay — $${total}`,
     text: `Hi ${user.firstName || 'there'},\n\n` +
-      `Your auto-ship order has been placed and your payment method charged $${total}.\n\n` +
-      `Order: ${orderId}\nNext shipment: ${next}\n\n` +
-      `See it in your account: ${SITE()}/account.html\n\n— The Ever Nova Life team`,
+      `Your scheduled order is prepared. Pay the invoice below with Bitcoin or Lightning and ` +
+      `we'll ship it as soon as the payment confirms.\n\n` +
+      `Pay here: ${checkoutLink}\n\n` +
+      `Order: ${orderId}\nAmount: $${total}\nNext shipment after this one: ${next}\n\n` +
+      `Nothing has been taken from you — this invoice is only paid if you choose to pay it.\n\n` +
+      `— The Ever Nova Life team`,
     html: autoshipEmailHtml({
-      heading: 'Your auto-ship order is on its way 🚚',
-      intro: `Hi ${escapeHtmlSrv(user.firstName || 'there')}, we've placed your scheduled order and charged <strong>$${escapeHtmlSrv(total)}</strong> to ${escapeHtmlSrv(sub.paymentLabel || 'your saved payment method')}.`,
+      heading: 'Your auto-ship order is ready to pay 🧾',
+      intro: `Hi ${escapeHtmlSrv(user.firstName || 'there')}, your scheduled order is prepared. Pay <strong>$${escapeHtmlSrv(total)}</strong> with Bitcoin or Lightning and we'll ship as soon as it confirms.`,
       sub,
-      extraHtml: `<p style="color:#6b7280;font-size:14px">Order reference: <strong>${escapeHtmlSrv(orderId)}</strong><br>
-        Next shipment: <strong>${escapeHtmlSrv(next)}</strong></p>`
+      extraHtml: `<p><a href="${escapeHtmlSrv(checkoutLink)}" style="display:inline-block;background:#d4af37;color:#07040f;padding:13px 24px;border-radius:8px;text-decoration:none;font-weight:700">Pay $${escapeHtmlSrv(total)} now</a></p>
+        <p style="color:#6b7280;font-size:14px">Order reference: <strong>${escapeHtmlSrv(orderId)}</strong><br>
+        Next shipment after this one: <strong>${escapeHtmlSrv(next)}</strong></p>
+        <p style="color:#6b7280;font-size:13px">Nothing has been taken from you — this invoice is only paid if you choose to pay it.</p>`
     })
   });
 }
@@ -1390,19 +1321,20 @@ async function sendSubscriptionChargedEmail(user, sub, order, orderId) {
 async function sendSubscriptionFailedEmail(user, sub, message, paused) {
   if (!mailer.CONFIGURED || !user || !user.email) return;
   const retryLine = paused
-    ? `We've paused the plan so nothing else is attempted. Update your payment method and resume it whenever you're ready.`
+    ? `We've paused the plan so nothing else is attempted. Resume it from your account whenever you're ready.`
     : `We'll try again in ${subscriptions.RETRY_DAYS} days.`;
   return mailer.sendMail({
     to: user.email,
-    subject: paused ? 'Your Ever Nova Life auto-ship is paused' : 'We couldn\'t process your auto-ship payment',
+    subject: paused ? 'Your Ever Nova Life auto-ship is paused' : 'We couldn\'t prepare your auto-ship order',
     text: `Hi ${user.firstName || 'there'},\n\n` +
-      `We couldn't charge ${sub.paymentLabel || 'your saved payment method'} for your scheduled order.\n\n` +
+      `We couldn't prepare the invoice for your scheduled order, so nothing has been sent to you ` +
+      `to pay.\n\n` +
       `Reason given: ${message}\n\n${retryLine}\n\n` +
       `Manage the plan here: ${SITE()}/account.html#autoship\n\nPlan reference: ${sub.id}\n\n` +
       `— The Ever Nova Life team`,
     html: autoshipEmailHtml({
-      heading: paused ? 'Auto-ship paused ⏸' : 'We couldn\'t take that payment',
-      intro: `Hi ${escapeHtmlSrv(user.firstName || 'there')}, we weren't able to charge ${escapeHtmlSrv(sub.paymentLabel || 'your saved payment method')} for your scheduled order.`,
+      heading: paused ? 'Auto-ship paused ⏸' : 'We couldn\'t prepare that order',
+      intro: `Hi ${escapeHtmlSrv(user.firstName || 'there')}, we weren't able to prepare the invoice for your scheduled order, so there's nothing for you to pay.`,
       sub,
       extraHtml: `<p style="color:#b91c1c;font-size:14px">Reason given: ${escapeHtmlSrv(message)}</p>
         <p style="color:#6b7280;font-size:14px">${escapeHtmlSrv(retryLine)}</p>`
@@ -1416,12 +1348,12 @@ async function sendSubscriptionCancelledEmail(user, sub) {
     to: user.email,
     subject: 'Your Ever Nova Life auto-ship is cancelled',
     text: `Hi ${user.firstName || 'there'},\n\n` +
-      `Your auto-ship plan (${sub.id}) has been cancelled — there are no further charges and ` +
+      `Your auto-ship plan (${sub.id}) has been cancelled — there are no further invoices and ` +
       `nothing more will ship.\n\nYou can start a new plan any time at ${SITE()}/products.html\n\n` +
       `— The Ever Nova Life team`,
     html: autoshipEmailHtml({
       heading: 'Auto-ship cancelled',
-      intro: `Hi ${escapeHtmlSrv(user.firstName || 'there')}, your plan has been cancelled. <strong>There are no further charges</strong> and nothing more will ship.`,
+      intro: `Hi ${escapeHtmlSrv(user.firstName || 'there')}, your plan has been cancelled. <strong>There are no further invoices</strong> and nothing more will ship.`,
       sub,
       extraHtml: `<p style="color:#6b7280;font-size:14px">Changed your mind? You can start a new plan at any time.</p>`
     })
@@ -1434,7 +1366,7 @@ async function sendSubscriptionCancelledEmail(user, sub) {
    on GoDaddy): there's no site next to us → skip static serving entirely so nothing
    unintended is exposed; the API endpoints above are all that respond.
    SECURITY: when we DO serve static, block the backend folder + secrets first, or
-   requests like /server/.env would leak the Braintree private key + JWT secret. */
+   requests like /server/.env would leak the BTCPay API key + JWT secret. */
 if (fs.existsSync(path.join(ROOT, 'index.html'))) {
   app.use((req, res, next) => {
     const p = req.path.toLowerCase();
@@ -1457,8 +1389,6 @@ if (fs.existsSync(path.join(ROOT, 'index.html'))) {
 if (require.main === module) {
   app.listen(PORT, () => {
     console.log(`\nEver Nova Life payment server`);
-    console.log(`  env:    ${braintree.ENV}`);
-    console.log(`  card:   ${braintree.CONFIGURED ? 'Braintree ready' : 'not configured (set BRAINTREE_* in .env)'}`);
     console.log(`  crypto: ${btcpay.CONFIGURED ? 'BTCPay ready → ' + btcpay.BASE_URL : 'not configured (set BTCPAY_* in .env)'}`);
     console.log(`  zelle:  ${zelle.CONFIGURED ? 'ready → ' + zelle.RECIPIENT + ' (manual confirmation in admin.html)' : 'not configured (set ZELLE_RECIPIENT + ZELLE_NAME in .env)'}`);
     console.log(`  auth:   accounts ready${auth.CONFIGURED ? '' : ' (JWT_SECRET not set — set it in .env for production)'}`);

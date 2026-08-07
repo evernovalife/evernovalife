@@ -1,16 +1,16 @@
 /* ============================================================
    EVER NOVA LIFE — auto-ship (recurring order) tests
-   Auto-ship charges real cards with nobody watching, so the
-   things worth proving here are the ones that cost money when
-   they're wrong:
+   Auto-ship issues invoices with nobody watching, so the things
+   worth proving here are the ones that cost money when they're
+   wrong:
 
      · one customer can't see or change another's plan
-     · a plan can't be claimed (and so charged) twice at once
+     · a plan can't be claimed (and so invoiced) twice at once
      · the billing date advances from the DUE date, so a late
        trigger never drifts the schedule
-     · a declined card retries a bounded number of times, then
+     · a failed run retries a bounded number of times, then
        pauses instead of being hammered
-     · the vault token never leaves the server
+     · internal run bookkeeping never leaves the server
      · the interval is clamped no matter what's submitted
 
    Runs with the built-in Node test runner (no extra deps):
@@ -39,11 +39,12 @@ process.env.ALLOWED_ORIGINS = '*';
 process.env.CRON_KEY = 'test-cron-key';
 delete process.env.ADMIN_KEY;   // exercise account-based admin only
 
-// Blank (but present) Braintree keys: dotenv won't overwrite variables that
-// already exist, so this guarantees the suite can never reach the live gateway.
-process.env.BRAINTREE_MERCHANT_ID = '';
-process.env.BRAINTREE_PUBLIC_KEY = '';
-process.env.BRAINTREE_PRIVATE_KEY = '';
+// Blank (but present) BTCPay keys: dotenv won't overwrite variables that
+// already exist, so this guarantees the suite can never reach a live gateway
+// and issue a real invoice.
+process.env.BTCPAY_URL = '';
+process.env.BTCPAY_API_KEY = '';
+process.env.BTCPAY_STORE_ID = '';
 
 const subscriptions = require('../subscriptions.js');
 const app = require('../server.js');
@@ -84,14 +85,11 @@ async function register(email, password = 'password123') {
 }
 
 /* A plan created straight through the store — the HTTP path to create one
-   needs a live Braintree vault, which these tests deliberately can't reach. */
+   needs a configured BTCPay, which these tests deliberately can't reach. */
 function makePlan(userId, overrides = {}) {
   return subscriptions.create(userId, {
     items: [{ id: 1, name: 'Test Peptide', price: 59.99, quantity: 2 }],
     intervalDays: 30,
-    paymentMethodToken: 'vault-token-' + userId.slice(0, 8),
-    paymentLabel: 'Visa ending 1111',
-    braintreeCustomerId: userId,
     email: 'test@example.com',
     ...overrides
   });
@@ -109,22 +107,23 @@ test('the repeat interval is clamped into the allowed range', () => {
   assert.equal(subscriptions.cleanIntervalDays(30.6), 31, 'fractions round to whole days');
 });
 
-test('a plan cannot be created without items or a payment method', () => {
-  assert.throws(() => subscriptions.create('u-1', { items: [], paymentMethodToken: 't' }), /at least one product/i);
-  assert.throws(() => subscriptions.create('u-1', { items: [{ id: 1, quantity: 1 }] }), /payment method/i);
+test('a plan cannot be created without items', () => {
+  assert.throws(() => subscriptions.create('u-1', { items: [] }), /at least one product/i);
+  assert.throws(() => subscriptions.create('u-1', {}), /at least one product/i);
 });
 
 /* ============================================================
-   2) The vault token never reaches the browser
+   2) Internal run bookkeeping never reaches the browser
    ============================================================ */
-test('the public view of a plan hides the payment token', () => {
-  const sub = makePlan('u-token-test');
-  const pub = subscriptions.publicSubscription(sub);
-  assert.equal(sub.paymentMethodToken, 'vault-token-u-token-', 'the record itself holds the token');
-  assert.ok(!('paymentMethodToken' in pub), 'the public view has no token field');
-  assert.ok(!('braintreeCustomerId' in pub), 'the public view has no gateway customer id');
-  assert.equal(pub.paymentLabel, 'Visa ending 1111', 'a human-readable label is shown instead');
-  assert.ok(!JSON.stringify(pub).includes('vault-token'), 'the token appears nowhere in the payload');
+test('the public view of a plan hides the run bookkeeping', () => {
+  const sub = makePlan('u-token-test', { email: 'buyer@example.com' });
+  subscriptions.update(sub.id, null, { pendingInvoiceId: 'inv-secret-123', claimedAt: new Date().toISOString() });
+  const pub = subscriptions.publicSubscription(subscriptions.get(sub.id));
+  assert.ok(!('pendingInvoiceId' in pub), 'the public view has no pending invoice id');
+  assert.ok(!('pendingOrderId' in pub), 'the public view has no pending order id');
+  assert.ok(!('claimedAt' in pub), 'the public view has no claim stamp');
+  assert.equal(pub.paymentLabel, 'Bitcoin / Lightning invoice', 'a human-readable label is shown instead');
+  assert.ok(!JSON.stringify(pub).includes('inv-secret-123'), 'the invoice id appears nowhere in the payload');
 });
 
 /* ============================================================
@@ -328,15 +327,18 @@ test('the owner can change frequency, skip, pause and cancel over HTTP', async (
   assert.equal(cancelled.body.subscription.status, 'cancelled');
 });
 
-test('the browser can never point a plan at an unowned payment token', async () => {
+test('a plan is refused when there is no way to invoice it', async () => {
   const carol = await register('carol-subs@example.com');
-  // No nonce and no token at all → refused before anything is created.
+  // BTCPay is deliberately unconfigured in this suite. Taking a standing order
+  // we could never bill would leave the customer waiting on shipments that can
+  // never be paid for, so the route has to turn it away up front.
   const res = await api('/api/subscriptions', {
     method: 'POST', token: carol.token,
     body: { items: [{ id: 1, quantity: 1 }], intervalDays: 30 }
   });
-  assert.equal(res.status, 400);
-  assert.match(res.body.error, /payment method/i);
+  assert.equal(res.status, 503);
+  assert.match(res.body.error, /not set up|unavailable/i);
+  assert.equal(subscriptions.listForUser(carol.user.id).length, 0, 'nothing was created');
 });
 
 /* ============================================================

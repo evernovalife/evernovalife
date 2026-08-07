@@ -1,9 +1,9 @@
 /* ============================================================
    EVER NOVA LIFE — auto-ship (recurring order) store
    A signed-in customer can turn any checkout into a repeating
-   shipment: the same items, re-charged to the card they saved,
-   every N days. This module owns the records; server.js owns the
-   routes and the scheduler that acts on them.
+   shipment: the same items, re-invoiced every N days. This module
+   owns the records; server.js owns the routes and the scheduler
+   that acts on them.
 
      · DATA_DIR/subscriptions.json → { [userId]: [ subscription, … ] }
 
@@ -11,12 +11,19 @@
    can be swapped for a real database later without touching the
    routes.
 
+   Crypto has no stored credential — nobody can debit a wallet on a
+   schedule — so a plan holds no payment token. When one comes due
+   the scheduler opens a fresh BTCPay invoice and emails the pay
+   link; the webhook settles it like any other crypto order. If a
+   pull-based processor (card/ACH) is added later, give the record a
+   `method` of its own and branch in the scheduler — nothing else
+   here has to change.
+
    A subscription record:
-     { id, userId, status, items[], intervalDays, nextRunAt,
-       paymentMethodToken, paymentLabel, braintreeCustomerId,
-       email, shippingAddress, createdAt, lastRunAt, runCount,
-       failCount, lastError, reminderSentFor, claimedAt,
-       pendingOrderId, orderIds[] }
+     { id, userId, status, method, items[], intervalDays, nextRunAt,
+       paymentLabel, email, shippingAddress, createdAt, lastRunAt,
+       runCount, failCount, lastError, reminderSentFor, claimedAt,
+       pendingOrderId, pendingInvoiceId, orderIds[] }
 
    Tunables (env-overridable):
      · SUBSCRIPTION_MIN_DAYS / SUBSCRIPTION_MAX_DAYS  allowed interval range
@@ -200,7 +207,6 @@ function create(userId, data = {}) {
   if (!userId) throw new Error('A subscription needs an account.');
   const items = sanitizeItems(data.items);
   if (!items.length) throw new Error('An auto-ship plan needs at least one product.');
-  if (!data.paymentMethodToken) throw new Error('An auto-ship plan needs a saved payment method.');
 
   const map = loadMap();
   const list = Array.isArray(map[userId]) ? map[userId] : [];
@@ -214,14 +220,13 @@ function create(userId, data = {}) {
     id: newSubscriptionId(),
     userId,
     status: 'active',
+    method: String(data.method || 'crypto').slice(0, 20),
     items,
     intervalDays,
     // The first shipment is the order they just placed, so the plan's first
-    // recurring charge lands one full interval from now.
+    // recurring invoice lands one full interval from now.
     nextRunAt: data.nextRunAt || addDays(now, intervalDays),
-    paymentMethodToken: String(data.paymentMethodToken).slice(0, 120),
-    paymentLabel: String(data.paymentLabel || 'Saved payment method').slice(0, 120),
-    braintreeCustomerId: String(data.braintreeCustomerId || '').slice(0, 64),
+    paymentLabel: String(data.paymentLabel || 'Bitcoin / Lightning invoice').slice(0, 120),
     email: String(data.email || '').slice(0, 255),
     shippingAddress: cleanAddress(data.shippingAddress),
     createdAt: now,
@@ -232,6 +237,7 @@ function create(userId, data = {}) {
     reminderSentFor: '',
     claimedAt: '',
     pendingOrderId: '',
+    pendingInvoiceId: '',
     orderIds: data.firstOrderId ? [String(data.firstOrderId)] : []
   };
 
@@ -262,7 +268,7 @@ function update(id, userId, patch) {
 }
 
 /* The customer-editable fields, validated. Anything not listed here (the
-   payment token, run counters, the owning account) can't be reached from a
+   payment method, run counters, the owning account) can't be reached from a
    request body. */
 function applyCustomerEdits(sub, body = {}) {
   const patch = {};
@@ -357,8 +363,10 @@ function release(id) {
   return update(id, null, { claimedAt: '' });
 }
 
-/* Record a successful run: stamp the order, advance the schedule, clear the
-   failure state. */
+/* Record a successful run — for crypto that means the invoice was ISSUED and
+   emailed, not that the coins have landed; the BTCPay webhook settles the
+   order separately. Stamp the order, advance the schedule, clear the failure
+   state. */
 function recordSuccess(id, orderId) {
   const sub = get(id);
   if (!sub) return null;
@@ -375,13 +383,15 @@ function recordSuccess(id, orderId) {
     lastError: '',
     reminderSentFor: '',
     pendingOrderId: '',
+    pendingInvoiceId: '',
     claimedAt: '',
     orderIds
   });
 }
 
-/* Record a declined / errored run. Retries a few times, then pauses the plan
-   so we stop hammering a dead card. Returns { sub, paused }. */
+/* Record a failed run — an invoice we could not open (BTCPay unreachable, the
+   catalog no longer prices the items). Retries a few times, then pauses the
+   plan so we stop retrying something broken. Returns { sub, paused }. */
 function recordFailure(id, message) {
   const sub = get(id);
   if (!sub) return { sub: null, paused: false };
@@ -395,13 +405,14 @@ function recordFailure(id, message) {
     nextRunAt: paused ? sub.nextRunAt : addDays(new Date(), RETRY_DAYS),
     reminderSentFor: '',
     pendingOrderId: '',
+    pendingInvoiceId: '',
     claimedAt: ''
   });
   return { sub: updated, paused };
 }
 
 /* Remove every plan belonging to an account — used when an admin deletes it,
-   so nothing can keep charging a card for a customer who no longer exists. */
+   so nothing keeps invoicing a customer who no longer exists. */
 function deleteUserData(userId) {
   const map = loadMap();
   if (Object.prototype.hasOwnProperty.call(map, userId)) {
@@ -410,13 +421,14 @@ function deleteUserData(userId) {
   }
 }
 
-/* What the browser is allowed to see. The vault token never leaves the
-   server — the UI shows `paymentLabel` ("Visa ending 1111") instead. */
+/* What the browser is allowed to see. Internal run bookkeeping (claims,
+   pending invoice ids) stays on the server; the UI shows `paymentLabel`. */
 function publicSubscription(s) {
   if (!s) return null;
   return {
     id: s.id,
     status: s.status,
+    method: s.method || 'crypto',
     items: s.items,
     intervalDays: s.intervalDays,
     nextRunAt: s.status === 'active' ? s.nextRunAt : '',
