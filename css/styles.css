@@ -1135,6 +1135,18 @@ body.coa-lightbox-open { overflow: hidden; }
 .alt-pay-option + .alt-pay-option { margin-top: 1.1rem; }
 .alt-pay-option .form-hint { margin-top: 0.55rem; }
 
+/* The pay button carries the order total, so its label runs longer than an
+   ordinary button's — and .btn is nowrap with overflow:hidden, so on a phone
+   it was silently CLIPPED (336px of text in a 292px button at 390px wide).
+   Letting it wrap is worse, because .btn is a flex row and the label breaks
+   into columns. So below the width where it fits, drop the method name: the
+   hint directly underneath already says Bitcoin / Lightning.
+   560px, not 480: the full label needs ~373px of button, and the button only
+   clears that once the viewport is around 490px — measured, not guessed. */
+@media (max-width: 560px) {
+  .pay-method-long { display: none; }
+}
+
 /* ---- Zelle: the "now go and send it" screen, shown after the order is placed.
    Everything here gets retyped into a banking app, so it stays large and flat
    rather than clever. ---- */

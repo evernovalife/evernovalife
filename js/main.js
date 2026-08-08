@@ -1501,6 +1501,17 @@ function updateAltPayVisibility() {
   const zelle = document.getElementById('zellePaySection');
   const divider = document.querySelector('#altPaySection .alt-pay-divider');
   const none = document.getElementById('noPayMethods');
+
+  // Nothing to pay for yet. This is re-checked on every call rather than
+  // decided once at init: a signed-in buyer's cart arrives from their ACCOUNT
+  // a moment after the page renders (a phone starts with an empty local
+  // cache), and hiding the payment block permanently on that first empty
+  // reading leaves them looking at their items with no way to pay.
+  if (cart.items.length === 0) {
+    if (wrap) wrap.style.display = 'none';
+    return;
+  }
+
   const zelleBlocked = (enlRedeem().points || 0) > 0 || autoshipSelection().enabled;
 
   const showCrypto = window._cryptoAvailable !== false;
@@ -1858,16 +1869,14 @@ function initCheckoutPage() {
   const consent = form.querySelector('.form-check input[required]');
   if (consent) consent.addEventListener('change', () => { const r = consent.closest('.form-check'); if (r) r.classList.toggle('invalid', !consent.checked); });
 
-  const altSection = document.getElementById('altPaySection');
   const cryptoBtn = document.getElementById('cryptoPayBtn');
   const zelleBtn = document.getElementById('zellePayBtn');
 
-  // empty cart → nothing to pay for
-  if (cart.items.length === 0) {
-    if (altSection) altSection.style.display = 'none';
-    return;
-  }
-
+  /* Wire the payment controls unconditionally, even with an empty cart.
+     updateAltPayVisibility() hides the block until there's something to buy,
+     and re-runs when the cart syncs down from the account — so the buttons
+     have to already be listening by then. Returning early here (the old
+     behaviour) left a synced-in cart with visible items and dead buttons. */
   initAutoshipCheckout();
   updatePayButtonAmount();
 
@@ -2187,10 +2196,17 @@ document.addEventListener('DOMContentLoaded', () => {
       const summary = document.getElementById('checkoutSummary');
       if (summary) renderCheckoutSummary(summary);
       const lineItems = document.getElementById('checkoutItems');
-      if (lineItems && cart.items.length) {
-        lineItems.innerHTML = cart.items.map(i =>
-          `<div class="summary-row"><span>${escapeHtml(i.name)} × ${i.quantity}</span><span>${formatPrice(i.price * i.quantity)}</span></div>`).join('');
+      if (lineItems) {
+        lineItems.innerHTML = cart.items.length
+          ? cart.items.map(i =>
+              `<div class="summary-row"><span>${escapeHtml(i.name)} × ${i.quantity}</span><span>${formatPrice(i.price * i.quantity)}</span></div>`).join('')
+          : `<p class="text-muted">Your cart is empty. <a href="products.html" style="color:var(--accent-purple)">Add products</a> to continue.</p>`;
       }
+      // The cart that just arrived is what decides whether there's anything to
+      // pay for — so the payment block and its amount follow it, in both
+      // directions. Without this an account cart syncing down leaves the buyer
+      // looking at their items with the pay buttons still hidden.
+      updateAltPayVisibility();
     }
   });
 });
