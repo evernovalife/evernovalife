@@ -20,7 +20,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/styles.css?v=49">
+  <link rel="stylesheet" href="css/styles.css?v=50">
   <!-- 21+ age gate: runs before anything paints -->
   <script src="js/age-gate.js?v=37"></script>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Cpath d='M20.00 1.00 L21.91 15.38 L27.78 12.22 L24.62 18.09 L39.00 20.00 L24.62 21.91 L27.78 27.78 L21.91 24.62 L20.00 39.00 L18.09 24.62 L12.22 27.78 L15.38 21.91 L1.00 20.00 L15.38 18.09 L12.22 12.22 L18.09 15.38 Z' fill='%23a855f7'/%3E%3C/svg%3E">
@@ -134,7 +134,7 @@
     <div class="container">
       <div class="content-card glass">
         <h2>COA Library</h2>
-        <p>Each lot below is matched to its original third-party laboratory report from Janoshik. Every report is independently verifiable by its task number at <a href="https://janoshik.com" target="_blank" rel="noopener">janoshik.com</a>.</p>
+        <p>Each lot below is matched to its original third-party laboratory report. Janoshik reports are independently verifiable by their task number at <a href="https://janoshik.com" target="_blank" rel="noopener">janoshik.com</a>; the Ozcanium Analytics report carries its own verification code and is verifiable with the issuing laboratory at <a href="https://ozcaniumanalytics.com.au" target="_blank" rel="noopener">ozcaniumanalytics.com.au</a>.</p>
         <form class="search-box" style="max-width:520px;margin:1rem 0" onsubmit="return false">
           <input type="search" placeholder="Search by product or batch number (e.g. CS-mc10-0408)" aria-label="Search documentation">
           <button class="btn btn-primary" type="submit">Search</button>
@@ -163,10 +163,30 @@
               <tr>
                 <td>Retatrutide</td><td>CS-re10-0322</td><td>#137638</td><td>2026-04-07</td><td>2026-04-10</td><td>99.786%</td><td>Retatrutide 11.86 mg</td><td><strong style="color:#22c55e">Available</strong></td><td>Janoshik</td><td><a href="https://janoshik.com" target="_blank" rel="noopener">Verify #137638</a></td>
               </tr>
+              <tr>
+                <td>NAD+</td><td>CS-na500-0403</td><td>#136634</td><td>2026-04-10</td><td>2026-04-14</td><td>Not reported (identity + amount)</td><td>NAD+ 529.47 mg</td><td><strong style="color:#22c55e">Available</strong></td><td>Janoshik</td><td><a href="https://janoshik.com" target="_blank" rel="noopener">Verify #136634</a></td>
+              </tr>
+              <tr>
+                <td>HGH</td><td>CS-h101026</td><td>#87374</td><td>2025-11-06</td><td>2025-11-10</td><td>97.090%</td><td>rHGH 3.86 mg / 11.58 IU per vial · dimer 0.225%</td><td><strong style="color:#22c55e">Available</strong> <span style="opacity:.75">(10 IU vial)</span></td><td>Janoshik</td><td><a href="https://janoshik.com" target="_blank" rel="noopener">Verify #87374</a></td>
+              </tr>
+              <tr>
+                <td>Ipamorelin / CJC-1295 (blend)</td><td>22/07/2026</td><td>OZ-HPLCMS-0ASZ</td><td>2026-07-29</td><td>2026-07-31</td><td>99.53%</td><td>Ipamorelin 5.32 mg · CJC-1295 5.13 mg</td><td><strong style="color:#22c55e">Available</strong></td><td>Ozcanium Analytics</td><td><a href="https://ozcaniumanalytics.com.au" target="_blank" rel="noopener">Verify OZ-HPLCMS-0ASZ</a></td>
+              </tr>
             </tbody>
           </table></div>
         </div>
-        <p style="margin-top:1rem;font-size:.9rem;opacity:.85">All reports above are original documents issued by Janoshik, an independent laboratory. Each is verifiable by its task number at <a href="https://janoshik.com" target="_blank" rel="noopener">janoshik.com</a>. They reference batches produced by the manufacturing source (cocerpeptides.com).</p>
+        <p style="margin-top:1rem;font-size:.9rem;opacity:.85">All reports above are original documents issued by an independent laboratory — Janoshik, except the Ipamorelin / CJC-1295 report, which was issued by Ozcanium Analytics. They reference batches produced by the manufacturing source (cocerpeptides.com).</p>
+        <h3 style="margin-top:1.75rem">Report scope</h3>
+        <p style="font-size:.9rem;opacity:.85">Where a report on file does not line up exactly with the listing it documents, the difference is stated here and on the product page rather than left for you to find:</p>
+        <div style="overflow-x:auto">
+          <div class="table-scroll"><table class="rate-table">
+            <thead><tr><th>Listing</th><th>Report on file</th><th>Difference</th></tr></thead>
+            <tbody>
+              <tr><td>HGH 36 IU</td><td>Janoshik #87374, lot CS-h101026</td><td>A 10 IU vial of the lot was analyzed (3.86 mg / 11.58 IU measured). Identity and purity are covered; the full 36 IU listed quantity is not.</td></tr>
+              <tr><td>Tesamorelin / Ipamorelin 10mg / 3mg</td><td>Ozcanium OZ-HPLCMS-0ASZ</td><td>The report was issued for an Ipamorelin + CJC-1295 5mg / 5mg vial and reports those two components. Tesamorelin is not analyzed.</td></tr>
+            </tbody>
+          </table></div>
+        </div>
         <h3 style="margin-top:1.75rem">Other catalog items</h3>
         <p style="font-size:.9rem;opacity:.85">Documentation status for catalog items not listed above:</p>
         <div style="overflow-x:auto">
@@ -174,8 +194,6 @@
             <thead><tr><th>Product</th><th>Documentation</th><th>Note</th></tr></thead>
             <tbody>
               <tr><td>Bacteriostatic Water</td><td><strong style="opacity:.7">Not applicable</strong></td><td>Laboratory reagent; identity/purity COA does not apply.</td></tr>
-              <tr><td>Tesamorelin / Ipamorelin (blend)</td><td><strong style="color:#f59e0b">Pending</strong></td><td>Independent report not yet published for the current batch.</td></tr>
-              <tr><td>NAD+</td><td><strong style="color:#f59e0b">Pending</strong></td><td>Independent report not yet published for the current batch.</td></tr>
             </tbody>
           </table></div>
         </div>
@@ -253,9 +271,9 @@
     </div>
   </footer>
 
-  <script src="js/products-data.js?v=35"></script>
+  <script src="js/products-data.js?v=36"></script>
   <script src="js/config.js?v=35"></script>
   <script src="js/cart.js?v=35"></script>
-  <script src="js/main.js?v=48"></script>
+  <script src="js/main.js?v=50"></script>
 </body>
 </html>

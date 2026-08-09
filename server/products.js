@@ -64,6 +64,23 @@ const SEED_SYNC_VERSION = 2;   // v2 (2026-08-02): MOTS-C → $100, was-price dr
    admin had deleted. Bumping is the only way to publish a new built-in without
    re-entering it in admin-products.html by hand. */
 const SEED_ADD_VERSION = 1;    // v1 (2026-08-05): HGH 36 IU (#9)
+
+/* ---- Certificate-of-analysis re-sync ----
+   BACKFILL_FIELDS only fills a field that is MISSING from the store. Every
+   built-in already ships a `coa` block, so a report published later — a lot
+   moving from Pending to Available — never reaches a live deployment: the store
+   keeps its old "pending" block and the product page keeps saying no report
+   exists while the repo says otherwise.
+
+   Same on-demand shape as the price sync: bump this and the next deploy
+   re-applies the seed's `coa` to the BUILT-IN products exactly once. A bump
+   also discards a coa block an admin edited by hand, so bump it only when the
+   seed is the truth.
+
+   HOW TO PUBLISH A NEW REPORT: drop the file in assets/coa/, fill the `coa`
+   block in js/products-data.js, bump the number below, deploy. */
+const COA_SYNC_VERSION = 1;    // v1 (2026-08-09): reports published for #4, #8, #9
+
 const SYNC_FILE = path.join(DATA_DIR, 'products.sync.json');
 const SYNCED_FIELDS = ['price', 'originalPrice'];
 
@@ -132,6 +149,29 @@ function addNewSeedProducts(list) {
   return changed;
 }
 
+/* Re-apply the seed's certificate-of-analysis block to the built-in products,
+   once per version bump. Returns true when something changed (so we save). */
+function syncCoaFromSeed(list) {
+  if (lastVersion('coaVersion') >= COA_SYNC_VERSION) return false;
+  const seedById = new Map(SEED.map(s => [Number(s.id), s]));
+  let changed = false;
+  for (const item of list) {
+    const seed = seedById.get(Number(item.id));
+    if (!seed || seed.coa === undefined) continue;   // admin-added product — not ours to touch
+    const want = JSON.stringify(seed.coa);
+    if (JSON.stringify(item.coa === undefined ? null : item.coa) === want) continue;
+    const was = (item.coa && item.coa.status) || 'none';
+    const now = seed.coa.status || 'none';
+    // Loud on purpose: documentation status changing is worth seeing in the log.
+    console.log(`[products] coa sync v${COA_SYNC_VERSION} · #${item.id} ${item.name} · ${was} → ${now}`);
+    item.coa = JSON.parse(want);
+    changed = true;
+  }
+  try { recordVersions({ coaVersion: COA_SYNC_VERSION }); }
+  catch (e) { console.error('[products] could not record the coa version:', e.message); }
+  return changed;
+}
+
 function backfillFromSeed(list) {
   const seedById = new Map(SEED.map(s => [Number(s.id), s]));
   let changed = false;
@@ -155,7 +195,7 @@ function load() {
   if (!fs.existsSync(PRODUCTS_FILE)) {
     try { save(SEED); } catch (e) { /* fall through to in-memory seed */ }
     // A store written from the seed IS at the current versions — nothing to re-apply.
-    try { recordVersions({ version: SEED_SYNC_VERSION, addVersion: SEED_ADD_VERSION }); }
+    try { recordVersions({ version: SEED_SYNC_VERSION, addVersion: SEED_ADD_VERSION, coaVersion: COA_SYNC_VERSION }); }
     catch (e) { /* re-applying later is harmless */ }
     return SEED.map(p => ({ ...p }));
   }
@@ -163,7 +203,8 @@ function load() {
     const arr = JSON.parse(fs.readFileSync(PRODUCTS_FILE, 'utf8'));
     if (!Array.isArray(arr)) return SEED.map(p => ({ ...p }));
     // Persist both fix-ups so they happen once, not on every read.
-    const touched = [addNewSeedProducts(arr), backfillFromSeed(arr), syncPricesFromSeed(arr)].some(Boolean);
+    const touched = [addNewSeedProducts(arr), backfillFromSeed(arr), syncCoaFromSeed(arr),
+                     syncPricesFromSeed(arr)].some(Boolean);
     if (touched) {
       try { save(arr); } catch (e) { console.error('[products] seed fix-ups not saved:', e.message); }
     }

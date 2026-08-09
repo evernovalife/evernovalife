@@ -5,9 +5,13 @@
    originalPrice, purity, quantity, description, specs{},
    coa{}, inStock, badge, featured, lot
    coa{} carries the lot's third-party certificate of analysis so it can be
-   viewed from the product page: status ('available' | 'pending'), lab,
-   reportId, batch, testDate, reportDate, purity, content, file, verifyUrl.
+   viewed from the product page: status ('available' | 'pending' |
+   'not-applicable'), lab, reportId, batch, method, testDate, reportDate,
+   purity, content, file, verifyUrl, note.
    Every value is copied from the published report — never estimated.
+   `note` on an 'available' block states the report's SCOPE where it does not
+   line up with the listing (a different vial size or composition), so the
+   difference is on the page rather than left for the buyer to spot.
    Descriptions describe each material's research context only.
    They make no human-use, treatment, or physiological-benefit claims.
    ============================================================ */
@@ -137,10 +141,21 @@ const PRODUCTS = [
       'Reconstitution': 'Bacteriostatic water'
     },
     coa: {
-      status: 'pending',
-      lab: 'Janoshik Analytical',
-      note: 'An independent report for the current Tesamorelin / Ipamorelin batch has not been published yet. This item is not released for order until its report is on file.',
-      verifyUrl: 'https://janoshik.com'
+      status: 'available',
+      lab: 'Ozcanium Analytics',
+      reportId: 'OZ-HPLCMS-0ASZ',
+      batch: '22/07/2026',
+      method: 'UPLC-MS/MS',
+      testDate: '2026-07-29',
+      reportDate: '2026-07-31',
+      purity: '99.53%',
+      content: 'Ipamorelin 5.32 mg · CJC-1295 5.13 mg',
+      /* Scope note, shown on the panel: the report on file was issued for an
+         Ipamorelin + CJC-1295 5mg/5mg vial, which is not the composition this
+         listing states. It is published as-is at the owner's direction. */
+      note: 'The report on file for this listing was issued for an Ipamorelin + CJC-1295 5mg / 5mg vial and reports those two components. It does not analyze Tesamorelin. Read the document below before ordering, and contact us if you need a report matching the stated 10mg / 3mg Tesamorelin / Ipamorelin composition.',
+      file: 'assets/coa/OZ-HPLCMS-0ASZ.jpg',
+      verifyUrl: 'https://ozcaniumanalytics.com.au'
     },
     inStock: true,
     badge: 'New',
@@ -272,9 +287,17 @@ const PRODUCTS = [
       'Reconstitution': 'Bacteriostatic water'
     },
     coa: {
-      status: 'pending',
+      status: 'available',
       lab: 'Janoshik Analytical',
-      note: 'An independent report for the current NAD+ batch has not been published yet. This item is not released for order until its report is on file.',
+      reportId: '#136634',
+      batch: 'CS-na500-0403',
+      testDate: '2026-04-10',
+      reportDate: '2026-04-14',
+      /* The report ordered identity + amount only — no purity figure was
+         measured, so none is claimed here. */
+      purity: 'Not reported (identity + amount analysis)',
+      content: 'NAD+ 529.47 mg',
+      file: 'assets/coa/136634.jpg',
       verifyUrl: 'https://janoshik.com'
     },
     inStock: true,
@@ -301,9 +324,19 @@ const PRODUCTS = [
       'Reconstitution': 'Bacteriostatic water'
     },
     coa: {
-      status: 'pending',
+      status: 'available',
       lab: 'Janoshik Analytical',
-      note: 'An independent report for the current HGH batch has not been published yet. This item is not released for order until its report is on file.',
+      reportId: '#87374',
+      batch: 'CS-h101026',
+      testDate: '2025-11-06',
+      reportDate: '2025-11-10',
+      purity: '97.090%',
+      content: 'rHGH 3.86 mg / 11.58 IU per vial · dimer and related proteins 0.225%',
+      /* Scope note, shown on the panel: the report analyzed a 10 IU vial of
+         this lot, not the 36 IU quantity this listing states. Published as-is
+         at the owner's direction. */
+      note: 'The report on file analyzed a 10 IU vial of this lot and measured 3.86 mg / 11.58 IU in that vial. This listing states 36 IU, so the report covers the lot\'s identity and purity but not the full listed quantity. Read the document below before ordering.',
+      file: 'assets/coa/87374.jpg',
       verifyUrl: 'https://janoshik.com'
     },
     inStock: true,

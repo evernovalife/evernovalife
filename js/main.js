@@ -707,15 +707,18 @@ function coaRow(label, value) {
   return `<tr><td>${escapeHtml(label)}</td><td>${escapeHtml(value)}</td></tr>`;
 }
 
-function coaPanel(product) {
+/* `opts.modal` drops the id: the quick-view modal renders this same panel, and
+   two #coa targets on one document would make the fragment ambiguous. */
+function coaPanel(product, opts = {}) {
   const coa = product && product.coa;
+  const idAttr = opts.modal ? '' : ' id="coa"';
 
   /* Some items will never have a COA — bacteriostatic water is a reagent, not
      a peptide. Calling that "pending" would imply a report is coming, so it
      gets its own state rather than being lumped in with the unreleased lots. */
   if (coa && coa.status === 'not-applicable') {
     return `
-      <section class="coa-panel glass" id="coa">
+      <section class="coa-panel glass"${idAttr}>
         <div class="coa-head">
           <h2>Certificate of Analysis</h2>
           <span class="coa-status coa-status-na">Not applicable</span>
@@ -731,7 +734,7 @@ function coaPanel(product) {
     const note = (coa && coa.note) ||
       'An independent laboratory report for the current batch of this item has not been published yet.';
     return `
-      <section class="coa-panel glass" id="coa">
+      <section class="coa-panel glass"${idAttr}>
         <div class="coa-head">
           <h2>Certificate of Analysis</h2>
           <span class="coa-status coa-status-pending">Pending</span>
@@ -744,20 +747,22 @@ function coaPanel(product) {
   }
 
   return `
-    <section class="coa-panel glass" id="coa">
+    <section class="coa-panel glass"${idAttr}>
       <div class="coa-head">
         <h2>Certificate of Analysis</h2>
         <span class="coa-status coa-status-available">Available</span>
       </div>
-      <p class="coa-note">Third-party analysis of the exact batch supplied for this listing, issued by
+      <p class="coa-note">Third-party analysis of the batch supplied for this listing, issued by
          ${escapeHtml(coa.lab || 'an independent laboratory')}.</p>
+      ${coa.note ? `<p class="coa-note coa-scope">${escapeHtml(coa.note)}</p>` : ''}
       <table class="specs-table coa-table"><tbody>
         ${coaRow('Laboratory', coa.lab)}
         ${coaRow('Report ID', coa.reportId)}
         ${coaRow('Batch analyzed', coa.batch)}
+        ${coaRow('Method', coa.method)}
         ${coaRow('Sample received', coa.testDate)}
         ${coaRow('Report issued', coa.reportDate)}
-        ${coaRow('Purity (HPLC)', coa.purity)}
+        ${coaRow('Purity', coa.purity)}
         ${coaRow('Measured content', coa.content)}
       </tbody></table>
       ${coaDocument(coa)}
@@ -833,14 +838,23 @@ function coaDocumentMarkup(url, coa) {
    (verify.janoshik.com/tests/<task>-<compound>_<size>_<KEY> — the key is
    printed on the report itself). Without one, send people to the verification
    form and tell them the task number to type in, rather than to a homepage
-   that does nothing. */
+   that does nothing.
+
+   The lab is not always Janoshik — the Ipamorelin / CJC-1295 report is from
+   Ozcanium Analytics, which has no task-number lookup. Sending its verification
+   code to janoshik.com/verify would fail on the first click, so a non-Janoshik
+   report links to its own issuing lab instead. */
 function coaVerifyLink(coa) {
   const deep = coa.verifyUrl && /\/tests\//.test(coa.verifyUrl);
   if (deep) {
     return `<a class="btn btn-ghost btn-sm" href="${escapeHtml(coa.verifyUrl)}" target="_blank" rel="noopener">Verify ${escapeHtml(coa.reportId || '')} at ${escapeHtml(hostOf(coa.verifyUrl))}</a>`;
   }
   if (!coa.reportId) return '';
-  return `<a class="btn btn-ghost btn-sm" href="https://janoshik.com/verify" target="_blank" rel="noopener">Verify ${escapeHtml(coa.reportId)} at janoshik.com</a>`;
+  if (!coa.lab || /janoshik/i.test(coa.lab)) {
+    return `<a class="btn btn-ghost btn-sm" href="https://janoshik.com/verify" target="_blank" rel="noopener">Verify ${escapeHtml(coa.reportId)} at janoshik.com</a>`;
+  }
+  if (!coa.verifyUrl) return '';
+  return `<a class="btn btn-ghost btn-sm" href="${escapeHtml(coa.verifyUrl)}" target="_blank" rel="noopener">Verify ${escapeHtml(coa.reportId)} with ${escapeHtml(coa.lab)}</a>`;
 }
 
 function hostOf(url) {
@@ -928,8 +942,13 @@ function setMetaContent(attr, key, value) {
    item. Arrows sit at the edges of the viewport and wrap around the catalog,
    so there is never a dead end. Reads window.PRODUCTS (mutated in place by
    loadProducts) so the order matches whatever the server actually serves. */
+/* Edge arrows to the previous / next product. `root` is whatever should own
+   them — the detail page's container, or the modal element (they are
+   position: fixed either way, so they pin to the viewport edges).
+   Re-rendered on every swap, since which product is next changes. */
 function renderProductNav(root, product) {
   const list = Array.isArray(window.PRODUCTS) ? window.PRODUCTS : [];
+  root.querySelectorAll('.pdt-nav').forEach(el => el.remove());
   if (list.length < 2) return;
   const i = list.findIndex(p => Number(p.id) === Number(product.id));
   if (i === -1) return;
@@ -938,8 +957,10 @@ function renderProductNav(root, product) {
   const next = list[(i + 1) % list.length];
   const chevron = (d) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
       stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`;
+  /* The href stays a real product URL in both hosts, so ctrl/middle-click still
+     opens a tab; in the modal the click handler swaps in place instead. */
   const arrow = (p, dir, label) => `
-    <a class="pdt-nav pdt-nav-${dir}" href="product.html?id=${p.id}"
+    <a class="pdt-nav pdt-nav-${dir}" href="product.html?id=${p.id}" data-pdt-nav="${dir}"
        aria-label="${label}: ${escapeHtml(p.name)}" title="${escapeHtml(p.name)}">
       ${chevron(dir === 'prev' ? 'm15 18-6-6 6-6' : 'm9 18 6-6-6-6')}
       <span class="pdt-nav-name">${escapeHtml(p.name)}</span>
@@ -948,7 +969,7 @@ function renderProductNav(root, product) {
   root.insertAdjacentHTML('beforeend',
     arrow(prev, 'prev', 'Previous product') + arrow(next, 'next', 'Next product'));
 
-  // ← / → also navigate, but never while typing or with a modifier held
+  // ← / → also move, but never while typing or with a modifier held
   if (!renderProductNav._keys) {
     renderProductNav._keys = true;
     document.addEventListener('keydown', (e) => {
@@ -957,8 +978,13 @@ function renderProductNav(root, product) {
       const t = e.target;
       if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
       if (document.querySelector('.coa-lightbox')) return;   // lightbox is open
-      const el = document.querySelector(e.key === 'ArrowLeft' ? '.pdt-nav-prev' : '.pdt-nav-next');
-      if (el) location.href = el.getAttribute('href');
+      const box = productModalOpen();
+      const scope = box || document;
+      const el = scope.querySelector(e.key === 'ArrowLeft' ? '.pdt-nav-prev' : '.pdt-nav-next');
+      if (!el) return;
+      // In the modal, stay in the modal.
+      if (box) pdModalGo(new URL(el.href, location.href).searchParams.get('id'));
+      else location.href = el.getAttribute('href');
     });
   }
 }
@@ -1011,6 +1037,289 @@ function openCoaLightbox(src, alt) {
   box.querySelector('.coa-lightbox-close').focus();
 }
 
+/* ============================================================
+   PRODUCT DETAIL — one markup builder, two hosts
+   The detail view is rendered both by product.html (its own page, which is what
+   search engines and shared links get) and by the quick-view modal below. Both
+   read from here so a change lands in both places; `opts.modal` only trims what
+   does not belong in an overlay (the in-page #coa anchor, the id attribute that
+   would then be duplicated).
+   ============================================================ */
+function productDetailMarkup(product, opts = {}) {
+  const modal = !!opts.modal;
+  const specsRows = Object.entries(product.specs || {})
+    .map(([k, v]) => `<tr><td>${escapeHtml(k)}</td><td>${escapeHtml(v)}</td></tr>`).join('');
+  const oldPrice = product.originalPrice > product.price
+    ? `<span class="detail-price-old">${formatPrice(product.originalPrice)}</span>` : '';
+  const badge = product.badge ? `<span class="product-badge ${productBadgeClass(product.badge)}" style="position:static;display:inline-block">${escapeHtml(product.badge)}</span>` : '';
+
+  /* Gallery: the vial and its certificate are two views of the same panel,
+     switched by the thumbnails underneath — so the report is visible right
+     beside the product instead of below the fold. The COA view and its thumb
+     stay hidden until revealCoaDocument() confirms the file is on the server. */
+  const vialSrc = product.image || vialPhotoSrc(product.id);
+  const heading = modal
+    ? `<h2 class="pd-modal-title">${escapeHtml(product.name)}</h2>`
+    : `<h1>${escapeHtml(product.name)}</h1>`;
+  /* In the modal a fragment link would leave the overlay and scroll the page
+     behind it, so the same affordance scrolls the panel instead. */
+  const coaLink = modal
+    ? `<button type="button" class="pd-coa-jump">Certificate of Analysis</button>`
+    : `<a href="#coa">Certificate of Analysis</a>`;
+
+  return `
+    <div class="product-detail-side">
+      <div class="product-detail-media glass">
+        <div class="detail-view detail-view-vial is-active">${createVialPhoto(product, { width: VIAL_W.detail })}</div>
+        <button type="button" class="detail-view detail-view-coa" hidden>
+          <img class="detail-coa-img" alt="Certificate of analysis for ${escapeHtml(product.name)}">
+          <span class="coa-doc-hint">Click to zoom</span>
+        </button>
+      </div>
+      <div class="detail-thumbs">
+        <button type="button" class="detail-thumb is-active" data-view="vial" aria-label="View the vial">
+          <img src="${vialSrc}" alt="" onerror="this.src='assets/vial.png?v=3'">
+        </button>
+        <button type="button" class="detail-thumb detail-thumb-coa" data-view="coa" hidden aria-label="View the certificate of analysis">
+          <img alt="">
+        </button>
+      </div>
+      ${coaPanel(product, { modal })}
+    </div>
+    <div class="product-detail-info">
+      <span class="product-cat">${escapeHtml(product.categoryName)}</span> ${badge}
+      ${heading}
+      <div class="product-meta"><span>${escapeHtml(product.quantity)}</span><span>•</span><span>${purityMeta(product.purity)}</span><span>•</span><span>Lot ${escapeHtml(product.lot)}</span></div>
+      <div class="detail-price-row">
+        <span class="detail-price gradient-text">${formatPrice(product.price)}</span>
+        ${oldPrice}
+        <span class="stock-pill ${product.inStock ? '' : 'out'}">${product.inStock ? 'In stock' : 'Out of stock'}</span>
+      </div>
+      <p class="detail-desc">${escapeHtml(product.description)}</p>
+      <div class="qty-selector">
+        <span>Quantity</span>
+        <div class="qty-control">
+          <button type="button" class="qty-minus" aria-label="Decrease">−</button>
+          <input type="text" class="qty-input" value="1" inputmode="numeric" aria-label="Quantity">
+          <button type="button" class="qty-plus" aria-label="Increase">+</button>
+        </div>
+      </div>
+      <div class="detail-cta">
+        <button class="btn btn-primary btn-lg detail-add-btn" ${product.inStock ? '' : 'disabled'}>Add to Cart</button>
+        ${modal
+          ? `<a class="btn btn-ghost btn-lg" href="product.html?id=${product.id}">Full details</a>`
+          : `<a class="btn btn-ghost btn-lg" href="cart.html">View Cart</a>`}
+      </div>
+      <table class="specs-table"><tbody>${specsRows}</tbody></table>
+      <div class="trust-badges-inline">
+        <span>${iconCheck()} ${coaLink}</span>
+        <span>${iconShield()} Third-party tested</span>
+        <span>${iconTruck()} Tracked U.S. dispatch</span>
+        <span>${iconBox()} In-vitro research use only</span>
+      </div>
+    </div>`;
+}
+
+/* Bring the markup to life. Everything is scoped to `root` (classes, not ids)
+   so a modal opened over a page that already has a detail view cannot capture
+   the other one's buttons. */
+function wireProductDetail(root, product) {
+  initDetailGallery(root);
+  revealCoaDocument(root, product.coa);   // show the report only if the file is there
+
+  // quantity controls
+  const qtyInput = root.querySelector('.qty-input');
+  const clamp = () => { let v = parseInt(qtyInput.value, 10); if (isNaN(v) || v < 1) v = 1; if (v > 99) v = 99; qtyInput.value = v; return v; };
+  root.querySelector('.qty-minus').addEventListener('click', () => { qtyInput.value = Math.max(1, (parseInt(qtyInput.value, 10) || 1) - 1); });
+  root.querySelector('.qty-plus').addEventListener('click', () => { qtyInput.value = Math.min(99, (parseInt(qtyInput.value, 10) || 1) + 1); });
+  qtyInput.addEventListener('change', clamp);
+  root.querySelector('.detail-add-btn').addEventListener('click', (e) => {
+    cart.addItem(product, clamp());
+    pnCartCelebrate(e.currentTarget);   // resolves to .product-detail-media via fallback
+  });
+
+  const jump = root.querySelector('.pd-coa-jump');
+  if (jump) {
+    jump.addEventListener('click', () => {
+      const panel = root.querySelector('.coa-panel');
+      if (panel) panel.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    });
+  }
+
+  // Detail vial: click/tap to play a one-shot wobble + shine (re-triggerable).
+  // Not a link here, so a full keyframe is safe. Wrapper keeps pn-float; the
+  // keyframe runs on the inner img + ::before shine, toggled via .pn-poke.
+  const detailVial = root.querySelector('.product-detail-media .vial-photo');
+  if (detailVial) {
+    detailVial.setAttribute('role', 'button');
+    detailVial.setAttribute('tabindex', '0');
+    detailVial.setAttribute('aria-label', `Inspect ${product.name} vial`);
+    const pokeVial = () => {
+      detailVial.classList.remove('pn-poke');
+      void detailVial.offsetWidth;          // force reflow so the animation replays
+      detailVial.classList.add('pn-poke');
+    };
+    detailVial.addEventListener('click', pokeVial);
+    detailVial.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pokeVial(); }
+    });
+    // animationend fires for both pn-poke (img) and pn-shine (::before);
+    // strip the class once either ends so the next click can replay (idempotent).
+    detailVial.addEventListener('animationend', (e) => {
+      if (e.animationName === 'pn-poke' || e.animationName === 'pn-shine') {
+        detailVial.classList.remove('pn-poke');
+      }
+    });
+  }
+}
+
+/* ============================================================
+   PRODUCT QUICK-VIEW MODAL
+   Clicking a product opens it in place instead of navigating away, so a browse
+   → look → back loop costs no page loads and the catalog keeps its scroll
+   position and filters.
+
+   product.html is NOT replaced: it stays the canonical, crawlable page, the
+   cards keep real hrefs, and a modifier- or middle-click still opens a tab. The
+   modal pushes a history entry with the product's real URL, so Back closes it
+   and a reload or a shared link lands on the full page.
+   ============================================================ */
+let pdModalRestoreFocus = null;
+
+function productModalOpen() {
+  return document.querySelector('.pd-modal');
+}
+
+function openProductModal(id) {
+  const product = getProductById(id);
+  // Unknown id (a catalog the API hasn't loaded yet) — let the page handle it.
+  if (!product) { location.href = `product.html?id=${id}`; return false; }
+
+  closeProductModal({ silent: true });
+  pdModalRestoreFocus = document.activeElement;
+
+  const box = document.createElement('div');
+  box.className = 'pd-modal';
+  box.setAttribute('role', 'dialog');
+  box.setAttribute('aria-modal', 'true');
+  box.setAttribute('aria-label', `${product.name} — product details`);
+  box.innerHTML = `
+    <div class="pd-modal-backdrop"></div>
+    <div class="pd-modal-panel glass" role="document">
+      <button type="button" class="pd-modal-close" aria-label="Close">&times;</button>
+      <div class="product-detail pd-modal-body"></div>
+    </div>`;
+
+  const body = box.querySelector('.pd-modal-body');
+  body.innerHTML = productDetailMarkup(product, { modal: true });
+  document.body.appendChild(box);
+  document.body.classList.add('pd-modal-open');
+  wireProductDetail(body, product);
+  /* The arrows hang off the modal, not the body, so they sit above the backdrop
+     and survive a swap of the content underneath them. */
+  renderProductNav(box, product);
+
+  box.querySelector('.pd-modal-close').addEventListener('click', () => closeProductModal());
+  box.querySelector('.pd-modal-backdrop').addEventListener('click', () => closeProductModal());
+  document.addEventListener('keydown', pdModalKey);
+
+  /* The COA lightbox listens on document too and would otherwise close the
+     modal underneath it, so Esc is handled in the lightbox's favour there. */
+  try {
+    history.pushState({ pdModal: product.id }, '', `product.html?id=${product.id}`);
+  } catch (e) { /* file:// or a blocked history API — the modal still works */ }
+
+  box.querySelector('.pd-modal-close').focus();
+  return true;
+}
+
+/* Move to another product without tearing the overlay down: the panel keeps its
+   place and only its contents change, which is the whole point of browsing in a
+   modal. The URL is REPLACED, not pushed, so Back still closes the modal instead
+   of walking back through every product that was looked at. */
+function pdModalGo(id) {
+  const box = productModalOpen();
+  const product = getProductById(id);
+  if (!box || !product) return false;
+
+  const body = box.querySelector('.pd-modal-body');
+  body.innerHTML = productDetailMarkup(product, { modal: true });
+  wireProductDetail(body, product);
+  renderProductNav(box, product);
+  box.setAttribute('aria-label', `${product.name} — product details`);
+  box.scrollTop = 0;
+
+  try {
+    history.replaceState({ pdModal: product.id }, '', `product.html?id=${product.id}`);
+  } catch (e) { /* history blocked — the swap still stands */ }
+  return true;
+}
+
+function pdModalKey(e) {
+  if (e.key !== 'Escape') return;
+  if (document.querySelector('.coa-lightbox')) return;   // lightbox closes first
+  closeProductModal();
+}
+
+/* `silent` skips the history rewind (used when replacing one modal with
+   another); `fromPopstate` means the browser already moved us back. */
+function closeProductModal(opts = {}) {
+  const box = productModalOpen();
+  if (!box) return;
+  box.remove();
+  document.body.classList.remove('pd-modal-open');
+  document.removeEventListener('keydown', pdModalKey);
+  if (pdModalRestoreFocus && pdModalRestoreFocus.focus) {
+    try { pdModalRestoreFocus.focus(); } catch (e) {}
+  }
+  pdModalRestoreFocus = null;
+  if (opts.silent || opts.fromPopstate) return;
+  if (history.state && history.state.pdModal) history.back();
+}
+
+/* Card image, product name, "View", mini-cart and wishlist rows all point at
+   product.html?id=N — intercepting the link itself covers every one of them,
+   including cards rendered later from the API. */
+function initProductQuickView() {
+  // On product.html the full page IS the detail view; related products there
+  // should navigate rather than stack a modal over an identical layout.
+  if (currentPage.toLowerCase() === 'product.html') return;
+
+  document.addEventListener('click', (e) => {
+    if (e.defaultPrevented || e.button !== 0) return;
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;   // open-in-new-tab
+    const link = e.target.closest && e.target.closest('a[href*="product.html?id="]');
+    if (!link || link.target === '_blank' || link.hasAttribute('download')) return;
+    const id = new URL(link.href, location.href).searchParams.get('id');
+    if (!id) return;
+    if (link.closest('.pd-modal')) {
+      // Inside the overlay, only the prev/next arrows act — "Full details" leaves.
+      if (link.hasAttribute('data-pdt-nav') && pdModalGo(id)) e.preventDefault();
+      return;
+    }
+    /* A #coa link means "show me the certificate" — open the modal and switch
+       the gallery to the report once it has been revealed. */
+    const wantsCoa = /#coa$/.test(link.getAttribute('href') || '');
+    if (!openProductModal(id)) return;
+    e.preventDefault();
+    if (wantsCoa) pdShowCoaWhenReady();
+  });
+
+  window.addEventListener('popstate', () => {
+    if (productModalOpen()) closeProductModal({ fromPopstate: true });
+  });
+}
+
+/* The COA thumb only exists once revealCoaDocument() has confirmed the file is
+   on the server, which is a network round-trip after the modal opens. Poll
+   briefly rather than guess a delay, and give up quietly if there is no report. */
+function pdShowCoaWhenReady(tries = 20) {
+  const thumb = document.querySelector('.pd-modal .detail-thumb-coa:not([hidden])');
+  if (thumb) { thumb.click(); return; }
+  if (tries <= 0) return;
+  setTimeout(() => pdShowCoaWhenReady(tries - 1), 100);
+}
+
 function initProductDetailPage() {
   const root = document.getElementById('productDetail');
   if (!root) return;
@@ -1060,107 +1369,9 @@ function initProductDetailPage() {
     ]
   }, 'ld-breadcrumb');
 
-  const specsRows = Object.entries(product.specs)
-    .map(([k, v]) => `<tr><td>${escapeHtml(k)}</td><td>${escapeHtml(v)}</td></tr>`).join('');
-  const oldPrice = product.originalPrice > product.price
-    ? `<span class="detail-price-old">${formatPrice(product.originalPrice)}</span>` : '';
-  const badge = product.badge ? `<span class="product-badge ${productBadgeClass(product.badge)}" style="position:static;display:inline-block">${escapeHtml(product.badge)}</span>` : '';
-
-  /* Gallery: the vial and its certificate are two views of the same panel,
-     switched by the thumbnails underneath — so the report is visible right
-     beside the product instead of below the fold. The COA view and its thumb
-     stay hidden until revealCoaDocument() confirms the file is on the server. */
-  const vialSrc = product.image || vialPhotoSrc(product.id);
-  root.innerHTML = `
-    <div class="product-detail-side">
-      <div class="product-detail-media glass">
-        <div class="detail-view detail-view-vial is-active">${createVialPhoto(product, { width: VIAL_W.detail })}</div>
-        <button type="button" class="detail-view detail-view-coa" hidden>
-          <img class="detail-coa-img" alt="Certificate of analysis for ${escapeHtml(product.name)}">
-          <span class="coa-doc-hint">Click to zoom</span>
-        </button>
-      </div>
-      <div class="detail-thumbs">
-        <button type="button" class="detail-thumb is-active" data-view="vial" aria-label="View the vial">
-          <img src="${vialSrc}" alt="" onerror="this.src='assets/vial.png?v=3'">
-        </button>
-        <button type="button" class="detail-thumb detail-thumb-coa" data-view="coa" hidden aria-label="View the certificate of analysis">
-          <img alt="">
-        </button>
-      </div>
-      ${coaPanel(product)}
-    </div>
-    <div class="product-detail-info">
-      <span class="product-cat">${escapeHtml(product.categoryName)}</span> ${badge}
-      <h1>${escapeHtml(product.name)}</h1>
-      <div class="product-meta"><span>${escapeHtml(product.quantity)}</span><span>•</span><span>${purityMeta(product.purity)}</span><span>•</span><span>Lot ${escapeHtml(product.lot)}</span></div>
-      <div class="detail-price-row">
-        <span class="detail-price gradient-text">${formatPrice(product.price)}</span>
-        ${oldPrice}
-        <span class="stock-pill ${product.inStock ? '' : 'out'}">${product.inStock ? 'In stock' : 'Out of stock'}</span>
-      </div>
-      <p class="detail-desc">${escapeHtml(product.description)}</p>
-      <div class="qty-selector">
-        <span>Quantity</span>
-        <div class="qty-control">
-          <button type="button" id="qtyMinus" aria-label="Decrease">−</button>
-          <input type="text" id="qtyInput" value="1" inputmode="numeric" aria-label="Quantity">
-          <button type="button" id="qtyPlus" aria-label="Increase">+</button>
-        </div>
-      </div>
-      <div class="detail-cta">
-        <button class="btn btn-primary btn-lg" id="detailAddBtn" ${product.inStock ? '' : 'disabled'}>Add to Cart</button>
-        <a class="btn btn-ghost btn-lg" href="cart.html">View Cart</a>
-      </div>
-      <table class="specs-table"><tbody>${specsRows}</tbody></table>
-      <div class="trust-badges-inline">
-        <span>${iconCheck()} <a href="#coa">Certificate of Analysis</a></span>
-        <span>${iconShield()} Third-party tested</span>
-        <span>${iconTruck()} Tracked U.S. dispatch</span>
-        <span>${iconBox()} In-vitro research use only</span>
-      </div>
-    </div>`;
-
-  initDetailGallery(root);
+  root.innerHTML = productDetailMarkup(product);
+  wireProductDetail(root, product);
   renderProductNav(root, product);
-  revealCoaDocument(root, product.coa);   // show the report only if the file is there
-
-  // quantity controls
-  const qtyInput = document.getElementById('qtyInput');
-  const clamp = () => { let v = parseInt(qtyInput.value, 10); if (isNaN(v) || v < 1) v = 1; if (v > 99) v = 99; qtyInput.value = v; return v; };
-  document.getElementById('qtyMinus').addEventListener('click', () => { qtyInput.value = Math.max(1, (parseInt(qtyInput.value, 10) || 1) - 1); });
-  document.getElementById('qtyPlus').addEventListener('click', () => { qtyInput.value = Math.min(99, (parseInt(qtyInput.value, 10) || 1) + 1); });
-  qtyInput.addEventListener('change', clamp);
-  document.getElementById('detailAddBtn').addEventListener('click', (e) => {
-    cart.addItem(product, clamp());
-    pnCartCelebrate(e.currentTarget);   // resolves to .product-detail-media via fallback
-  });
-
-  // Detail vial: click/tap to play a one-shot wobble + shine (re-triggerable).
-  // Not a link here, so a full keyframe is safe. Wrapper keeps pn-float; the
-  // keyframe runs on the inner img + ::before shine, toggled via .pn-poke.
-  const detailVial = root.querySelector('.product-detail-media .vial-photo');
-  if (detailVial) {
-    detailVial.setAttribute('role', 'button');
-    detailVial.setAttribute('tabindex', '0');
-    detailVial.setAttribute('aria-label', `Inspect ${product.name} vial`);
-    const pokeVial = () => {
-      detailVial.classList.remove('pn-poke');
-      void detailVial.offsetWidth;          // force reflow so the animation replays
-      detailVial.classList.add('pn-poke');
-    };
-    detailVial.addEventListener('click', pokeVial);
-    detailVial.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pokeVial(); }
-    });
-    // animationend fires for both pn-poke (img) and pn-shine (::before);
-    // strip the class once either ends so the next click can replay (idempotent).
-    detailVial.addEventListener('animationend', (e) => {
-      if (e.animationName === 'pn-poke' || e.animationName === 'pn-shine') {
-        detailVial.classList.remove('pn-poke');
-      }
-    });
-  }
 
   // related products
   const relatedGrid = document.getElementById('relatedProducts');
@@ -2173,6 +2384,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initSearch();
   initDemoForms();
   initVialTilt();
+  initProductQuickView();   // clicking a product opens it in place, not a new page
 
   switch (currentPage) {
     case 'products.html': initProductsPage(); break;

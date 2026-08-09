@@ -8,19 +8,32 @@ exists, nothing is shown and no dead link is offered.
 
 ## File names
 
-Name each file by its Janoshik task number. **Any of `.pdf`, `.png`, `.jpg`,
-`.webp` works** — the page tries each in turn and uses whichever it finds, so
-you do not need to convert anything or edit the catalog.
+Name each file by the report's own identifier — the Janoshik task number, or
+the verification code for a report from another laboratory. **Any of `.pdf`,
+`.png`, `.jpg`, `.webp` works** — the page tries each in turn and uses whichever
+it finds, so you do not need to convert anything or edit the catalog.
 
-| Base name  | Product                 | Report   | Batch          |
-|------------|-------------------------|----------|----------------|
-| `137638`   | Retatrutide             | #137638  | CS-re10-0322   |
-| `122571`   | GHK-Cu (Copper Peptide) | #122571  | CS-gu50-0309   |
-| `147077`   | MOTS-C                  | #147077  | CS-mc10-0408   |
-| `151337`   | BPC-157 / TB-500 Blend  | #151337  | CS-bb1010-0408 |
-| `122606`   | KLOW Blend              | #122606  | CS-ko80-0309   |
+| Base name         | Product                        | Report          | Batch          |
+|-------------------|--------------------------------|-----------------|----------------|
+| `137638`          | Retatrutide                    | #137638         | CS-re10-0322   |
+| `122571`          | GHK-Cu (Copper Peptide)        | #122571         | CS-gu50-0309   |
+| `147077`          | MOTS-C                         | #147077         | CS-mc10-0408   |
+| `151337`          | BPC-157 / TB-500 Blend         | #151337         | CS-bb1010-0408 |
+| `122606`          | KLOW Blend                     | #122606         | CS-ko80-0309   |
+| `136634`          | NAD+                           | #136634         | CS-na500-0403  |
+| `87374`           | HGH 36 IU                      | #87374          | CS-h101026     |
+| `OZ-HPLCMS-0ASZ`  | Tesamorelin / Ipamorelin Blend | OZ-HPLCMS-0ASZ  | 22/07/2026     |
 
 So `137638.png` or `137638.pdf` — either is fine.
+
+## Publishing a report reaches the live shop only with a version bump
+
+The storefront prices and describes from the **server** store, which is written
+once and then only patched on demand. Editing a `coa` block in
+`js/products-data.js` is therefore not enough on its own: bump
+`COA_SYNC_VERSION` in `server/products.js` and deploy, or the live product page
+keeps showing the old status. (`BACKFILL_FIELDS` only fills a `coa` that is
+missing entirely — it will not replace a "pending" one.)
 
 **Images tend to work better than PDFs**: they render inline on mobile without
 a download, which is how most peptide suppliers publish COAs.
@@ -49,9 +62,20 @@ from each document — it cannot be derived from the task number. Until a deep
 link is set, the page links to `janoshik.com/verify` and shows the task number
 to enter, which still verifies correctly.
 
-## NAD+ has no report
+Ozcanium Analytics has no task-number lookup, so its report links to the issuing
+lab (`ozcaniumanalytics.com.au`) and shows its verification code instead.
 
-NAD+ (id 8) has no published report for its current batch, so its page shows a
-*Pending* notice. To satisfy “a COA is viewable for every product”, either have
-the current NAD+ batch tested and add its `coa` block, or delist NAD+ until a
-report exists.
+## Where a report does not match its listing, say so
+
+Two reports on file cover something narrower than the listing that carries them,
+so each `coa` block has a `note` and the panel prints it above the data table:
+
+- **HGH 36 IU** — #87374 analyzed a *10 IU* vial of lot CS-h101026 (3.86 mg /
+  11.58 IU). Identity and purity are covered; the 36 IU listed quantity is not.
+- **Tesamorelin / Ipamorelin Blend** — OZ-HPLCMS-0ASZ was issued for an
+  *Ipamorelin + CJC-1295 5mg / 5mg* vial. Tesamorelin is not analyzed at all.
+
+Both are published at the owner's direction. The clean fix in each case is a
+report for the lot and vial actually shipped — until then, the `note` is what
+keeps the page from overstating what the document proves. `quality.html` carries
+the same two rows under **Report scope**.
