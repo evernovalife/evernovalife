@@ -378,8 +378,7 @@
         '<div class="adm-card">' +
           '<div class="adm-card-head"><h3>How they paid</h3><span class="hint">' + esc(rangeLabel) + '</span></div>' +
           rankList(methodMix(now.list).map(function (m) {
-            return { name: m.name === 'crypto' ? 'Bitcoin / Lightning' : m.name === 'zelle' ? 'Zelle' : m.name,
-                     revenue: m.revenue, units: m.count };
+            return { name: methodLabel(m.name), revenue: m.revenue, units: m.count };
           }), function (r) { return money(r.revenue); },
              function (r) { return A.plural(r.units, 'order'); },
              'No payments in this period') +
@@ -531,6 +530,14 @@
     return items.map(function (i) { return i.name + ' ×' + i.quantity; }).join(', ');
   }
 
+  /* How an order was paid, in words.
+     `card` is history, not an option: Braintree was removed in Aug 2026 along
+     with POST /api/checkout, so nothing can open a card order today. Orders
+     stamped `card` predate that and are labelled as such rather than left
+     looking like a live payment route. */
+  var METHOD_LABELS = { crypto: 'Bitcoin / Lightning', zelle: 'Zelle', card: 'Card (retired)' };
+  function methodLabel(m) { return METHOD_LABELS[m] || m || 'unknown'; }
+
   function ordersTable(orders, opts) {
     opts = opts || {};
     if (!orders.length) {
@@ -553,16 +560,17 @@
         '<td>' + esc(A.date(o.createdAt, true)) + '<span class="muted">' + esc(A.ago(o.createdAt)) + '</span></td>' +
         '<td>' + who + addr + '</td>' +
         '<td>' + esc(itemsText(o.items)) + '</td>' +
+        '<td>' + esc(methodLabel(o.method)) +
+          (o.method === 'card' ? '<span class="muted">before cards were removed</span>' : '') + '</td>' +
         '<td><span class="pill ' + esc(o.status || '') + '">' + esc(String(o.status || '').replace('_', ' ')) + '</span>' +
-          (late ? ' <span class="pill late">past hold</span>' : '') +
-          '<span class="muted">' + esc(o.method || '') + '</span></td>' +
+          (late ? ' <span class="pill late">past hold</span>' : '') + '</td>' +
         '<td class="num"><strong>' + esc(money(o.total)) + '</strong></td>' +
         (opts.actions ? '<td class="actions">' + actions + '</td>' : '') +
         '</tr>';
     }).join('');
 
     return '<div class="adm-table-wrap"><table class="adm-table"><thead><tr>' +
-      '<th>Reference</th><th>Placed</th><th>Customer</th><th>Items</th><th>Status</th>' +
+      '<th>Reference</th><th>Placed</th><th>Customer</th><th>Items</th><th>Paid with</th><th>Status</th>' +
       '<th class="num">Total</th>' + (opts.actions ? '<th></th>' : '') +
       '</tr></thead><tbody>' + rows + '</tbody></table></div>';
   }
