@@ -856,6 +856,12 @@ function loadProducts() {
       // helpers (which close over it) see the live data.
       window.PRODUCTS.length = 0;
       window.PRODUCTS.push(...data.products);
+      /* The cart caches the price each item was added at. Now that the live
+         catalog is here, correct those caches BEFORE anything repaints — an
+         old cart otherwise shows a total the server will not honour. */
+      if (window.cart && typeof window.cart.syncPrices === 'function') {
+        window.cart.syncPrices(window.PRODUCTS);
+      }
       rerenderProducts();
     })
     .catch(() => { /* offline / cold start → keep the static catalog */ });
@@ -871,6 +877,13 @@ function rerenderProducts() {
     else initProductsPage();
   } else if (page === 'product.html') {
     initProductDetailPage();
+  } else if (page === 'cart.html') {
+    // These two price from the cart, so they have to repaint when the
+    // catalog lands — otherwise the page keeps showing the old figure.
+    if (typeof renderCartPage === 'function') renderCartPage();
+  } else if (page === 'checkout.html') {
+    const summary = document.getElementById('orderSummary');
+    if (summary && typeof renderOrderSummary === 'function') renderOrderSummary(summary, true);
   }
 }
 
@@ -1951,12 +1964,56 @@ function enlRedeem() { return window._enlRedeem || { points: 0, discount: 0 }; }
    for the actual charge). The discount lowers the taxable subtotal; free
    shipping is still decided on the pre-discount subtotal. */
 function checkoutTotals() {
-  const subtotal = round2(cart.getSubtotal());
+  /* Prefer the server's own numbers when it has quoted this cart — they are
+     the ones the invoice will use, down to how shipping and tax round. */
+  const q = window._enlQuote;
+  const subtotal = round2(q ? q.subtotal : cart.getSubtotal());
   const discount = round2(Math.min(enlRedeem().discount || 0, subtotal));
-  const shipping = round2(cart.getShipping());
+  const shipping = round2(q ? q.shipping : cart.getShipping());
   const taxable = round2(Math.max(0, subtotal - discount));
   const tax = round2(taxable * TAX_RATE);
   return { subtotal, discount, shipping, taxable, tax, total: round2(taxable + shipping + tax) };
+}
+
+/* The checkout line items, as their own function so a fresh server quote can
+   repaint them instead of leaving old per-line prices under a corrected total. */
+function renderCheckoutLineItems() {
+  const el = document.getElementById('checkoutItems');
+  if (!el) return;
+  if (cart.items.length === 0) {
+    el.innerHTML = `<p class="text-muted">Your cart is empty. <a href="products.html" style="color:var(--accent-purple)">Add products</a> to continue.</p>`;
+    return;
+  }
+  el.innerHTML = cart.items.map(i =>
+    `<div class="summary-row"><span>${escapeHtml(i.name)} × ${i.quantity}</span><span>${formatPrice(i.price * i.quantity)}</span></div>`).join('');
+}
+
+/* Ask the server what this cart actually costs.
+   /api/quote runs the same buildOrder() the BTCPay invoice is built from, so
+   whatever it returns is what the customer will be asked to pay. Its unit
+   prices are written back into the cart, which makes the page's own totals
+   agree with the invoice by construction rather than by coincidence.
+
+   Offline or on an older backend (404) this simply does nothing and the cart's
+   cached prices stand — the same behaviour as before the quote existed. */
+async function loadCheckoutQuote() {
+  if (!cart.items.length || typeof fetch === 'undefined') return null;
+  try {
+    const res = await fetch(API_BASE + '/api/quote', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: cart.items.map(i => ({ id: i.id, quantity: i.quantity })) })
+    });
+    if (!res.ok) return null;              // 400/404/409 → keep the local figures
+    const q = await res.json().catch(() => null);
+    if (!q || !q.success || !Array.isArray(q.items)) return null;
+
+    window._enlQuote = q;
+    cart.syncPrices(q.items.map(i => ({ id: i.id, name: i.name, price: i.unitPrice })));
+    return q;
+  } catch (e) {
+    return null;                            // network error → cached prices stand
+  }
 }
 
 /* Pull the signed-in buyer's points balance so we can offer redemption. */
@@ -2390,17 +2447,14 @@ function initCheckoutPage() {
   renderCheckoutSummary(summary);
   // pull the signed-in points balance, then re-render so the redeem control appears
   loadCheckoutLoyalty().then(() => renderCheckoutSummary(summary));
+  // …and have the server price this exact cart, so the total on screen is the
+  // total the invoice will ask for.
+  loadCheckoutQuote().then(() => {
+    renderCheckoutSummary(summary);
+    renderCheckoutLineItems();
+  });
 
-  // line items in summary
-  const lineItems = document.getElementById('checkoutItems');
-  if (lineItems) {
-    if (cart.items.length === 0) {
-      lineItems.innerHTML = `<p class="text-muted">Your cart is empty. <a href="products.html" style="color:var(--accent-purple)">Add products</a> to continue.</p>`;
-    } else {
-      lineItems.innerHTML = cart.items.map(i =>
-        `<div class="summary-row"><span>${escapeHtml(i.name)} × ${i.quantity}</span><span>${formatPrice(i.price * i.quantity)}</span></div>`).join('');
-    }
-  }
+  renderCheckoutLineItems();
 
   const form = document.getElementById('checkoutForm');
   if (!form) return;

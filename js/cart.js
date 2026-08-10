@@ -140,6 +140,49 @@ class Cart {
     try { window.dispatchEvent(new Event('cart:updated')); } catch (e) {}
   }
 
+  /* ---- re-price against the catalog ----
+     A cart item stores the price it was added at. That snapshot is a cache,
+     never the truth: the server re-prices every checkout from the live
+     catalog (pricing.js buildOrder), so a cart carrying an old price shows
+     the customer one total and bills them another. That is exactly what
+     happened when GHK-Cu moved from $39.99 to $85.00 — an old cart still
+     said $53.18 while BTCPay invoiced $101.79.
+
+     So whenever the live catalog is known, every stored price/name is
+     overwritten from it. Items whose product no longer exists are flagged
+     rather than silently dropped, because a cart emptying itself is worse
+     than a cart that says why. */
+  syncPrices(catalog) {
+    if (!Array.isArray(catalog) || !catalog.length || !this.items.length) return false;
+    const byId = new Map(catalog.map(p => [Number(p.id), p]));
+    let changed = false;
+
+    this.items.forEach(item => {
+      const p = byId.get(Number(item.id));
+      if (!p) {
+        if (!item.unavailable) { item.unavailable = true; changed = true; }
+        return;
+      }
+      if (item.unavailable) { delete item.unavailable; changed = true; }
+      const price = Number(p.price) || 0;
+      if (Number(item.price) !== price) {
+        // Loud in the console: a price moving under a live cart is worth seeing.
+        console.info(`[cart] ${p.name}: stored $${item.price} → catalog $${price}`);
+        item.price = price;
+        changed = true;
+      }
+      if (p.name && item.name !== p.name) { item.name = p.name; changed = true; }
+      const cat = p.categoryName || p.category || '';
+      if (cat && item.category !== cat) { item.category = cat; changed = true; }
+    });
+
+    if (changed) {
+      this.save();          // also mirrors the corrected prices to the account cart
+      try { window.dispatchEvent(new Event('cart:updated')); } catch (e) {}
+    }
+    return changed;
+  }
+
   /* ---- mutations ---- */
   addItem(product, quantity = 1) {
     const existing = this.items.find(i => i.id === product.id);

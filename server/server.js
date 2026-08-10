@@ -336,6 +336,35 @@ app.post('/api/subscriptions', auth.requireAuth, async (req, res) => {
   }
 });
 
+/* ---- PRICE A CART, CHARGE NOTHING ----
+   The browser's cart caches the price each item was added at. The server
+   re-prices every checkout from the live catalog, so a cart holding a stale
+   price used to show one total on the page and invoice another — a customer
+   saw $53.18 and BTCPay asked for $101.79, because GHK-Cu had moved from
+   $39.99 to $85.00 since it went in the cart.
+
+   This is the same buildOrder() the invoice is built from, exposed read-only,
+   so the checkout summary can show the figure that will actually be charged
+   instead of its own arithmetic. No auth: it reveals nothing a visitor can't
+   read off the catalog, and guests reach checkout too. */
+app.post('/api/quote', (req, res) => {
+  try {
+    const order = buildOrder((req.body && req.body.items) || []);
+    res.json({
+      success: true,
+      items: order.items,          // [{ id, name, unitPrice, quantity, lineTotal }]
+      subtotal: order.subtotal,
+      shipping: order.shipping,
+      tax: order.tax,
+      total: order.total
+    });
+  } catch (err) {
+    // 409 = a stock shortfall, which the cart page words differently from a
+    // malformed item; keep buildOrder's own status when it sets one.
+    res.status(err.status || 400).json({ error: err.message });
+  }
+});
+
 /* ---- change a plan: frequency, items, address, pause/resume, skip next ---- */
 app.patch('/api/subscriptions/:id', auth.requireAuth, (req, res) => {
   try {
