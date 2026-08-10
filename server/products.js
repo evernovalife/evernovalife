@@ -333,6 +333,15 @@ function sanitize(data, existing) {
     description: str(data.description != null ? data.description : existing.description, 5000),
     specs,
     inStock: data.inStock === undefined ? (existing.inStock !== false) : data.inStock !== false,
+    /* `published` is the shop-window switch, and it is NOT the same as
+       `inStock`. A listed-but-unavailable product still has a page, a price
+       and a COA a buyer can read while waiting for the next lot. An
+       unpublished one is not on the site at all — the right state for a
+       listing being drafted, a lot pulled from sale, or a SKU retired.
+
+       Default true, and only an explicit `false` hides: every product that
+       existed before this field stays visible. */
+    published: data.published === undefined ? (existing.published !== false) : data.published !== false,
     badge: (data.badge == null || data.badge === '') ? (existing.badge || null) : str(data.badge, 40),
     featured: data.featured === undefined ? !!existing.featured : !!data.featured
   };
@@ -438,6 +447,21 @@ function setStock(id, qty) {
   return list[i];
 }
 
+/** Is this product on the shop at all? Absent = yes, so nothing predating
+ *  the field ever disappears. */
+function isPublished(p) { return !p || p.published !== false; }
+
+/** Show or hide one product. Its own writer so the admin list can flip a
+ *  product without round-tripping the whole record (and its image data-URL). */
+function setPublished(id, value) {
+  const list = load();
+  const i = list.findIndex(p => Number(p.id) === Number(id));
+  if (i === -1) return null;
+  list[i].published = value !== false;
+  save(list);
+  return list[i];
+}
+
 /**
  * Take stock for an order, all-or-nothing.
  * @param {Array<{id, quantity}>} items
@@ -511,6 +535,9 @@ module.exports = {
   addProduct,
   updateProduct,
   deleteProduct,
+  // visibility
+  isPublished,
+  setPublished,
   // stock
   availableQty,
   isAvailable,

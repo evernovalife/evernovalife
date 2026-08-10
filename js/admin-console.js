@@ -667,6 +667,14 @@
             '<div class="right"><button class="btn btn-ghost btn-sm" type="button" id="btcRetry">' +
               A.icon('refresh', 'ic') + ' Try again</button></div></div>' +
           '<p class="adm-note">' + esc(d.error || 'Unknown problem.') + '</p>' +
+          // A permission error is the one failure with a precise fix, so the
+          // fix is written out rather than left as "check your key".
+          (d.missingPermission
+            ? '<p class="adm-note"><strong>How to fix:</strong> in BTCPay go to ' +
+              '<em>Account → Manage Account → API Keys</em>, edit the key this server uses (or make a new one), ' +
+              'and tick <code>' + esc(d.missingPermission) + '</code> for this store. ' +
+              'Paste the new key into <code>BTCPAY_API_KEY</code> on Render if you created one, then redeploy.</p>'
+            : '') +
           (d.baseUrl ? '<p class="adm-note" style="margin:0">Configured server: <strong>' + esc(d.baseUrl) + '</strong>' +
             (d.storeId ? ' · store <code>' + esc(d.storeId) + '</code>' : '') + '</p>'
             : '<p class="adm-note" style="margin:0">Set <code>BTCPAY_URL</code>, <code>BTCPAY_API_KEY</code> and ' +
@@ -737,6 +745,10 @@
         '<div class="rank">' +
           connRow('Server', d.baseUrl) +
           connRow('Store', (d.store && d.store.name ? d.store.name + ' · ' : '') + d.storeId) +
+          // Cosmetic-only failure: the invoices still loaded, so say what is
+          // missing without implying the panel is broken.
+          (d.storeError ? connRow('Store details', d.storeError +
+            ' (add btcpay.store.canviewstoresettings to show the store name)') : '') +
           connRow('Invoice currency', (d.store && d.store.defaultCurrency) || d.currency || '—') +
           connRow('Webhook secret', d.hasWebhookSecret ? 'set — payments confirm themselves'
             : 'NOT set — webhooks cannot be verified, so nothing confirms automatically') +

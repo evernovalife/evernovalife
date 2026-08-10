@@ -34,6 +34,28 @@
     .spec-row input { flex:1; }
     .img-preview { width:120px; height:120px; border-radius:10px; object-fit:cover; border:1px solid var(--glass-border-strong); background:rgba(255,255,255,0.05); display:none; }
     .row-actions { display:flex; gap:0.4rem; justify-content:flex-end; }
+
+    /* visibility switch — a real switch, so its state is legible without
+       hovering and readable to a screen reader via role/aria-checked */
+    .vis-toggle { display:flex; align-items:center; gap:.5rem; cursor:pointer; font:inherit;
+                  font-size:.78rem; font-weight:600; color:#94a3b8; background:none; border:0; padding:0;
+                  white-space:nowrap; }
+    .vis-toggle i { width:34px; height:19px; border-radius:999px; flex:none; position:relative;
+                    background:rgba(148,163,184,.25); border:1px solid rgba(148,163,184,.35);
+                    transition:background .15s ease, border-color .15s ease; }
+    .vis-toggle i::after { content:''; position:absolute; top:2px; left:2px; width:13px; height:13px;
+                           border-radius:50%; background:#cbd5e1; transition:transform .15s ease, background .15s ease; }
+    .vis-toggle.on { color:#6ee7b7; }
+    .vis-toggle.on i { background:rgba(16,185,129,.35); border-color:rgba(16,185,129,.55); }
+    .vis-toggle.on i::after { transform:translateX(15px); background:#6ee7b7; }
+    .vis-toggle:disabled { opacity:.5; cursor:default; }
+    /* A hidden product stays legible but visibly out of play. */
+    tr.p-hidden td { opacity:.55; }
+    tr.p-hidden td:nth-child(5) { opacity:1; }
+
+    .coa-flag { display:block; margin-top:2px; font-size:.7rem; font-weight:600; }
+    .coa-flag.ok { color:#6ee7b7; }
+    .coa-flag.no { color:#94a3b8; }
     .muted-sm { font-size:0.8rem; color:#94a3b8; }
 
     /* stock cell — current state above, an inline editor for it below */
@@ -142,6 +164,59 @@
               <label>Specifications <span class="muted-sm">(e.g. Molecular Weight → 403.9 g/mol)</span></label>
               <div id="specRows"></div>
               <button type="button" class="btn btn-ghost btn-sm" id="addSpecBtn">+ Add spec row</button>
+            </div>
+
+            <!-- CERTIFICATE OF ANALYSIS
+                 Every value here is printed verbatim on the product page, so
+                 it must be copied off the report, never estimated. The three
+                 states are distinct on purpose: "pending" implies a report is
+                 coming, which is the wrong thing to say about a reagent that
+                 will never have one. -->
+            <div class="form-field full">
+              <label for="pCoaStatus">Certificate of analysis</label>
+              <select id="pCoaStatus">
+                <option value="pending">Pending — no report published yet</option>
+                <option value="available">Available — report on file</option>
+                <option value="not-applicable">Not applicable — this item is a reagent, not a peptide</option>
+              </select>
+            </div>
+
+            <div id="coaFields" class="form-field full" style="display:none">
+              <div class="pform-grid" style="gap:.85rem">
+                <div class="form-field"><label for="pCoaLab">Laboratory</label>
+                  <input type="text" id="pCoaLab" placeholder="e.g. Janoshik Analytical"></div>
+                <div class="form-field"><label for="pCoaReport">Report ID</label>
+                  <input type="text" id="pCoaReport" placeholder="e.g. #137638"></div>
+                <div class="form-field"><label for="pCoaBatch">Batch analyzed</label>
+                  <input type="text" id="pCoaBatch" placeholder="e.g. CS-re10-0322"></div>
+                <div class="form-field"><label for="pCoaMethod">Method <span class="muted-sm">(optional)</span></label>
+                  <input type="text" id="pCoaMethod" placeholder="e.g. HPLC, UPLC-MS/MS"></div>
+                <div class="form-field"><label for="pCoaTested">Sample received</label>
+                  <input type="date" id="pCoaTested"></div>
+                <div class="form-field"><label for="pCoaIssued">Report issued</label>
+                  <input type="date" id="pCoaIssued"></div>
+                <div class="form-field"><label for="pCoaPurity">Purity as reported</label>
+                  <input type="text" id="pCoaPurity" placeholder="e.g. 99.786% — copy it exactly"></div>
+                <div class="form-field"><label for="pCoaContent">Content as reported</label>
+                  <input type="text" id="pCoaContent" placeholder="e.g. Retatrutide 11.86 mg"></div>
+                <div class="form-field full"><label for="pCoaVerify">Lab verification URL <span class="muted-sm">(optional)</span></label>
+                  <input type="url" id="pCoaVerify" placeholder="https://janoshik.com"></div>
+              </div>
+            </div>
+
+            <div class="form-field full">
+              <label for="pCoaNote">COA note <span class="muted-sm">(shown on the page — use it when the report's scope doesn't match this listing)</span></label>
+              <textarea id="pCoaNote" rows="2" placeholder="e.g. The report on file analyzed a 10 IU vial of this lot, not the 36 IU quantity listed."></textarea>
+            </div>
+
+            <div class="form-field full">
+              <label for="pCoaFile">COA document <span class="muted-sm">(PDF or image — buyers open this from the product page)</span></label>
+              <input type="file" id="pCoaFile" accept="application/pdf,image/*">
+              <div style="display:flex;align-items:center;gap:1rem;margin-top:0.5rem;flex-wrap:wrap">
+                <a id="coaFileLink" href="#" target="_blank" rel="noopener" class="btn btn-ghost btn-sm" style="display:none">View current document</a>
+                <span class="muted-sm" id="coaFileHint">Leave empty to keep the current document. You can also point at a file already on the site, e.g. <code>assets/coa/137638.pdf</code>.</span>
+              </div>
+              <input type="text" id="pCoaPath" placeholder="assets/coa/137638.pdf" style="margin-top:0.5rem">
             </div>
 
             <div class="form-field full">
@@ -361,18 +436,33 @@
       if (!products.length) { listEl.innerHTML = '<p class="muted-sm" style="margin-top:1rem">No products yet.</p>'; return; }
       var rows = products.map(function (p) {
         var img = p.image || ('assets/vials/' + p.id + '.webp?v=8');
-        return '<tr>' +
+        var shown = p.published !== false;
+        var coaStatus = (p.coa && p.coa.status) || '';
+        var coaOk = coaStatus === 'available';
+        return '<tr' + (shown ? '' : ' class="p-hidden"') + '>' +
           '<td><img class="p-thumb" src="' + esc(img) + '" alt="" onerror="this.style.visibility=\'hidden\'"></td>' +
-          '<td><strong>' + esc(p.name) + '</strong>' + (p.featured ? ' <span class="order-status paid" style="font-size:0.6rem">featured</span>' : '') + '</td>' +
+          '<td><strong>' + esc(p.name) + '</strong>' + (p.featured ? ' <span class="order-status paid" style="font-size:0.6rem">featured</span>' : '') +
+            '<span class="coa-flag ' + (coaOk ? 'ok' : 'no') + '">' +
+              (coaOk ? 'COA ' + esc(p.coa.reportId || 'on file')
+                     : coaStatus === 'not-applicable' ? 'COA n/a' : 'no COA') + '</span></td>' +
           '<td>' + esc(p.categoryName || p.category || '') + '</td>' +
           '<td>' + money(p.price) + '</td>' +
+          /* The switch reads as what it controls — whether the product is on
+             the shop — and states the current position in words, because a
+             lone toggle never says which way is "on". */
+          '<td><button type="button" class="vis-toggle' + (shown ? ' on' : '') + '" role="switch" aria-checked="' + shown + '"' +
+            ' data-id="' + esc(p.id) + '" data-next="' + (!shown) + '">' +
+            '<i></i><span>' + (shown ? 'On the shop' : 'Hidden') + '</span></button></td>' +
           stockCell(p) +
           '<td class="row-actions"><button class="btn btn-ghost btn-sm p-edit" data-id="' + esc(p.id) + '">Edit</button>' +
           '<button class="btn btn-ghost btn-sm p-del" data-id="' + esc(p.id) + '" data-name="' + esc(p.name) + '">Delete</button></td>' +
           '</tr>';
       }).join('');
       listEl.innerHTML = '<table class="adm-table"><thead><tr><th></th><th>Name</th><th>Category</th><th>Price</th>' +
-        '<th>Stock <span class="muted-sm">(blank = untracked)</span></th><th></th></tr></thead><tbody>' + rows + '</tbody></table>';
+        '<th>Visibility</th><th>Stock <span class="muted-sm">(blank = untracked)</span></th><th></th></tr></thead><tbody>' + rows + '</tbody></table>';
+      Array.prototype.forEach.call(listEl.querySelectorAll('.vis-toggle'), function (b) {
+        b.addEventListener('click', function () { setVisible(b.getAttribute('data-id'), b.getAttribute('data-next') === 'true', b); });
+      });
       Array.prototype.forEach.call(listEl.querySelectorAll('.p-edit'), function (b) { b.addEventListener('click', function () { startEdit(b.getAttribute('data-id')); }); });
       Array.prototype.forEach.call(listEl.querySelectorAll('.p-del'), function (b) { b.addEventListener('click', function () { del(b.getAttribute('data-id'), b.getAttribute('data-name')); }); });
       Array.prototype.forEach.call(listEl.querySelectorAll('.p-stock-save'), function (b) {
@@ -386,6 +476,30 @@
           saveStock(inp.getAttribute('data-id'), btn);
         });
       });
+    }
+
+    /* Show or hide one product on the storefront. Hiding does not touch stock,
+       price or the COA — the listing is intact, it is simply off the shop. */
+    function setVisible(id, next, btn) {
+      btn.disabled = true;
+      fetch(API + '/api/products/' + encodeURIComponent(id) + '/published', {
+        method: 'PATCH', headers: headers(true), body: JSON.stringify({ published: next })
+      })
+        .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { return { status: r.status, ok: r.ok, d: d }; }); })
+        .then(function (res) {
+          btn.disabled = false;
+          if (res.status === 401) { setStatus('Admin sign-in required.', 'error'); return; }
+          if (res.status === 404 && !res.d.error) {
+            setStatus('This backend does not have the show/hide switch yet — deploy the current server/.', 'error');
+            return;
+          }
+          if (!res.ok) { setStatus(res.d.error || 'Could not change that.', 'error'); return; }
+          var p = products.filter(function (x) { return String(x.id) === String(id); })[0];
+          if (p) p.published = next;
+          setStatus(res.d.product.name + (next ? ' is back on the shop.' : ' is hidden from the shop.'), 'success');
+          renderList();
+        })
+        .catch(function () { btn.disabled = false; setStatus("Can't reach the server.", 'error'); });
     }
 
     /* Save one count. Blank clears the count back to untracked, which is the
@@ -456,6 +570,7 @@
       $('cancelBtn').style.display = 'none';
       $('pInStock').checked = true;
       $('pStock').value = '';
+      fillCoa(null);                 // clears every COA field back to "pending"
       setMsg('');
       $('formCard').hidden = true;   // back to the list, which is the default view
     }
@@ -486,6 +601,7 @@
       $('pStock').value = (p.stockQty === null || p.stockQty === undefined) ? '' : p.stockQty;
       $('pFeatured').checked = !!p.featured;
       $('pDescription').value = p.description || '';
+      fillCoa(p);
       $('specRows').innerHTML = '';
       var specs = p.specs || {};
       Object.keys(specs).forEach(function (k) { addSpecRow(k, specs[k]); });
@@ -503,6 +619,100 @@
     }
 
     $('cancelBtn').addEventListener('click', resetForm);
+
+    /* ---- certificate of analysis ----
+       The document is stored the same way a product image is: a data URL on
+       the product record. That keeps a COA uploaded from the admin page
+       working on a host where this app cannot write files (GoDaddy serves the
+       site; the API lives elsewhere). Pointing at a path already on the site —
+       assets/coa/137638.pdf — stays supported and is the lighter option for a
+       file you can upload by FTP. */
+    var newCoaData = '';        // set when a new document is chosen
+    var newCoaName = '';
+
+    function coaFieldsVisible() {
+      var status = $('pCoaStatus').value;
+      $('coaFields').style.display = status === 'available' ? '' : 'none';
+    }
+    $('pCoaStatus').addEventListener('change', coaFieldsVisible);
+
+    $('pCoaFile').addEventListener('change', function () {
+      var file = this.files && this.files[0];
+      if (!file) { newCoaData = ''; newCoaName = ''; return; }
+      // 6MB keeps it inside the API's JSON body limit with room to spare.
+      if (file.size > 6 * 1024 * 1024) {
+        setMsg('That document is over 6MB. Upload it to assets/coa/ by FTP and enter its path instead.', 'error');
+        this.value = '';
+        return;
+      }
+      var reader = new FileReader();
+      reader.onload = function () {
+        newCoaData = String(reader.result || '');
+        newCoaName = file.name;
+        $('coaFileHint').textContent = 'Ready to save: ' + file.name;
+      };
+      reader.readAsDataURL(file);
+    });
+
+    function collectCoa() {
+      var status = $('pCoaStatus').value;
+      var coa = { status: status };
+      var note = $('pCoaNote').value.trim();
+      if (note) coa.note = note;
+
+      if (status === 'available') {
+        var map = { lab: 'pCoaLab', reportId: 'pCoaReport', batch: 'pCoaBatch', method: 'pCoaMethod',
+                    testDate: 'pCoaTested', reportDate: 'pCoaIssued', purity: 'pCoaPurity',
+                    content: 'pCoaContent', verifyUrl: 'pCoaVerify' };
+        Object.keys(map).forEach(function (k) {
+          var v = $(map[k]).value.trim();
+          if (v) coa[k] = v;
+        });
+      }
+      // A newly uploaded document wins; otherwise whatever path is in the box
+      // (which startEdit pre-fills with the current one, so it survives edits).
+      if (newCoaData) coa.file = newCoaData;
+      else {
+        var path = $('pCoaPath').value.trim();
+        if (path) coa.file = path;
+      }
+      return coa;
+    }
+
+    function fillCoa(p) {
+      var coa = (p && p.coa) || {};
+      $('pCoaStatus').value = coa.status || 'pending';
+      $('pCoaLab').value = coa.lab || '';
+      $('pCoaReport').value = coa.reportId || '';
+      $('pCoaBatch').value = coa.batch || '';
+      $('pCoaMethod').value = coa.method || '';
+      $('pCoaTested').value = coa.testDate || '';
+      $('pCoaIssued').value = coa.reportDate || '';
+      $('pCoaPurity').value = coa.purity || '';
+      $('pCoaContent').value = coa.content || '';
+      $('pCoaVerify').value = coa.verifyUrl || '';
+      $('pCoaNote').value = coa.note || '';
+      newCoaData = ''; newCoaName = '';
+      $('pCoaFile').value = '';
+
+      // An uploaded document is a data: URL — far too long for a text box, so
+      // the box holds only real paths and the link opens whatever is stored.
+      var file = coa.file || '';
+      var isUpload = /^data:/.test(file);
+      $('pCoaPath').value = isUpload ? '' : file;
+      var link = $('coaFileLink');
+      if (file) {
+        link.href = file;
+        link.style.display = '';
+        $('coaFileHint').textContent = isUpload
+          ? 'A document is stored on this product. Choose a file to replace it.'
+          : 'Currently pointing at ' + file;
+      } else {
+        link.style.display = 'none';
+        $('coaFileHint').textContent = 'No document yet. Upload one, or enter a path like assets/coa/137638.pdf.';
+      }
+      coaFieldsVisible();
+    }
 
     /* ---- save (add or update) ---- */
     form.addEventListener('submit', function (e) {
@@ -525,7 +735,8 @@
         stockQty: $('pStock').value.trim() === '' ? null : Number($('pStock').value),
         featured: $('pFeatured').checked,
         description: $('pDescription').value.trim(),
-        specs: collectSpecs()
+        specs: collectSpecs(),
+        coa: collectCoa()
       };
       if (newImageData) body.image = newImageData;   // only send when a new image was chosen
 

@@ -8,7 +8,7 @@
    ============================================================ */
 // Price from the admin-managed product store (seeded from the static catalog),
 // so products added or edited in the admin are priced correctly at checkout.
-const { findProductById: getProductById, availableQty } = require('./products.js');
+const { findProductById: getProductById, availableQty, isPublished } = require('./products.js');
 
 const FREE_SHIP_THRESHOLD = 100;
 const SHIP_FLAT = 9.99;
@@ -35,6 +35,9 @@ function buildOrder(rawItems, opts = {}) {
   const items = rawItems.map(raw => {
     const product = getProductById(raw && raw.id);
     if (!product) throw new Error(`Unknown product id: ${raw && raw.id}`);
+    /* Hidden means "not on the shop", so it cannot be bought either — a cart
+       saved before the product was pulled must not walk it through checkout. */
+    if (!isPublished(product)) throw new Error(`No longer available: ${product.name}`);
     if (product.inStock === false) throw new Error(`Out of stock: ${product.name}`);
 
     const quantity = parseInt(raw.quantity, 10);

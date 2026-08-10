@@ -403,8 +403,14 @@ function orderToSubscriptionItems(order) {
    GET is public (the storefront reads it). Add/edit/delete are
    admin-only (same requireAdmin as the user tools).
    ============================================================ */
+/* Hidden products are filtered out for the public. The admin console reads
+   the same route and needs to see everything it can edit, so an authenticated
+   admin gets the unfiltered list — checked softly, because a visitor with no
+   credentials must get the catalog, not a 401. */
 app.get('/api/products', (req, res) => {
-  res.json({ success: true, products: productStore.listProducts(), categories: productStore.CATEGORIES });
+  const all = productStore.listProducts();
+  const products = isAdminRequest(req) ? all : all.filter(productStore.isPublished);
+  res.json({ success: true, products, categories: productStore.CATEGORIES });
 });
 
 app.post('/api/products', requireAdmin, (req, res) => {
@@ -437,6 +443,18 @@ app.delete('/api/products/:id', requireAdmin, (req, res) => {
    the entire product (which would mean re-uploading the image data-URL just to
    change a number, and would let a stale row overwrite a field edited elsewhere).
    Send { stockQty: 12 } to set it, or { stockQty: null } to stop tracking. */
+/* ---- ADMIN: show or hide one product ----
+   Same reasoning as the stock route: the admin list flips this inline, and
+   re-sending the whole product just to change a boolean would mean shipping
+   the image data-URL back and forth and risking a stale row overwriting an
+   edit made elsewhere. Send { published: false } to take it off the shop. */
+app.patch('/api/products/:id/published', requireAdmin, (req, res) => {
+  const body = req.body || {};
+  const product = productStore.setPublished(req.params.id, body.published !== false);
+  if (!product) return res.status(404).json({ error: 'No product with that id.' });
+  res.json({ success: true, product });
+});
+
 app.patch('/api/products/:id/stock', requireAdmin, (req, res) => {
   try {
     const body = req.body || {};
@@ -457,6 +475,21 @@ const ADMIN_KEY = process.env.ADMIN_KEY || '';
         "main account" flow; attaches req.user.
      2. The admin key (x-admin-key header or ?key=) — kept for tools/back-compat.
    Either one is sufficient. */
+/* Same two credentials requireAdmin accepts, asked as a question instead of
+   enforced as a gate. Used where a route serves both the public and an admin
+   (GET /api/products), so an anonymous visitor gets the public view rather
+   than a 401. */
+function isAdminRequest(req) {
+  const m = /^Bearer\s+(.+)$/i.exec(req.get('authorization') || '');
+  const payload = m && auth.verifyToken(m[1]);
+  if (payload) {
+    const user = auth.getUserById(payload.sub);
+    if (user && user.isAdmin) return true;
+  }
+  const key = req.get('x-admin-key') || req.query.key || '';
+  return Boolean(ADMIN_KEY && key && key === ADMIN_KEY);
+}
+
 function requireAdmin(req, res, next) {
   // 1) admin account via Bearer token
   const m = /^Bearer\s+(.+)$/i.exec(req.get('authorization') || '');
@@ -1066,21 +1099,33 @@ app.get('/api/admin/btcpay', requireAdmin, async (req, res) => {
     return res.json({ success: true, ...base, error: 'BTCPay is not configured on this server.' });
   }
 
-  // The store lookup is the connectivity test; a failure there is fatal for
-  // the panel, so it reports and stops rather than showing half a screen.
-  let store = null;
-  try {
-    store = await btcpay.getStore();
-  } catch (e) {
-    return res.json({ success: true, ...base, reachable: false, error: e.message, status: e.status });
-  }
+  /* The two reads need DIFFERENT permissions, so they are allowed to fail
+     independently. A key scoped only to `cancreateinvoice` + `canviewinvoices`
+     — which is all checkout needs — can list invoices but not read the store,
+     and the invoice list is the part worth having. Failing the whole panel on
+     the store lookup hid the useful half over a cosmetic one. */
+  const [storeRes, invoiceRes] = await Promise.allSettled([
+    btcpay.getStore(),
+    btcpay.listInvoices({ take: Number(req.query.take) || 50 })
+  ]);
 
-  let invoices = [];
-  let invoiceError = null;
-  try {
-    invoices = await btcpay.listInvoices({ take: Number(req.query.take) || 50 });
-  } catch (e) {
-    invoiceError = e.message;
+  const store = storeRes.status === 'fulfilled' ? storeRes.value : null;
+  const storeError = storeRes.status === 'rejected' ? storeRes.reason.message : null;
+  const invoices = invoiceRes.status === 'fulfilled' ? invoiceRes.value : [];
+  const invoiceError = invoiceRes.status === 'rejected' ? invoiceRes.reason.message : null;
+
+  // Only when NEITHER read works is the connection itself the problem.
+  if (!store && !invoices.length && invoiceError) {
+    const status = invoiceRes.reason.status;
+    return res.json({
+      success: true, ...base, reachable: false,
+      error: invoiceError,
+      status,
+      // A permission problem has a fix the owner can act on; name it.
+      missingPermission: status === 403
+        ? 'btcpay.store.canviewinvoices (and btcpay.store.canviewstoresettings for the store name)'
+        : null
+    });
   }
 
   const ordersById = new Map(store_listAllOrdersSafe().map(o => [o.orderId, o]));
@@ -1113,7 +1158,8 @@ app.get('/api/admin/btcpay', requireAdmin, async (req, res) => {
     success: true,
     ...base,
     reachable: true,
-    store: { id: store.id, name: store.name, defaultCurrency: store.defaultCurrency },
+    store: store ? { id: store.id, name: store.name, defaultCurrency: store.defaultCurrency } : null,
+    storeError,
     invoices: rows,
     invoiceError
   });
