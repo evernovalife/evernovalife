@@ -279,7 +279,7 @@ function createVialSVG(product) {
    full-frame masters stay in assets/vials/_base/; publish.py there mattes and
    crops them. VIAL_V busts Cloudflare when the artwork is replaced — bump it
    whenever the files change, since the filenames never do. */
-const VIAL_V = 7;
+const VIAL_V = 8;
 function vialPhotoSrc(id) {
   return `assets/vials/${id}.webp?v=${VIAL_V}`;
 }
@@ -311,7 +311,7 @@ function createVialPhoto(product, opts) {
     ` srcset="${vialPhotoSrcSet(product.id)}" sizes="${(opts && opts.width) || VIAL_W.card}px"`;
   return `
   <div class="vial-photo">
-    <img class="vial-photo-img" src="${realSrc}"${responsive} alt="${escapeHtml(name)} research vial" loading="lazy"
+    <img class="vial-photo-img" src="${realSrc}"${responsive} alt="${escapeHtml(name)} research vial" loading="lazy" decoding="async"
          onerror="this.onerror=null;this.removeAttribute('srcset');this.src='assets/vial.png?v=3';this.parentNode.classList.add('vial-fallback');var l=this.parentNode.querySelector('.vial-photo-label');if(l)l.style.display='block'">
     <svg class="vial-photo-label" viewBox="0 0 200 380" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" preserveAspectRatio="none" style="display:none">
       <defs>
@@ -379,15 +379,48 @@ function purityMeta(purity) {
   return /%\s*$/.test(s) ? escapeHtml(s) + ' purity' : escapeHtml(s);
 }
 
+/* ---- stock ----
+   A product may carry `stockQty`, a live count the admin sets and every order
+   draws down (server/products.js). It is deliberately OPTIONAL: absent means
+   the count isn't being kept, and availability is the `inStock` switch alone —
+   which is how the whole catalog behaved before counts existed.
+
+   Returns { sellable, left, label, cls }; `left` is null when untracked. */
+const LOW_STOCK_AT = 5;
+
+function stockInfo(product) {
+  if (!product || product.inStock === false) {
+    return { sellable: false, left: 0, label: 'Out of stock', cls: 'out' };
+  }
+  const raw = product.stockQty;
+  if (raw === null || raw === undefined || raw === '') {
+    return { sellable: true, left: null, label: 'In stock', cls: '' };
+  }
+  const left = Math.max(0, Math.floor(Number(raw) || 0));
+  if (left === 0) return { sellable: false, left: 0, label: 'Out of stock', cls: 'out' };
+  /* Naming the number only when it is genuinely low keeps it informative. A
+     permanent "23 in stock" is noise, and on a research supplier it invites a
+     scarcity reading the catalog has no business making. */
+  if (left <= LOW_STOCK_AT) return { sellable: true, left, label: `Only ${left} left`, cls: 'low' };
+  return { sellable: true, left, label: 'In stock', cls: '' };
+}
+
 function createProductCard(product) {
   const badge = product.badge
     ? `<span class="product-badge ${productBadgeClass(product.badge)}">${escapeHtml(product.badge)}</span>`
     : '';
   const oldPrice = product.originalPrice && product.originalPrice > product.price
     ? `<span class="product-price-old">${formatPrice(product.originalPrice)}</span>` : '';
-  const stock = product.inStock
-    ? `<span class="stock-pill">In stock</span>`
-    : `<span class="stock-pill out">Out of stock</span>`;
+  const st = stockInfo(product);
+  const stock = `<span class="stock-pill ${st.cls}">${st.label}</span>`;
+
+  /* The card must gate on stock the same way the detail page does
+     (see productDetailMarkup) — an enabled Add-to-Cart sitting next to an
+     "Out of stock" pill puts unfulfillable lines into the cart and carries
+     them all the way to a crypto invoice. */
+  const addBtn = st.sellable
+    ? `<button class="btn btn-primary btn-sm" onclick="addToCartById(${product.id}, 1, this)">Add to Cart</button>`
+    : `<button class="btn btn-primary btn-sm" disabled aria-disabled="true" title="Out of stock">Out of Stock</button>`;
 
   return `
   <article class="product-card glass glass-hover">
@@ -407,7 +440,7 @@ function createProductCard(product) {
       </div>
       ${stock}
       <div class="product-actions">
-        <button class="btn btn-primary btn-sm" onclick="addToCartById(${product.id}, 1, this)">Add to Cart</button>
+        ${addBtn}
         <a class="btn btn-ghost btn-sm" href="product.html?id=${product.id}">View</a>
       </div>
       <a class="product-coa-link" href="product.html?id=${product.id}#coa">${iconCheck()} Certificate of Analysis${
@@ -485,6 +518,20 @@ function pnCartCelebrate(sourceEl) {
 function addToCartById(id, qty = 1, sourceEl = null) {
   const product = getProductById(id);
   if (!product) return;
+  /* Belt-and-braces against a stale catalog: the buttons are disabled when a
+     product is out of stock, but the live catalog can repaint under an already
+     open page, so refuse here too rather than trusting the markup. Goes through
+     stockInfo, not `inStock` alone — a product whose COUNT has reached zero is
+     just as unsellable as one the admin switched off. */
+  const st = stockInfo(product);
+  if (!st.sellable) {
+    cart.showNotification(`${product.name} is out of stock`);
+    return;
+  }
+  if (st.left !== null && qty > st.left) {
+    cart.showNotification(`Only ${st.left} left of ${product.name}`);
+    qty = st.left;
+  }
   cart.addItem(product, qty);       // existing green toast + badge sync
   pnCartCelebrate(sourceEl);
 }
@@ -492,7 +539,15 @@ function addToCartById(id, qty = 1, sourceEl = null) {
 function renderProducts(list, container) {
   if (!container) return;
   if (!list.length) {
-    container.innerHTML = `<div class="empty-state" style="grid-column:1/-1"><div class="empty-icon">🔍</div><h3>No products found</h3><p>Try adjusting your filters or search.</p></div>`;
+    /* The empty state has to offer the way out — a shopper who filtered
+       themselves into nothing otherwise has to work out which of five
+       controls did it. The button is only wired on the catalog page. */
+    container.innerHTML = `<div class="empty-state" style="grid-column:1/-1">
+      <div class="empty-icon">${iconSearchOff()}</div>
+      <h3>No products match those filters</h3>
+      <p>Widen the price range, clear a category, or search a different term.</p>
+      <button type="button" class="btn btn-primary btn-sm" id="clearFiltersEmpty">Clear all filters</button>
+    </div>`;
     return;
   }
   container.innerHTML = list.map(createProductCard).join('');
@@ -511,7 +566,7 @@ function displayCategories() {
   if (!grid) return;
   grid.innerHTML = CATEGORIES.map(c => `
     <a class="category-card glass glass-hover" href="products.html?category=${c.key}">
-      <div class="category-emoji">${c.emoji}</div>
+      <div class="category-icon">${categoryIcon(c.icon)}</div>
       <h3>${c.name}</h3>
       <p>${c.blurb}</p>
       <div class="category-count">${getCategoryCount(c.key)} product${getCategoryCount(c.key) === 1 ? '' : 's'}</div>
@@ -528,7 +583,7 @@ function initNewsletter() {
     e.preventDefault();
     const msg = form.querySelector('.newsletter-msg');
     const email = form.querySelector('input[type="email"]').value.trim();
-    if (msg) msg.textContent = email ? '🎉 Welcome to the Nest! Check your inbox to confirm.' : '';
+    if (msg) msg.textContent = email ? 'Welcome to the Nest — check your inbox to confirm.' : '';
     form.reset();
   });
 }
@@ -566,14 +621,46 @@ function initHeader() {
   const burger = document.getElementById('hamburger');
   const nav = document.getElementById('mainNav');
   if (burger && nav) {
-    burger.addEventListener('click', () => nav.classList.toggle('mobile-open'));
+    if (!nav.id) nav.id = 'mainNav';
+    burger.setAttribute('aria-controls', nav.id);
+    burger.setAttribute('aria-expanded', 'false');
+
+    /* One place decides the open state so the button's announced state, the
+       class and every way of closing stay in agreement. The old version only
+       toggled the class: the menu announced itself as collapsed while open,
+       and nothing but a second tap on the button could shut it — not Escape,
+       not tapping the page, not even following a link in it. */
+    const setOpen = open => {
+      nav.classList.toggle('mobile-open', open);
+      burger.setAttribute('aria-expanded', String(open));
+    };
+    burger.addEventListener('click', e => {
+      e.stopPropagation();
+      setOpen(!nav.classList.contains('mobile-open'));
+      if (nav.classList.contains('mobile-open')) {
+        const first = nav.querySelector('a');
+        if (first) first.focus();
+      }
+    });
+    nav.addEventListener('click', e => { if (e.target.closest('a')) setOpen(false); });
+    document.addEventListener('click', e => {
+      if (!nav.classList.contains('mobile-open')) return;
+      if (nav.contains(e.target) || burger.contains(e.target)) return;
+      setOpen(false);
+    });
+    document.addEventListener('keydown', e => {
+      if (e.key !== 'Escape' || !nav.classList.contains('mobile-open')) return;
+      setOpen(false);
+      burger.focus();
+    });
   }
-  // active link
+  // active link — aria-current carries it for screen readers; .active is only paint
   const page = currentPage;
   document.querySelectorAll('.main-nav a').forEach(a => {
     const href = a.getAttribute('href');
     if (href === page || (page === 'index.html' && (href === 'index.html' || href === './' || href === '/'))) {
       a.classList.add('active');
+      a.setAttribute('aria-current', 'page');
     }
   });
 }
@@ -596,9 +683,90 @@ function initProductsPage() {
   const countEl = document.getElementById('resultCount');
   const catBoxes = () => Array.from(document.querySelectorAll('.cat-filter'));
 
-  if (urlSearch && searchInput) searchInput.value = urlSearch;
-  if (urlCat) {
+  const chipsEl = document.getElementById('activeFilters');
+  const priceMax = priceRange ? Number(priceRange.max) : 0;
+
+  /* ---- read the whole filter state out of the URL, not just on first load.
+     Everything the shopper touches goes back into the query string (below), so
+     a filtered catalog is a link they can send, and Back walks the filters
+     instead of leaving the page. ---- */
+  function readStateFromUrl() {
+    const p = new URLSearchParams(location.search);
+    const cats = (p.get('category') || '').split(',').filter(Boolean);
+    catBoxes().forEach(cb => { cb.checked = cats.includes(cb.value); });
+    if (searchInput) searchInput.value = p.get('search') || '';
+    if (sortSelect && p.get('sort')) sortSelect.value = p.get('sort');
+    if (priceRange) priceRange.value = p.get('max') || priceRange.max;
+    if (stockOnly) stockOnly.checked = p.get('stock') === '1';
+  }
+  readStateFromUrl();
+  // legacy single-value ?category=x links still land on the right box
+  if (urlCat && !catBoxes().some(cb => cb.checked)) {
     catBoxes().forEach(cb => { if (cb.value === urlCat) cb.checked = true; });
+  }
+  if (urlSearch && searchInput && !searchInput.value) searchInput.value = urlSearch;
+
+  function writeStateToUrl() {
+    const p = new URLSearchParams();
+    const cats = catBoxes().filter(cb => cb.checked).map(cb => cb.value);
+    if (cats.length) p.set('category', cats.join(','));
+    const q = (searchInput?.value || '').trim();
+    if (q) p.set('search', q);
+    if (sortSelect && sortSelect.value && sortSelect.value !== 'featured') p.set('sort', sortSelect.value);
+    if (priceRange && Number(priceRange.value) < priceMax) p.set('max', priceRange.value);
+    if (stockOnly && stockOnly.checked) p.set('stock', '1');
+    const qs = p.toString();
+    const url = location.pathname + (qs ? '?' + qs : '');
+    /* replaceState, not push: dragging the price slider would otherwise stack
+       a hundred history entries and make Back useless. */
+    try { history.replaceState(null, '', url); } catch (e) { /* file:// */ }
+  }
+
+  /* Chips for what is currently narrowing the list. On a phone the sidebar is
+     collapsed by default, so without these there is no way to see — or undo —
+     a filter that is hiding products. */
+  function renderChips() {
+    if (!chipsEl) return;
+    const chips = [];
+    catBoxes().filter(cb => cb.checked).forEach(cb => {
+      const label = (cb.parentElement.textContent || cb.value).trim();
+      chips.push({ label, kind: 'cat', value: cb.value });
+    });
+    const q = (searchInput?.value || '').trim();
+    if (q) chips.push({ label: `“${q}”`, kind: 'search' });
+    if (priceRange && Number(priceRange.value) < priceMax) {
+      chips.push({ label: `Under ${formatPrice(Number(priceRange.value))}`, kind: 'price' });
+    }
+    if (stockOnly && stockOnly.checked) chips.push({ label: 'In stock only', kind: 'stock' });
+
+    if (!chips.length) { chipsEl.innerHTML = ''; chipsEl.hidden = true; return; }
+    chipsEl.hidden = false;
+    chipsEl.innerHTML =
+      chips.map(c => `<button type="button" class="filter-chip" data-kind="${c.kind}"${
+        c.value ? ` data-value="${escapeHtml(c.value)}"` : ''
+      } aria-label="Remove filter ${escapeHtml(c.label)}">${escapeHtml(c.label)}<span aria-hidden="true">&times;</span></button>`).join('') +
+      `<button type="button" class="filter-chip chip-clear" data-kind="all">Clear all</button>`;
+  }
+
+  function clearFilter(kind, value) {
+    if (kind === 'all') {
+      catBoxes().forEach(cb => { cb.checked = false; });
+      if (searchInput) searchInput.value = '';
+      if (priceRange) priceRange.value = priceRange.max;
+      if (stockOnly) stockOnly.checked = false;
+    } else if (kind === 'cat') {
+      catBoxes().forEach(cb => { if (cb.value === value) cb.checked = false; });
+    } else if (kind === 'search' && searchInput) { searchInput.value = ''; }
+    else if (kind === 'price' && priceRange) { priceRange.value = priceRange.max; }
+    else if (kind === 'stock' && stockOnly) { stockOnly.checked = false; }
+    apply();
+  }
+
+  if (chipsEl) {
+    chipsEl.addEventListener('click', e => {
+      const b = e.target.closest('.filter-chip');
+      if (b) clearFilter(b.dataset.kind, b.dataset.value);
+    });
   }
 
   function apply() {
@@ -629,6 +797,12 @@ function initProductsPage() {
 
     renderProducts(list, grid);
     if (countEl) countEl.textContent = `${list.length} product${list.length === 1 ? '' : 's'}`;
+    renderChips();
+    writeStateToUrl();
+
+    // the empty state offers the only escape from a filter set that hides everything
+    const emptyBtn = document.getElementById('clearFiltersEmpty');
+    if (emptyBtn) emptyBtn.addEventListener('click', () => clearFilter('all'));
   }
 
   catBoxes().forEach(cb => cb.addEventListener('change', apply));
@@ -636,6 +810,14 @@ function initProductsPage() {
   searchInput && searchInput.addEventListener('input', apply);
   priceRange && priceRange.addEventListener('input', apply);
   stockOnly && stockOnly.addEventListener('change', apply);
+  // Back/Forward past our replaceState (or a pasted link) re-reads the state
+  window.addEventListener('popstate', () => { readStateFromUrl(); apply(); });
+
+  const clearBtn = document.getElementById('clearFiltersBtn');
+  if (clearBtn) clearBtn.addEventListener('click', () => clearFilter('all'));
+  if (searchInput && !searchInput.getAttribute('aria-label')) {
+    searchInput.setAttribute('aria-label', 'Search the catalog');
+  }
 
   /* Mobile filter toggle. Below the 1024px breakpoint the sidebar is stacked
      ABOVE the results, so leaving it open pushed the first product a full
@@ -826,7 +1008,7 @@ function coaDocumentMarkup(url, coa) {
             <a href="${src}" target="_blank" rel="noopener">open the report in a new tab</a>.</p>
        </object>`
     : `<a href="${src}" target="_blank" rel="noopener" class="coa-doc-zoom">
-         <img class="coa-doc-img" src="${src}" alt="${label}" loading="lazy">
+         <img class="coa-doc-img" src="${src}" alt="${label}" loading="lazy" decoding="async">
          <span class="coa-doc-hint">Click to view full size</span>
        </a>`;
 
@@ -1052,6 +1234,7 @@ function productDetailMarkup(product, opts = {}) {
   const oldPrice = product.originalPrice > product.price
     ? `<span class="detail-price-old">${formatPrice(product.originalPrice)}</span>` : '';
   const badge = product.badge ? `<span class="product-badge ${productBadgeClass(product.badge)}" style="position:static;display:inline-block">${escapeHtml(product.badge)}</span>` : '';
+  const st = stockInfo(product);
 
   /* Gallery: the vial and its certificate are two views of the same panel,
      switched by the thumbnails underneath — so the report is visible right
@@ -1078,7 +1261,7 @@ function productDetailMarkup(product, opts = {}) {
       </div>
       <div class="detail-thumbs">
         <button type="button" class="detail-thumb is-active" data-view="vial" aria-label="View the vial">
-          <img src="${vialSrc}" alt="" onerror="this.src='assets/vial.png?v=3'">
+          <img src="${vialSrc}" alt="" loading="lazy" decoding="async" onerror="this.src='assets/vial.png?v=3'">
         </button>
         <button type="button" class="detail-thumb detail-thumb-coa" data-view="coa" hidden aria-label="View the certificate of analysis">
           <img alt="">
@@ -1093,19 +1276,21 @@ function productDetailMarkup(product, opts = {}) {
       <div class="detail-price-row">
         <span class="detail-price gradient-text">${formatPrice(product.price)}</span>
         ${oldPrice}
-        <span class="stock-pill ${product.inStock ? '' : 'out'}">${product.inStock ? 'In stock' : 'Out of stock'}</span>
+        <span class="stock-pill ${st.cls}">${st.label}</span>
       </div>
       <p class="detail-desc">${escapeHtml(product.description)}</p>
       <div class="qty-selector">
         <span>Quantity</span>
         <div class="qty-control">
-          <button type="button" class="qty-minus" aria-label="Decrease">−</button>
-          <input type="text" class="qty-input" value="1" inputmode="numeric" aria-label="Quantity">
+          <button type="button" class="qty-minus" aria-label="Decrease">&minus;</button>
+          <input type="number" class="qty-input" value="1" min="1"${st.left ? ` max="${st.left}"` : ''}
+                 inputmode="numeric" aria-label="Quantity"${st.sellable ? '' : ' disabled'}>
           <button type="button" class="qty-plus" aria-label="Increase">+</button>
         </div>
+        ${st.left !== null && st.sellable ? `<span class="qty-limit">${st.left} available</span>` : ''}
       </div>
       <div class="detail-cta">
-        <button class="btn btn-primary btn-lg detail-add-btn" ${product.inStock ? '' : 'disabled'}>Add to Cart</button>
+        <button class="btn btn-primary btn-lg detail-add-btn" ${st.sellable ? '' : 'disabled aria-disabled="true"'}>${st.sellable ? 'Add to Cart' : 'Out of Stock'}</button>
         ${modal
           ? `<a class="btn btn-ghost btn-lg" href="product.html?id=${product.id}">Full details</a>`
           : `<a class="btn btn-ghost btn-lg" href="cart.html">View Cart</a>`}
@@ -1127,13 +1312,30 @@ function wireProductDetail(root, product) {
   initDetailGallery(root);
   revealCoaDocument(root, product.coa);   // show the report only if the file is there
 
-  // quantity controls
+  /* Quantity controls. The ceiling is the smaller of the usual 99 and whatever
+     stock is left, so the buyer can't build a line the checkout will only
+     reject after they have filled in an address. The server re-checks and is
+     authoritative — this just stops the pointless round trip. */
+  const stock = stockInfo(product);
+  const capacity = stock.left === null ? 99 : Math.min(99, stock.left);
   const qtyInput = root.querySelector('.qty-input');
-  const clamp = () => { let v = parseInt(qtyInput.value, 10); if (isNaN(v) || v < 1) v = 1; if (v > 99) v = 99; qtyInput.value = v; return v; };
+  const clamp = () => {
+    let v = parseInt(qtyInput.value, 10);
+    if (isNaN(v) || v < 1) v = 1;
+    if (v > capacity) v = capacity;
+    qtyInput.value = v;
+    return v;
+  };
   root.querySelector('.qty-minus').addEventListener('click', () => { qtyInput.value = Math.max(1, (parseInt(qtyInput.value, 10) || 1) - 1); });
-  root.querySelector('.qty-plus').addEventListener('click', () => { qtyInput.value = Math.min(99, (parseInt(qtyInput.value, 10) || 1) + 1); });
+  root.querySelector('.qty-plus').addEventListener('click', () => {
+    const next = Math.min(capacity, (parseInt(qtyInput.value, 10) || 1) + 1);
+    qtyInput.value = next;
+    const note = root.querySelector('.qty-limit');
+    if (note && stock.left !== null && next >= capacity) note.classList.add('at-limit');
+  });
   qtyInput.addEventListener('change', clamp);
   root.querySelector('.detail-add-btn').addEventListener('click', (e) => {
+    if (!stockInfo(product).sellable) return;    // catalog may have repainted under us
     cart.addItem(product, clamp());
     pnCartCelebrate(e.currentTarget);   // resolves to .product-detail-media via fallback
   });
@@ -1256,9 +1458,29 @@ function pdModalGo(id) {
 }
 
 function pdModalKey(e) {
-  if (e.key !== 'Escape') return;
-  if (document.querySelector('.coa-lightbox')) return;   // lightbox closes first
-  closeProductModal();
+  if (e.key === 'Escape') {
+    if (document.querySelector('.coa-lightbox')) return;   // lightbox closes first
+    closeProductModal();
+    return;
+  }
+  if (e.key !== 'Tab') return;
+
+  /* Keep Tab inside the dialog. aria-modal="true" tells assistive tech the rest
+     of the page is inert, but it does nothing to the actual tab order — without
+     this, tabbing off the last control lands on the header behind the backdrop
+     and the buyer is editing a page they cannot see. */
+  const box = productModalOpen();
+  if (!box || document.querySelector('.coa-lightbox')) return;
+  const focusable = Array.from(box.querySelectorAll(
+    'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  )).filter(el => el.offsetParent !== null || el === document.activeElement);
+  if (!focusable.length) return;
+
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (!box.contains(document.activeElement)) { e.preventDefault(); first.focus(); return; }
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
 }
 
 /* `silent` skips the history rewind (used when replacing one modal with
@@ -1326,7 +1548,7 @@ function initProductDetailPage() {
   const id = new URLSearchParams(location.search).get('id') || 1;
   const product = getProductById(id);
   if (!product) {
-    root.innerHTML = `<div class="empty-state"><div class="empty-icon">😕</div><h3>Product not found</h3><p>This item may have been removed.</p><a class="btn btn-primary" href="products.html">Browse Catalog</a></div>`;
+    root.innerHTML = `<div class="empty-state"><div class="empty-icon">${iconFileQuestion()}</div><h3>Product not found</h3><p>This item may have been removed.</p><a class="btn btn-primary" href="products.html">Browse Catalog</a></div>`;
     return;
   }
   document.title = `${product.name} — Ever Nova Life`;
@@ -1393,7 +1615,7 @@ function renderCartPage() {
   if (cart.items.length === 0) {
     root.innerHTML = `
       <div class="empty-state glass">
-        <div class="empty-icon">🪺</div>
+        <div class="empty-icon">${iconCartOutline()}</div>
         <h3>Your nest is empty</h3>
         <p>Browse our research peptides and add something to get started.</p>
         <a class="btn btn-primary" href="products.html">Shop Products</a>
@@ -1401,26 +1623,7 @@ function renderCartPage() {
     return;
   }
 
-  const rows = cart.items.map(item => {
-    const product = getProductById(item.id) || item;
-    return `
-    <div class="cart-row glass" data-id="${item.id}">
-      <div class="cart-row-media">${createVialPhoto(product, { width: VIAL_W.thumb })}</div>
-      <div class="cart-row-info">
-        <span class="product-cat">${escapeHtml(item.category || '')}</span>
-        <h4><a href="product.html?id=${item.id}">${escapeHtml(item.name)}</a></h4>
-        <div class="cart-price gradient-text">${formatPrice(item.price)}</div>
-      </div>
-      <div class="cart-row-controls">
-        <div class="qty-control">
-          <button type="button" class="cart-minus" data-id="${item.id}">−</button>
-          <input type="text" class="cart-qty" data-id="${item.id}" value="${item.quantity}" inputmode="numeric">
-          <button type="button" class="cart-plus" data-id="${item.id}">+</button>
-        </div>
-        <button class="cart-remove" data-id="${item.id}">${iconTrash()} Remove</button>
-      </div>
-    </div>`;
-  }).join('');
+  const rows = cart.items.map(cartRowMarkup).join('');
 
   root.innerHTML = `
     <div class="cart-layout">
@@ -1432,21 +1635,143 @@ function renderCartPage() {
   bindCartControls();
 }
 
+function cartRowMarkup(item) {
+  const product = getProductById(item.id) || item;
+  const name = escapeHtml(item.name);
+  const st = stockInfo(product);
+  const cap = st.left === null ? 99 : Math.min(99, st.left);
+
+  /* Stock can fall between adding to the cart and coming back to it — the count
+     is server-side and other people buy. Say so on the line rather than letting
+     checkout be the first place they hear about it. */
+  let warn = '';
+  if (!st.sellable) warn = `<p class="cart-row-warn">${iconAlert()} Out of stock — remove this line to continue.</p>`;
+  else if (st.left !== null && item.quantity > st.left) warn = `<p class="cart-row-warn">${iconAlert()} Only ${st.left} left — lower the quantity to continue.</p>`;
+
+  return `
+    <div class="cart-row glass${warn ? ' has-warn' : ''}" data-id="${item.id}">
+      <div class="cart-row-media">${createVialPhoto(product, { width: VIAL_W.thumb })}</div>
+      <div class="cart-row-info">
+        <span class="product-cat">${escapeHtml(item.category || '')}</span>
+        <h4><a href="product.html?id=${item.id}">${name}</a></h4>
+        <div class="cart-price gradient-text">${formatPrice(item.price)}</div>
+        ${warn}
+      </div>
+      <div class="cart-row-controls">
+        <div class="qty-control">
+          <button type="button" class="cart-minus" data-id="${item.id}" aria-label="Decrease quantity of ${name}">&minus;</button>
+          <input type="number" class="cart-qty" data-id="${item.id}" value="${item.quantity}"
+                 min="1" max="${cap}" step="1" inputmode="numeric" aria-label="Quantity of ${name}">
+          <button type="button" class="cart-plus" data-id="${item.id}" aria-label="Increase quantity of ${name}"${item.quantity >= cap ? ' disabled' : ''}>+</button>
+        </div>
+        <button class="cart-remove" data-id="${item.id}" aria-label="Remove ${name} from cart">${iconTrash()} Remove</button>
+      </div>
+    </div>`;
+}
+
+/* Update one line and the totals in place.
+   The old code called renderCartPage() after every ± tap, which threw away and
+   rebuilt the whole page: focus left the button being clicked (so a second tap
+   went nowhere on a keyboard), the scroll position jumped on long carts, and
+   every vial image was re-decoded. Removing a line is the only case that still
+   needs a full repaint, and only when it empties the cart. */
+function patchCartRow(id) {
+  const item = cart.items.find(i => i.id === Number(id));
+  const row = document.querySelector(`.cart-row[data-id="${id}"]`);
+  if (!item || !row) { renderCartPage(); return; }
+
+  const st = stockInfo(getProductById(item.id) || item);
+  const cap = st.left === null ? 99 : Math.min(99, st.left);
+
+  const qty = row.querySelector('.cart-qty');
+  if (qty) {
+    if (String(qty.value) !== String(item.quantity)) qty.value = item.quantity;
+    qty.max = cap;
+  }
+  const plus = row.querySelector('.cart-plus');
+  if (plus) plus.disabled = item.quantity >= cap;
+
+  /* The over-stock warning is edited in place, not re-rendered with the row —
+     replacing the node here would throw away the focus that patching exists to
+     keep (see the note on bindCartControls). */
+  let warn = row.querySelector('.cart-row-warn');
+  let text = '';
+  if (!st.sellable) text = 'Out of stock — remove this line to continue.';
+  else if (st.left !== null && item.quantity > st.left) text = `Only ${st.left} left — lower the quantity to continue.`;
+  if (text) {
+    if (!warn) {
+      warn = document.createElement('p');
+      warn.className = 'cart-row-warn';
+      row.querySelector('.cart-row-info').appendChild(warn);
+    }
+    warn.innerHTML = iconAlert() + ' ' + escapeHtml(text);
+  } else if (warn) { warn.remove(); }
+  row.classList.toggle('has-warn', !!text);
+
+  renderOrderSummary(document.getElementById('orderSummary'), true);
+}
+
 function bindCartControls() {
-  document.querySelectorAll('.cart-plus').forEach(b => b.addEventListener('click', () => {
-    const id = b.dataset.id; const item = cart.items.find(i => i.id === Number(id));
-    cart.updateQuantity(id, item.quantity + 1); renderCartPage();
-  }));
-  document.querySelectorAll('.cart-minus').forEach(b => b.addEventListener('click', () => {
-    const id = b.dataset.id; const item = cart.items.find(i => i.id === Number(id));
-    cart.updateQuantity(id, item.quantity - 1); renderCartPage();
-  }));
-  document.querySelectorAll('.cart-qty').forEach(inp => inp.addEventListener('change', () => {
-    cart.updateQuantity(inp.dataset.id, inp.value); renderCartPage();
-  }));
-  document.querySelectorAll('.cart-remove').forEach(b => b.addEventListener('click', () => {
-    cart.removeItem(b.dataset.id); renderCartPage();
-  }));
+  const root = document.getElementById('cartRoot');
+  if (!root || root._cartBound) return;
+  root._cartBound = true;
+
+  /* Delegated once on the container, so rows added by a later server sync are
+     already live without another pass of addEventListener. */
+  root.addEventListener('click', e => {
+    const btn = e.target.closest('.cart-plus, .cart-minus, .cart-remove');
+    if (!btn) return;
+    const id = btn.dataset.id;
+    const item = cart.items.find(i => i.id === Number(id));
+    if (!item) return;
+
+    if (btn.classList.contains('cart-remove')) {
+      const name = item.name;
+      cart.removeItem(id);
+      const row = btn.closest('.cart-row');
+      if (!cart.items.length) { renderCartPage(); }
+      else {
+        if (row) row.remove();
+        renderOrderSummary(document.getElementById('orderSummary'), true);
+      }
+      cart.showNotification(`${name} removed from cart`);
+      return;
+    }
+
+    const up = btn.classList.contains('cart-plus');
+    if (up) {
+      const st = stockInfo(getProductById(item.id) || item);
+      const cap = st.left === null ? 99 : Math.min(99, st.left);
+      if (item.quantity >= cap) {
+        cart.showNotification(st.left === null
+          ? `99 is the most you can order of ${item.name}`
+          : `Only ${st.left} left of ${item.name}`);
+        return;
+      }
+    }
+    const next = item.quantity + (up ? 1 : -1);
+    if (next < 1) {                       // stepping below 1 is a removal
+      const name = item.name;
+      cart.removeItem(id);
+      const row = btn.closest('.cart-row');
+      if (!cart.items.length) renderCartPage();
+      else {
+        if (row) row.remove();
+        renderOrderSummary(document.getElementById('orderSummary'), true);
+      }
+      cart.showNotification(`${name} removed from cart`);
+      return;
+    }
+    cart.updateQuantity(id, next);
+    patchCartRow(id);
+  });
+
+  root.addEventListener('change', e => {
+    const inp = e.target.closest('.cart-qty');
+    if (!inp) return;
+    cart.updateQuantity(inp.dataset.id, inp.value);
+    patchCartRow(inp.dataset.id);
+  });
 }
 
 function renderOrderSummary(el, withCheckoutBtn) {
@@ -1457,14 +1782,21 @@ function renderOrderSummary(el, withCheckoutBtn) {
     <h3>Order Summary</h3>
     <div class="summary-row"><span>Subtotal (${cart.getItemCount()} items)</span><span>${formatPrice(cart.getSubtotal())}</span></div>
     <div class="summary-row"><span>Shipping</span><span>${ship === 0 ? 'FREE' : formatPrice(ship)}</span></div>
-    <div class="summary-row"><span>Tax (8%)</span><span>${formatPrice(cart.getTax())}</span></div>
+    <div class="summary-row"><span>Tax (${taxRateLabel()})</span><span>${formatPrice(cart.getTax())}</span></div>
     <div class="summary-row total"><span>Total</span><span>${formatPrice(cart.getTotal())}</span></div>
-    ${remaining > 0 ? `<p class="summary-note">Add ${formatPrice(remaining)} more for FREE shipping 🚚</p>` : `<p class="summary-note">🎉 You've unlocked free shipping!</p>`}
-    <div class="promo-row"><input type="text" placeholder="Promo code"><button class="btn btn-ghost btn-sm">Apply</button></div>
+    ${remaining > 0 ? `<p class="summary-note"><span class="summary-note-ic">${iconTruckLine()}</span>Add ${formatPrice(remaining)} more for free shipping</p>` : `<p class="summary-note"><span class="summary-note-ic">${iconCheckCircle()}</span>Free shipping unlocked</p>`}
     ${withCheckoutBtn ? `<a class="btn btn-primary btn-block" href="${checkoutHref()}">Proceed to Checkout</a>` : ''}
     ${withCheckoutBtn && !isSignedIn()
       ? `<p class="summary-note">An account is required to check out — you'll be asked to sign in or register next.</p>` : ''}
-    <p class="summary-note">🔒 Secure checkout · Research use only</p>`;
+    <p class="summary-note"><span class="summary-note-ic">${iconLock()}</span>Secure checkout · Research use only</p>`;
+}
+
+/* The rate label has to follow TAX_RATE in cart.js. It was written as a
+   literal "8%" next to a figure computed from the constant, so changing the
+   rate would have printed a number that contradicted its own label. */
+function taxRateLabel() {
+  const r = (typeof TAX_RATE === 'number' ? TAX_RATE : 0.08) * 100;
+  return (Math.round(r * 100) / 100) + '%';
 }
 
 /* ---- account state, read straight from storage (auth.js isn't loaded on
@@ -1576,6 +1908,10 @@ function checkoutSetMsg(text, kind) {
   const msg = document.getElementById('checkoutMsg');
   if (!msg) return;
   msg.className = 'form-msg' + (kind ? ' ' + kind : '');
+  /* A payment failing is not something to find out about by looking — assertive
+     so it interrupts, polite for the ordinary progress lines. */
+  msg.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+  msg.setAttribute('aria-live', kind === 'error' ? 'assertive' : 'polite');
   msg.textContent = text || '';
 }
 
@@ -1660,7 +1996,7 @@ function renderCheckoutSummary(el) {
     <div class="summary-row"><span>Subtotal (${cart.getItemCount()} items)</span><span>${formatPrice(t.subtotal)}</span></div>
     <div class="summary-row"><span>Shipping</span><span>${t.shipping === 0 ? 'FREE' : formatPrice(t.shipping)}</span></div>
     ${t.discount > 0 ? `<div class="summary-row discount"><span>Points discount</span><span>−${formatPrice(t.discount)}</span></div>` : ''}
-    <div class="summary-row"><span>Tax (8%)</span><span>${formatPrice(t.tax)}</span></div>
+    <div class="summary-row"><span>Tax (${taxRateLabel()})</span><span>${formatPrice(t.tax)}</span></div>
     <div class="summary-row total"><span>Total</span><span>${formatPrice(t.total)}</span></div>
     ${canRedeem ? `
       <label class="loyalty-redeem-row">
@@ -1668,7 +2004,7 @@ function renderCheckoutSummary(el) {
         <span>Use my <strong>${loy.balance} points</strong> (−${formatPrice(maxRedeem)})</span>
       </label>` : ''}
     ${redeemActive ? `<p class="summary-note">Points come off your <strong>Bitcoin / Lightning</strong> total. You'll still earn points on this order.</p>` : ''}
-    <p class="summary-note">🔒 Secure checkout · Research use only</p>`;
+    <p class="summary-note"><span class="summary-note-ic">${iconLock()}</span>Secure checkout · Research use only</p>`;
 
   const chk = document.getElementById('redeemPoints');
   if (chk) chk.addEventListener('change', () => onRedeemToggle(chk.checked));
@@ -1849,19 +2185,19 @@ function showCryptoConfirmation(ref) {
   if (sub) {
     const when = new Date(sub.nextRunAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
     const every = sub.intervalDays === 1 ? 'day' : `${sub.intervalDays} days`;
-    autoshipNote = `<p class="text-muted">🔁 <strong>Auto-ship is on.</strong> We'll prepare these items again every
+    autoshipNote = `<p class="text-muted"><span class="summary-note-ic">${iconRepeat()}</span><strong>Auto-ship is on.</strong> We'll prepare these items again every
       ${escapeHtml(every)} — next on <strong>${escapeHtml(when)}</strong> — and email you an invoice to pay each time,
       with a reminder 3 days before. Nothing is ever charged automatically.
       Change, skip or cancel any time in <a href="account.html#autoship" style="color:var(--accent-purple)">your account</a>.</p>`;
   } else if (ref && ref.autoshipFailed) {
-    autoshipNote = `<p class="text-muted">⚠️ Your order went through, but we couldn't set up the auto-ship
+    autoshipNote = `<p class="text-muted"><span class="summary-note-ic">${iconAlert()}</span>Your order went through, but we couldn't set up the auto-ship
       schedule. <strong>No repeating order has been created.</strong> You can start one from
       <a href="account.html#autoship" style="color:var(--accent-purple)">your account</a>, or contact us and we'll sort it out.</p>`;
   }
 
   wrap.innerHTML = `
     <div class="empty-state glass">
-      <div class="empty-icon">✅</div>
+      <div class="empty-icon">${iconCheckCircle()}</div>
       <h3>Payment received — welcome to the Nest!</h3>
       <p>Thank you! Your crypto payment has been received${ref && ref.orderId
         ? ` — your order reference is <strong>${escapeHtml(ref.orderId)}</strong>` : ''}.
@@ -1940,7 +2276,7 @@ function showZelleInstructions(body) {
 
   wrap.innerHTML = `
     <div class="zelle-instructions glass">
-      <div class="empty-icon">🏦</div>
+      <div class="empty-icon">${iconBank()}</div>
       <h3>Almost done — send your Zelle payment</h3>
       <p>Your order <strong>${escapeHtml(body.orderId || '')}</strong> is placed and held for
          <strong>${escapeHtml(String(hours))} hours</strong>. Nothing has been charged — send the transfer
@@ -2018,7 +2354,7 @@ function showCheckoutAccountGate() {
   if (!wrap) return;
   wrap.innerHTML = `
     <div class="empty-state glass">
-      <div class="empty-icon">🔐</div>
+      <div class="empty-icon">${iconLock()}</div>
       <h3>An account is required to check out</h3>
       <p>Ever Nova Life supplies materials for in-vitro research only, and every order must be
          tied to a verified account holder. Please sign in, or create an account — it takes a minute
@@ -2173,6 +2509,36 @@ function iconBox() { return `<svg viewBox="0 0 24 24" fill="none" stroke="curren
 function iconTrash() { return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`; }
 function iconHeart() { return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8l1.1 1.1L12 21.2l7.7-7.6 1.1-1.1a5.5 5.5 0 0 0 0-7.9z"/></svg>`; }
 
+/* ---- line-art glyphs that replaced the emoji ----
+   Emoji were doing icon work in the empty states, category cards and order
+   summary. Every platform draws them differently and they read as consumer-app
+   decoration, which undercuts a page whose whole argument is laboratory
+   documentation. These are the same 24px stroke set as the rest of the site. */
+function svgLine(paths, extra) {
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"${extra || ''}>${paths}</svg>`;
+}
+function iconSearchOff() { return svgLine(`<circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/><path d="M8.5 8.5l5 5"/><path d="m13.5 8.5-5 5"/>`); }
+function iconCartOutline() { return svgLine(`<circle cx="9" cy="20" r="1.4"/><circle cx="18.5" cy="20" r="1.4"/><path d="M2 3h3l2.4 11.6a1.8 1.8 0 0 0 1.8 1.4h8.4a1.8 1.8 0 0 0 1.8-1.4L21.5 7H6"/>`); }
+function iconFileQuestion() { return svgLine(`<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M10.3 12.6a1.8 1.8 0 1 1 2.4 2.2c-.5.3-.7.7-.7 1.2"/><path d="M12 18.6h.01"/>`); }
+function iconCheckCircle() { return svgLine(`<circle cx="12" cy="12" r="9"/><path d="m8.5 12.2 2.4 2.4 4.6-4.9"/>`); }
+function iconBank() { return svgLine(`<path d="M3 9.5 12 4l9 5.5"/><path d="M4.5 9.8V19"/><path d="M9.5 9.8V19"/><path d="M14.5 9.8V19"/><path d="M19.5 9.8V19"/><path d="M2.5 19h19"/>`); }
+function iconLock() { return svgLine(`<rect x="4.5" y="10.5" width="15" height="9.5" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/>`); }
+function iconTruckLine() { return svgLine(`<path d="M1.5 5.5h13v10h-13z"/><path d="M14.5 9h4l3 3v3.5h-7z"/><circle cx="6" cy="18" r="2"/><circle cx="17.5" cy="18" r="2"/>`); }
+function iconRepeat() { return svgLine(`<path d="M3 11.5a6.5 6.5 0 0 1 6.5-6.5H19"/><path d="m16 2 3 3-3 3"/><path d="M21 12.5a6.5 6.5 0 0 1-6.5 6.5H5"/><path d="m8 22-3-3 3-3"/>`); }
+function iconAlert() { return svgLine(`<path d="M10.3 3.6 1.9 18a2 2 0 0 0 1.7 3h16.8a2 2 0 0 0 1.7-3L13.7 3.6a2 2 0 0 0-3.4 0z"/><path d="M12 9v4.5"/><path d="M12 17.3h.01"/>`); }
+
+/* Category glyphs — keyed by CATEGORIES[].icon in products-data.js. */
+function categoryIcon(name) {
+  const set = {
+    helix:   `<path d="M8 3c0 4 8 5 8 9s-8 5-8 9"/><path d="M16 3c0 4-8 5-8 9s8 5 8 9"/><path d="M9.2 7h5.6"/><path d="M9.2 17h5.6"/>`,
+    bolt:    `<path d="M13 2 4.5 13.5H11L10 22l8.5-11.5H12z"/>`,
+    lattice: `<path d="M12 3 4 7.5v9L12 21l8-4.5v-9z"/><path d="M4 7.5 12 12l8-4.5"/><path d="M12 12v9"/>`,
+    layers:  `<path d="M12 2.5 2.5 7.5 12 12.5l9.5-5z"/><path d="m2.5 12.5 9.5 5 9.5-5"/><path d="m2.5 17 9.5 5 9.5-5"/>`,
+    flask:   `<path d="M9 2.5h6"/><path d="M10 2.5v6.8L4.8 19a2 2 0 0 0 1.8 3h10.8a2 2 0 0 0 1.8-3L14 9.3V2.5"/><path d="M7.4 15h9.2"/>`
+  };
+  return svgLine(set[name] || set.flask);
+}
+
 /* ============================================================
    WISHLIST UI
    ============================================================ */
@@ -2201,7 +2567,7 @@ function renderWishlistPage() {
   if (!root) return;
   const items = wishlist.ids.map(getProductById).filter(Boolean);
   if (!items.length) {
-    root.innerHTML = `<div class="empty-state glass"><div class="empty-icon">💜</div><h3>Your wishlist is empty</h3><p>Tap the heart on any product to save it here for later.</p><a class="btn btn-primary" href="products.html">Browse Products</a></div>`;
+    root.innerHTML = `<div class="empty-state glass"><div class="empty-icon">${iconHeart()}</div><h3>Your wishlist is empty</h3><p>Tap the heart on any product to save it here for later.</p><a class="btn btn-primary" href="products.html">Browse Products</a></div>`;
     return;
   }
   root.innerHTML = `<div class="products-grid">${items.map(createProductCard).join('')}</div>`;
@@ -2277,16 +2643,59 @@ function injectJSONLD(obj, id) {
 }
 
 /* ============================================================
+   BREADCRUMB STRUCTURED DATA
+   Every interior page already paints a breadcrumb; only the product page
+   described it to a search engine. This reads the trail that is already on
+   the page (so the two can never disagree) and publishes it as BreadcrumbList.
+   The product page emits its own — richer, with the product name — so it is
+   left alone.
+   ============================================================ */
+function initBreadcrumbSchema() {
+  if (document.getElementById('ld-breadcrumb')) return;
+  const bc = document.querySelector('.breadcrumb');
+  if (!bc) return;
+
+  const ORIGIN = 'https://evernovalife.com/';
+  const items = [];
+  Array.from(bc.children).forEach(el => {
+    const text = (el.textContent || '').trim();
+    if (!text || text === '/') return;                 // the separators
+    const entry = { '@type': 'ListItem', position: items.length + 1, name: text };
+    const href = el.getAttribute('href');
+    if (href) entry.item = ORIGIN + href.replace(/^\.?\//, '');
+    items.push(entry);
+  });
+  if (items.length < 2) return;                        // a single crumb isn't a trail
+  injectJSONLD({ '@context': 'https://schema.org', '@type': 'BreadcrumbList', itemListElement: items }, 'ld-breadcrumb');
+}
+
+/* ============================================================
    FORM VALIDATION (checkout)
    ============================================================ */
 function setFieldError(field, msg) {
   if (!field) return;
   field.classList.toggle('invalid', !!msg);
+  const input = field.querySelector('input, select, textarea');
   let e = field.querySelector('.field-error');
   if (msg) {
-    if (!e) { e = document.createElement('div'); e.className = 'field-error'; field.appendChild(e); }
+    if (!e) {
+      e = document.createElement('div');
+      e.className = 'field-error';
+      /* Tie the message to its field: aria-invalid marks the control as failing
+         and aria-describedby makes the reason part of what gets read out, so the
+         error is not just a red line a sighted user happens to see. */
+      e.id = 'fe-' + (input && input.name ? input.name : Math.random().toString(36).slice(2, 8));
+      field.appendChild(e);
+    }
     e.textContent = msg;
-  } else if (e) { e.remove(); }
+    if (input) {
+      input.setAttribute('aria-invalid', 'true');
+      input.setAttribute('aria-describedby', e.id);
+    }
+  } else if (e) {
+    if (input) { input.removeAttribute('aria-invalid'); input.removeAttribute('aria-describedby'); }
+    e.remove();
+  }
 }
 
 function validateCheckout(form) {
@@ -2295,14 +2704,18 @@ function validateCheckout(form) {
     const input = field.querySelector('input, select, textarea');
     if (!input) return;
     const val = (input.value || '').trim();
+    /* Card-number / MM-YY / CVC checks used to live here, keyed off the Braintree
+       placeholders. Cards were removed in the 2026-08-08 crypto-only rebuild, so
+       those branches could never fire again. What is left is what the buyer
+       actually fills in, plus a US ZIP check (we ship US-only). */
     let msg = '';
-    if (input.hasAttribute('required') && !val) msg = 'This field is required.';
-    else if (val && input.type === 'email' && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(val)) msg = 'Enter a valid email address.';
-    else if (val) {
-      const ph = input.placeholder || '';
-      if (ph.indexOf('4242') > -1 && val.replace(/\D/g, '').length < 13) msg = 'Enter a valid card number.';
-      else if (ph === 'MM/YY' && !/^\d{2}\/\d{2}$/.test(val)) msg = 'Use MM/YY format.';
-      else if (ph === '123' && !/^\d{3,4}$/.test(val)) msg = 'Enter 3–4 digits.';
+    const label = (field.querySelector('label')?.textContent || '').trim().replace(/\s*\*$/, '');
+    if (input.hasAttribute('required') && !val) {
+      msg = label ? `${label} is required.` : 'This field is required.';
+    } else if (val && input.type === 'email' && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(val)) {
+      msg = 'Enter a valid email address, e.g. name@lab.com.';
+    } else if (val && input.name === 'postalCode' && !/^\d{5}(-\d{4})?$/.test(val)) {
+      msg = 'Enter a 5-digit US ZIP code.';
     }
     setFieldError(field, msg);
     if (msg && !firstInvalid) firstInvalid = input;
@@ -2385,6 +2798,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initDemoForms();
   initVialTilt();
   initProductQuickView();   // clicking a product opens it in place, not a new page
+  initBreadcrumbSchema();
 
   switch (currentPage) {
     case 'products.html': initProductsPage(); break;

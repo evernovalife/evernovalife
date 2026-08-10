@@ -4,6 +4,9 @@
    Each product: id, name, category, categoryName, price,
    originalPrice, purity, quantity, description, specs{},
    coa{}, inStock, badge, featured, lot
+   `stockQty` (a live unit count) is deliberately NOT seeded here — it is set in
+   admin-products.html and drawn down by orders, so it belongs to the server's
+   store, not to git. Absent = untracked/unlimited; see server/products.js.
    coa{} carries the lot's third-party certificate of analysis so it can be
    viewed from the product page: status ('available' | 'pending' |
    'not-applicable'), lab, reportId, batch, method, testDate, reportDate,
@@ -16,12 +19,23 @@
    They make no human-use, treatment, or physiological-benefit claims.
    ============================================================ */
 
+/* `icon` names a line-art glyph drawn by categoryIcon() in main.js. Emoji were
+   used here originally; they render as a different picture on every OS and read
+   as consumer-app decoration, which is the wrong register for a supplier of
+   documented laboratory materials.
+
+   The catalog is grouped by what each material IS — its molecular class — and
+   never by what it is thought to do. Grouping by biological system (the old
+   'Growth-Factor Peptides' / 'Metabolic' / 'Tissue & Matrix' headings) reads as
+   a claim about an effect even when no sentence on the page makes one, which is
+   exactly what a research-supplier listing must not do. Keep any new category
+   compositional: chain length, molecule type, blend vs. single component. */
 const CATEGORIES = [
-  { key: 'growth',   name: 'Growth-Factor Peptides', emoji: '🧬', blurb: 'Growth-factor and secretagogue research peptides' },
-  { key: 'metabolic',name: 'Metabolic',      emoji: '⚡', blurb: 'Metabolic-pathway research peptides' },
-  { key: 'repair',   name: 'Tissue & Matrix', emoji: '🩹', blurb: 'Peptides used in tissue and extracellular-matrix research' },
-  { key: 'blends',   name: 'Multi-Peptide Blends', emoji: '✨', blurb: 'Multi-peptide research formulations' },
-  { key: 'supplies', name: 'Lab Supplies',   emoji: '🧪', blurb: 'Reconstitution & laboratory essentials' }
+  { key: 'growth',   name: 'Proteins & Long-Chain Peptides', icon: 'helix',    blurb: 'Recombinant proteins and long-chain peptides, supplied lyophilized' },
+  { key: 'metabolic',name: 'Peptides & Cofactors',           icon: 'bolt',     blurb: 'Synthetic peptides and coenzymes, supplied lyophilized' },
+  { key: 'repair',   name: 'Short-Chain Peptides',           icon: 'lattice',  blurb: 'Tripeptides, oligopeptides and metal-complexed peptides' },
+  { key: 'blends',   name: 'Multi-Peptide Blends',           icon: 'layers',   blurb: 'Co-lyophilized multi-component research formulations' },
+  { key: 'supplies', name: 'Laboratory Reagents',            icon: 'flask',    blurb: 'Reconstitution diluents and laboratory consumables' }
 ];
 
 const PRODUCTS = [
@@ -29,7 +43,7 @@ const PRODUCTS = [
     id: 1,
     name: 'Retatrutide',
     category: 'metabolic',
-    categoryName: 'Metabolic',
+    categoryName: 'Peptides & Cofactors',
     price: 109.99,
     originalPrice: 134.99,
     purity: '99.2%',
@@ -64,7 +78,7 @@ const PRODUCTS = [
     id: 2,
     name: 'Bacteriostatic Water',
     category: 'supplies',
-    categoryName: 'Lab Supplies',
+    categoryName: 'Laboratory Reagents',
     price: 8.99,
     originalPrice: 11.99,
     purity: '0.9% Benzyl Alcohol',
@@ -91,7 +105,7 @@ const PRODUCTS = [
     id: 3,
     name: 'GHK-Cu (Copper Peptide)',
     category: 'repair',
-    categoryName: 'Tissue Repair',
+    categoryName: 'Short-Chain Peptides',
     price: 85.00,
     originalPrice: null,
     purity: '99.0%',
@@ -126,7 +140,7 @@ const PRODUCTS = [
     id: 4,
     name: 'Tesamorelin / Ipamorelin Blend',
     category: 'growth',
-    categoryName: 'Growth Factors',
+    categoryName: 'Proteins & Long-Chain Peptides',
     price: 125.00,
     originalPrice: null,
     purity: 'ID + content',
@@ -165,7 +179,7 @@ const PRODUCTS = [
     id: 5,
     name: 'MOTS-C',
     category: 'metabolic',
-    categoryName: 'Metabolic',
+    categoryName: 'Peptides & Cofactors',
     price: 100.00,
     originalPrice: null,
     purity: '99.1%',
@@ -200,7 +214,7 @@ const PRODUCTS = [
     id: 6,
     name: 'BPC-157 / TB-500 Blend',
     category: 'repair',
-    categoryName: 'Tissue Repair',
+    categoryName: 'Short-Chain Peptides',
     price: 130.00,
     originalPrice: null,
     purity: 'ID + content',
@@ -235,7 +249,7 @@ const PRODUCTS = [
     id: 7,
     name: 'KLOW Blend',
     category: 'blends',
-    categoryName: 'Premium Blends',
+    categoryName: 'Multi-Peptide Blends',
     price: 150.00,
     originalPrice: 159.99,
     purity: 'ID + content',
@@ -271,7 +285,7 @@ const PRODUCTS = [
     id: 8,
     name: 'NAD+',
     category: 'metabolic',
-    categoryName: 'Metabolic',
+    categoryName: 'Peptides & Cofactors',
     price: 80.00,
     originalPrice: null,
     purity: '99.0%',
@@ -308,7 +322,7 @@ const PRODUCTS = [
     id: 9,
     name: 'HGH 36 IU',
     category: 'growth',
-    categoryName: 'Growth Factors',
+    categoryName: 'Proteins & Long-Chain Peptides',
     price: 189.99,
     originalPrice: null,
     purity: 'ID + content',

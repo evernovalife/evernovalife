@@ -32,18 +32,27 @@ generating**, or you are paying to animate typos.
 | 7 | KLOW Blend | `ADVANCING MUMAN PERFORMING` ❌ | `KLOW BLEN…` runs off ❌ |
 | 8 | NAD+ | `ADVANCING HUMAN PERFORHMASE` ❌ | clean |
 
-The correct tagline is **`ADVANCING HUMAN PERFORMANCE`** on all eight.
+The tagline is **`LABORATORY RESEARCH MATERIALS`** on all nine. It used to read
+`ADVANCING HUMAN PERFORMANCE`; that is a human-performance claim on the face of
+every vial, and it was repainted out of all nine masters on 2026-08-10. Do not
+put it back.
 
-### 2. Two label claims sit oddly against the site's compliance posture
+### 2. The strap-line claims — resolved 2026-08-10
 
-The site copy was scrubbed to in-vitro research framing, but the printed labels
-still carry human-benefit claims:
+The site copy was scrubbed to in-vitro research framing in 2026-07, but the
+printed labels kept carrying human-benefit claims:
 
 - **#3 GHK-Cu** — `SKIN | HAIR | HEALING`
 - **#4 Tesa/Ipa** — `HORMONE OPTIMIZATION | RECOVERY | PERFORMANCE`
 - **#6 BPC/TB** — `TISSUE REPAIR | RECOVERY | PERFORMANCE`
+- **#1 Retatrutide** — `NEXT GEN METABOLIC PEPTIDE`
+- **#5 MOTS-C** — `MITOCHONDRIAL ACTIVATOR`
+- **#7 KLOW** — `CELLULAR REPAIR + RECOVERY`
 
-Worth a decision while the artwork is open anyway. Not a blocker for generation.
+A payment/compliance review called these out by name. All six strap-lines were
+repainted in the masters; the replacements are in the table in Step 4, and every
+one of them states what the material *is* rather than what it is thought to do.
+Regenerate artwork from that table, never from an old master.
 
 ### 3. Dose mismatch on #4
 
@@ -281,13 +290,13 @@ Substitute one line into the prompt. Everything else stays identical.
 
 | # | Product | `LABEL CONTENT` line |
 |---|---------|----------------------|
-| 1 | Retatrutide | `The chrome lettering reads "RETATRUTIDE". The violet band beneath reads "NEXT GEN METABOLIC PEPTIDE". The gold dose pill reads "10 mg". The bottom line reads "FOR RESEARCH USE ONLY".` |
+| 1 | Retatrutide | `The chrome lettering reads "RETATRUTIDE". The violet band beneath reads "LYOPHILIZED RESEARCH PEPTIDE". The gold dose pill reads "10 mg". The bottom line reads "FOR RESEARCH USE ONLY".` |
 | 2 | Bacteriostatic Water | `The chrome lettering reads "BAC WATER". The violet band beneath reads "STERILE \| MULTIPLE USE". Below it a gold-outlined badge reads "BACTERIOSTATIC WATER". The bottom line reads "FOR RECONSTITUTION USE ONLY". The vial holds clear liquid, not powder.` |
-| 3 | GHK-Cu | `The chrome lettering reads "GHK-Cu". The violet band beneath reads "SKIN \| HAIR \| HEALING". The gold dose pill reads "50 mg". The bottom line reads "FOR RESEARCH USE ONLY".` |
-| 4 | Tesamorelin / Ipamorelin | `The chrome lettering reads "TESA/IPA". Beneath it a line reads "TESAMORELIN / IPAMORELIN", then a violet band reads "HORMONE OPTIMIZATION \| RECOVERY \| PERFORMANCE". The gold dose pill reads "10 mg". The bottom line reads "FOR RESEARCH USE ONLY".` |
-| 5 | MOTS-C | `The chrome lettering reads "MOTS-C". The violet band beneath reads "MITOCHONDRIAL ACTIVATOR". The gold dose pill reads "10 mg". The bottom line reads "FOR RESEARCH USE ONLY".` |
-| 6 | BPC-157 / TB-500 | `The chrome lettering reads "BPC-157 / TB-500" with "BLEND" letterspaced beneath it. The violet band reads "TISSUE REPAIR \| RECOVERY \| PERFORMANCE". The gold dose pill reads "20 mg". The bottom line reads "FOR RESEARCH USE ONLY".` |
-| 7 | KLOW Blend | `The chrome lettering reads "KLOW BLEND". The violet band beneath reads "CELLULAR REPAIR + RECOVERY". The gold dose pill reads "80 mg". The bottom line reads "FOR RESEARCH USE ONLY".` |
+| 3 | GHK-Cu | `The chrome lettering reads "GHK-Cu". The violet band beneath reads "COPPER TRIPEPTIDE-1". The gold dose pill reads "50 mg". The bottom line reads "FOR RESEARCH USE ONLY".` |
+| 4 | Tesamorelin / Ipamorelin | `The chrome lettering reads "TESA/IPA". Beneath it a line reads "TESAMORELIN / IPAMORELIN", then a violet band reads "CO-LYOPHILIZED PEPTIDE BLEND". The gold dose pill reads "10 mg". The bottom line reads "FOR RESEARCH USE ONLY".` |
+| 5 | MOTS-C | `The chrome lettering reads "MOTS-C". The violet band beneath reads "MITOCHONDRIAL-DERIVED PEPTIDE". The gold dose pill reads "10 mg". The bottom line reads "FOR RESEARCH USE ONLY".` |
+| 6 | BPC-157 / TB-500 | `The chrome lettering reads "BPC-157 / TB-500" with "BLEND" letterspaced beneath it. The violet band reads "CO-LYOPHILIZED PEPTIDE BLEND". The gold dose pill reads "20 mg". The bottom line reads "FOR RESEARCH USE ONLY".` |
+| 7 | KLOW Blend | `The chrome lettering reads "KLOW BLEND". The violet band beneath reads "MULTI-PEPTIDE RESEARCH BLEND". The gold dose pill reads "80 mg". The bottom line reads "FOR RESEARCH USE ONLY".` |
 | 8 | NAD+ | `The chrome lettering reads "NAD+". The violet band beneath reads "NICOTINAMIDE ADENINE DINUCLEOTIDE". The gold dose pill reads "500 mg". A small gold badge reads "LAB TESTED". The bottom line reads "FOR RESEARCH USE ONLY".` |
 
 Note `#2` is the only one that is liquid rather than lyophilised powder, and the

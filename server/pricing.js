@@ -8,7 +8,7 @@
    ============================================================ */
 // Price from the admin-managed product store (seeded from the static catalog),
 // so products added or edited in the admin are priced correctly at checkout.
-const { findProductById: getProductById } = require('./products.js');
+const { findProductById: getProductById, availableQty } = require('./products.js');
 
 const FREE_SHIP_THRESHOLD = 100;
 const SHIP_FLAT = 9.99;
@@ -40,6 +40,16 @@ function buildOrder(rawItems, opts = {}) {
     const quantity = parseInt(raw.quantity, 10);
     if (!Number.isFinite(quantity) || quantity < 1 || quantity > 999) {
       throw new Error(`Invalid quantity for ${product.name}.`);
+    }
+
+    /* Where the product carries a stock COUNT, the line can't exceed it. This
+       is the friendly early rejection — products.reserveStock re-checks and is
+       the one that actually decides, since only it can check and take in the
+       same turn. */
+    const left = availableQty(product);
+    if (left === 0) throw new Error(`Out of stock: ${product.name}`);
+    if (left !== null && quantity > left) {
+      throw new Error(`Only ${left} left of ${product.name} — please lower the quantity.`);
     }
 
     const unitPrice = money(product.price);

@@ -694,6 +694,26 @@ h1, h2, h3, h4 { line-height: 1.2; font-weight: 700; letter-spacing: -0.02em; }
 .stock-pill::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--accent-mint); }
 .stock-pill.out { color: var(--accent-coral); }
 .stock-pill.out::before { background: var(--accent-coral); }
+/* Low stock: amber, and only shown once the count is genuinely low (see
+   stockInfo/LOW_STOCK_AT in main.js). A permanent unit count on every card
+   would read as a scarcity tactic rather than as information. */
+.stock-pill.low { color: var(--accent-amber); }
+.stock-pill.low::before { background: var(--accent-amber); }
+
+/* how many are left, next to the detail page's quantity stepper */
+.qty-limit { font-size: 0.78rem; color: var(--dark-text-faint); margin-left: 0.65rem; }
+.qty-limit.at-limit { color: var(--accent-amber); font-weight: 600; }
+
+/* a cart line the current stock can no longer fill */
+.cart-row-warn {
+  display: flex; align-items: center; gap: 0.4rem;
+  margin-top: 0.4rem;
+  font-size: 0.8rem; font-weight: 600;
+  color: var(--accent-amber);
+}
+.cart-row-warn svg { width: 15px; height: 15px; flex-shrink: 0; }
+.cart-row.has-warn { border-color: rgba(224, 165, 42, 0.45); }
+.qty-control button:disabled { opacity: 0.35; cursor: not-allowed; }
 
 /* ============================================================
    CATEGORIES
@@ -708,7 +728,19 @@ h1, h2, h3, h4 { line-height: 1.2; font-weight: 700; letter-spacing: -0.02em; }
   text-align: center;
   cursor: pointer;
 }
-.category-emoji { font-size: 2.6rem; margin-bottom: 0.85rem; }
+/* Line-art category glyph (replaced an emoji — see CATEGORIES in
+   products-data.js). Sized in a gold-tinted disc so it reads as a deliberate
+   mark rather than a stray icon. */
+.category-icon {
+  width: 56px; height: 56px;
+  margin: 0 auto 0.85rem;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-pill);
+  background: rgba(212, 175, 55, 0.09);
+  border: 1px solid var(--glass-border);
+  color: var(--gold-light);
+}
+.category-icon svg { width: 28px; height: 28px; }
 .category-card h3 { font-size: 1.15rem; margin-bottom: 0.3rem; }
 .category-card p { font-size: 0.85rem; color: var(--dark-text-muted); }
 .category-count { font-size: 0.78rem; color: var(--accent-purple); font-weight: 700; margin-top: 0.5rem; }
@@ -873,6 +905,31 @@ h1, h2, h3, h4 { line-height: 1.2; font-weight: 700; letter-spacing: -0.02em; }
 }
 .select-field:focus { outline: none; border-color: var(--accent-purple); }
 .filter-toggle-btn { display: none; }
+
+/* ---- active-filter chips (catalog) ----
+   Each chip removes the filter it names; the last one clears everything. They
+   sit above the grid because below 1024px the sidebar is collapsed and an
+   applied filter would otherwise be invisible while it hides products. */
+.active-filters {
+  display: flex; flex-wrap: wrap; gap: 0.5rem;
+  margin: -0.5rem 0 1.25rem;
+}
+.active-filters[hidden] { display: none; }
+.filter-chip {
+  display: inline-flex; align-items: center; gap: 0.45rem;
+  min-height: 34px; padding: 0.3rem 0.85rem;
+  border-radius: var(--radius-pill);
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border-strong);
+  color: var(--dark-text);
+  font-size: 0.82rem; font-weight: 600;
+  transition: background 0.2s var(--ease), border-color 0.2s var(--ease), color 0.2s var(--ease);
+}
+.filter-chip span { font-size: 1.05rem; line-height: 1; color: var(--dark-text-faint); }
+.filter-chip:hover { background: var(--glass-bg-hover); border-color: var(--accent-purple); color: #fff; }
+.filter-chip:hover span { color: #fff; }
+.filter-chip.chip-clear { color: var(--accent-violet); border-style: dashed; }
+.filter-chip.chip-clear:hover { color: #fff; border-style: solid; }
 
 /* ============================================================
    PRODUCT DETAIL
@@ -1075,16 +1132,29 @@ body.coa-lightbox-open { overflow: hidden; }
   font-size: 1.25rem; font-weight: 800; color: #fff;
 }
 .summary-note { font-size: 0.8rem; color: var(--dark-text-faint); margin-top: 0.75rem; text-align: center; }
+/* inline glyph that leads a summary/hint line (replaced 🚚/🎉/🔒/🔁/⚠) */
+.summary-note-ic { display: inline-flex; vertical-align: -0.22em; margin-right: 0.4rem; }
+.summary-note-ic svg { width: 15px; height: 15px; }
+.form-hint .ic, .btn .ic { display: inline-block; vertical-align: -0.18em; width: 15px; height: 15px; margin-right: 0.35rem; }
+.btn .ic { width: 18px; height: 18px; margin-right: 0.15rem; vertical-align: -0.22em; }
+
 .empty-state { text-align: center; padding: 4rem 1.5rem; }
-.empty-state .empty-icon { font-size: 3.5rem; margin-bottom: 1rem; }
+.empty-state .empty-icon {
+  width: 76px; height: 76px;
+  margin: 0 auto 1.15rem;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-pill);
+  background: rgba(212, 175, 55, 0.08);
+  border: 1px solid var(--glass-border);
+  color: var(--gold-light);
+}
+.empty-state .empty-icon svg { width: 34px; height: 34px; }
 .empty-state h3 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .empty-state p { color: var(--dark-text-muted); margin-bottom: 1.5rem; }
-.promo-row { display: flex; gap: 0.5rem; margin: 1rem 0; }
-.promo-row input {
-  flex: 1; background: var(--glass-bg); border: 1px solid var(--glass-border-strong);
-  border-radius: var(--radius-pill); padding: 0.6rem 1rem; color: #fff; font-size: 0.88rem;
-}
-.promo-row input:focus { outline: none; border-color: var(--accent-purple); }
+/* .promo-row removed 2026-08-09 with the promo field itself: the input and its
+   Apply button were never wired to anything, and a dead entry field one step
+   from payment reads as a broken store. Reinstate both together if discount
+   codes are ever actually issued. */
 
 /* ============================================================
    FORMS (checkout, contact, auth)
@@ -1393,7 +1463,15 @@ body.coa-lightbox-open { overflow: hidden; }
 .about-stat .lbl { font-size: 0.85rem; color: var(--dark-text-muted); }
 .value-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 1.5rem; }
 .value-card { padding: 1.75rem; }
-.value-card .v-icon { font-size: 2rem; margin-bottom: 0.75rem; }
+.value-card .v-icon {
+  width: 48px; height: 48px; margin-bottom: 0.9rem;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-pill);
+  background: rgba(212, 175, 55, 0.09);
+  border: 1px solid var(--glass-border);
+  color: var(--gold-light);
+}
+.value-card .v-icon svg { width: 24px; height: 24px; }
 .value-card h3 { margin-bottom: 0.5rem; }
 .value-card p { font-size: 0.9rem; color: var(--dark-text-muted); }
 
@@ -1555,6 +1633,27 @@ body.coa-lightbox-open { overflow: hidden; }
    ACCESSIBILITY  (surfaced by ui-ux-pro-max quality checklist)
    ============================================================ */
 /* Visible keyboard focus — never trap keyboard users on glass */
+/* ---- skip link ----
+   The header is a logo, six nav links, a search field and four icon buttons —
+   about twelve tab stops in front of the page's own content, on every page.
+   Off-screen until focused, then it drops in over the header. */
+.skip-link {
+  position: absolute;
+  left: 1rem; top: -100%;
+  z-index: 200;
+  padding: 0.7rem 1.25rem;
+  border-radius: 0 0 var(--radius) var(--radius);
+  background: var(--dark-surface);
+  border: 1px solid var(--glass-border-strong);
+  border-top: none;
+  color: #fff;
+  font-size: 0.9rem; font-weight: 700;
+  transition: top 0.18s var(--ease);
+}
+.skip-link:focus { top: 0; }
+/* the target is a plain wrapper, so make the jump clear the sticky header */
+#main { scroll-margin-top: calc(var(--header-h) + 1rem); }
+
 :focus-visible {
   outline: 2px solid #c4b5fd;
   outline-offset: 2px;
@@ -1678,6 +1777,29 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
      so it is the icon that goes when four no longer fit. */
   .header-actions .wishlist-link { display: none; }
   .icon-btn, .hamburger { width: 36px; height: 36px; }
+}
+
+/* ---- 44px touch targets without 44px of layout ----
+   The phone header shrinks these buttons to 38px, then 36px, because the row
+   physically does not fit otherwise (see the block above — that overflow is
+   what made the whole page scroll sideways). The GUIDELINE is a 44px target,
+   not a 44px box: this grows the tappable area past the paint with an absolute
+   pseudo-element, which costs no layout width at all. Pointer-events land on
+   the button because the pseudo-element is part of it. */
+@media (pointer: coarse) {
+  .icon-btn, .hamburger, .wish-btn, .qty-control button, .filter-chip { position: relative; }
+  .icon-btn::after, .hamburger::after, .wish-btn::after,
+  .qty-control button::after, .filter-chip::after {
+    content: '';
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: max(100%, 44px);
+    height: max(100%, 44px);
+  }
+  /* Neighbouring targets must not overlap into each other's 44px box, or a tap
+     between two header icons is a coin flip. */
+  .header-actions { gap: 0.35rem; }
 }
 @media (max-width: 359px) {
   .logo-text { display: none; }   /* star mark only — still links home */

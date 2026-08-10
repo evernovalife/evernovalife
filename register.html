@@ -20,13 +20,19 @@
   <meta name="twitter:image" content="https://evernovalife.com/og-image.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/styles.css?v=50">
+  <!-- Inter, loaded off the critical path. As a plain stylesheet link this
+       blocked first paint on a third-party host; with display=swap the page
+       already renders in system-ui first, so the block bought nothing. -->
+  <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" media="print" onload="this.media='all'">
+  <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"></noscript>
+  <link rel="stylesheet" href="css/styles.css?v=54">
   <!-- 21+ age gate: runs before anything paints -->
-  <script src="js/age-gate.js?v=37"></script>
+  <script src="js/age-gate.js?v=54"></script>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Cpath d='M20.00 1.00 L21.91 15.38 L27.78 12.22 L24.62 18.09 L39.00 20.00 L24.62 21.91 L27.78 27.78 L21.91 24.62 L20.00 39.00 L18.09 24.62 L12.22 27.78 L15.38 21.91 L1.00 20.00 L15.38 18.09 L12.22 12.22 L18.09 15.38 Z' fill='%23a855f7'/%3E%3C/svg%3E">
 </head>
 <body>
+  <a class="skip-link" href="#main">Skip to main content</a>
 
   <!-- ===== HEADER ===== -->
   <header class="site-header">
@@ -58,12 +64,14 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6"/></svg>
           <span class="cart-badge">0</span>
         </a>
-        <button class="hamburger" id="hamburger" aria-label="Menu">
+        <button class="hamburger" id="hamburger" aria-label="Menu" aria-expanded="false" aria-controls="mainNav">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
         </button>
       </div>
     </div>
   </header>
+
+  <main id="main">
 
   <!-- ===== SEARCH OVERLAY ===== -->
   <div class="search-overlay" id="searchOverlay">
@@ -86,24 +94,24 @@
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
               <div class="form-field">
                 <label for="firstName">First name</label>
-                <input type="text" id="firstName" name="firstName" placeholder="Jane" required>
+                <input type="text" id="firstName" name="firstName" autocomplete="given-name" placeholder="Jane" required>
               </div>
               <div class="form-field">
                 <label for="lastName">Last name</label>
-                <input type="text" id="lastName" name="lastName" placeholder="Doe" required>
+                <input type="text" id="lastName" name="lastName" autocomplete="family-name" placeholder="Doe" required>
               </div>
             </div>
             <div class="form-field">
               <label for="regEmail">Email</label>
-              <input type="email" id="regEmail" name="email" placeholder="you@lab.com" required>
+              <input type="email" id="regEmail" name="email" autocomplete="username email" placeholder="you@lab.com" required>
             </div>
             <div class="form-field">
               <label for="regPassword">Password</label>
-              <input type="password" id="regPassword" name="password" placeholder="••••••••" required>
+              <input type="password" id="regPassword" name="password" autocomplete="new-password" placeholder="••••••••" required>
             </div>
             <div class="form-field">
               <label for="confirmPassword">Confirm password</label>
-              <input type="password" id="confirmPassword" name="confirmPassword" placeholder="••••••••" required>
+              <input type="password" id="confirmPassword" name="confirmPassword" autocomplete="new-password" placeholder="••••••••" required>
             </div>
             <label class="form-check">
               <input type="checkbox" name="agree" required>
@@ -120,6 +128,8 @@
   </section>
 
   <!-- ===== FOOTER ===== -->
+  </main>
+
   <footer class="site-footer">
     <div class="container footer-grid">
       <div class="footer-brand">
@@ -174,10 +184,10 @@
     </div>
   </footer>
 
-  <script src="js/config.js?v=35"></script>
-  <script src="js/products-data.js?v=36"></script>
-  <script src="js/cart.js?v=35"></script>
-  <script src="js/main.js?v=50"></script>
-  <script src="js/auth.js?v=35"></script>
+  <script src="js/config.js?v=54"></script>
+  <script src="js/products-data.js?v=54"></script>
+  <script src="js/cart.js?v=54"></script>
+  <script src="js/main.js?v=54"></script>
+  <script src="js/auth.js?v=54"></script>
 </body>
 </html>

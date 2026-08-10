@@ -20,13 +20,19 @@
   <meta name="twitter:image" content="https://evernovalife.com/og-image.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/styles.css?v=50">
+  <!-- Inter, loaded off the critical path. As a plain stylesheet link this
+       blocked first paint on a third-party host; with display=swap the page
+       already renders in system-ui first, so the block bought nothing. -->
+  <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" media="print" onload="this.media='all'">
+  <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"></noscript>
+  <link rel="stylesheet" href="css/styles.css?v=54">
   <!-- 21+ age gate: runs before anything paints -->
-  <script src="js/age-gate.js?v=37"></script>
+  <script src="js/age-gate.js?v=54"></script>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Cpath d='M20.00 1.00 L21.91 15.38 L27.78 12.22 L24.62 18.09 L39.00 20.00 L24.62 21.91 L27.78 27.78 L21.91 24.62 L20.00 39.00 L18.09 24.62 L12.22 27.78 L15.38 21.91 L1.00 20.00 L15.38 18.09 L12.22 12.22 L18.09 15.38 Z' fill='%23a855f7'/%3E%3C/svg%3E">
 </head>
 <body>
+  <a class="skip-link" href="#main">Skip to main content</a>
 
   <!-- ===== HEADER ===== -->
   <header class="site-header">
@@ -58,12 +64,14 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6"/></svg>
           <span class="cart-badge">0</span>
         </a>
-        <button class="hamburger" id="hamburger" aria-label="Menu">
+        <button class="hamburger" id="hamburger" aria-label="Menu" aria-expanded="false" aria-controls="mainNav">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
         </button>
       </div>
     </div>
   </header>
+
+  <main id="main">
 
   <!-- ===== SEARCH OVERLAY ===== -->
   <div class="search-overlay" id="searchOverlay">
@@ -90,9 +98,9 @@
           <div class="form-section">
             <h3 class="form-section-title"><span class="form-section-num">1</span> Contact</h3>
             <div class="form-grid">
-              <div class="form-field full"><label>Email</label><input type="email" name="email" required placeholder="you@lab.com"></div>
-              <div class="form-field"><label>First name</label><input type="text" name="firstName" required placeholder="Jane"></div>
-              <div class="form-field"><label>Last name</label><input type="text" name="lastName" required placeholder="Doe"></div>
+              <div class="form-field full"><label>Email</label><input type="email" name="email" required autocomplete="email" placeholder="you@lab.com"></div>
+              <div class="form-field"><label>First name</label><input type="text" name="firstName" required autocomplete="given-name" placeholder="Jane"></div>
+              <div class="form-field"><label>Last name</label><input type="text" name="lastName" required autocomplete="family-name" placeholder="Doe"></div>
             </div>
           </div>
 
@@ -102,7 +110,7 @@
           <div class="form-section">
             <h3 class="form-section-title"><span class="form-section-num">2</span> Research Details</h3>
             <div class="form-grid">
-              <div class="form-field full"><label>Institution / Lab</label><input type="text" name="institution" required placeholder="Acme Research Lab"></div>
+              <div class="form-field full"><label>Institution / Lab</label><input type="text" name="institution" required autocomplete="organization" placeholder="Acme Research Lab"></div>
               <div class="form-field full"><label>Research field</label>
                 <select name="researchField" required>
                   <option value="">Select your research field…</option>
@@ -120,13 +128,13 @@
           <div class="form-section">
             <h3 class="form-section-title"><span class="form-section-num">3</span> Shipping Address</h3>
             <div class="form-grid">
-              <div class="form-field full"><label>Street address</label><input type="text" name="address" required placeholder="123 Science Park Dr"></div>
-              <div class="form-field"><label>City</label><input type="text" name="city" required placeholder="Boston"></div>
-              <div class="form-field"><label>State / Region</label><input type="text" name="state" required placeholder="MA"></div>
-              <div class="form-field"><label>ZIP / Postal</label><input type="text" name="postalCode" required placeholder="02115"></div>
+              <div class="form-field full"><label>Street address</label><input type="text" name="address" required autocomplete="shipping street-address" placeholder="123 Science Park Dr"></div>
+              <div class="form-field"><label>City</label><input type="text" name="city" required autocomplete="shipping address-level2" placeholder="Boston"></div>
+              <div class="form-field"><label>State / Region</label><input type="text" name="state" required autocomplete="shipping address-level1" placeholder="MA"></div>
+              <div class="form-field"><label>ZIP / Postal</label><input type="text" name="postalCode" required inputmode="numeric" autocomplete="shipping postal-code" placeholder="02115"></div>
               <!-- U.S. addresses only — we do not ship internationally. -->
               <div class="form-field"><label>Country</label>
-                <select name="country" required>
+                <select name="country" required autocomplete="shipping country">
                   <option value="US" selected>United States</option>
                 </select>
                 <p class="form-hint" style="margin:.4rem 0 0">We ship within the United States only.</p>
@@ -169,14 +177,14 @@
             <div id="altPaySection">
               <div id="cryptoPaySection" class="alt-pay-option">
                 <button type="button" id="cryptoPayBtn" class="btn btn-primary btn-block btn-lg">₿ Pay <span id="payBtnAmount"></span> <span class="pay-method-long">with Bitcoin / Lightning</span></button>
-                <p class="form-hint">🔗 You'll be redirected to our secure BTCPay checkout to pay on-chain or over the Lightning Network. Your order confirms automatically once the payment settles.</p>
+                <p class="form-hint"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13.5a4.5 4.5 0 0 0 6.8.5l2.7-2.7a4.5 4.5 0 0 0-6.4-6.4L11.6 6.4"/><path d="M14 10.5a4.5 4.5 0 0 0-6.8-.5L4.5 12.7a4.5 4.5 0 0 0 6.4 6.4l1.5-1.5"/></svg> You'll be redirected to our secure BTCPay checkout to pay on-chain or over the Lightning Network. Your order confirms automatically once the payment settles.</p>
               </div>
 
               <div class="alt-pay-divider" aria-hidden="true"><span>or pay another way</span></div>
 
               <div id="zellePaySection" class="alt-pay-option">
-                <button type="button" id="zellePayBtn" class="btn btn-ghost btn-block btn-lg">🏦 Pay with Zelle</button>
-                <p class="form-hint">🏦 Send the exact total from your own bank's Zelle transfer, using the order reference we give you as the memo. US bank accounts only. We confirm the payment by hand and ship as soon as it lands.</p>
+                <button type="button" id="zellePayBtn" class="btn btn-ghost btn-block btn-lg"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 9.5 12 4l9 5.5"/><path d="M4.5 9.8V19"/><path d="M9.5 9.8V19"/><path d="M14.5 9.8V19"/><path d="M19.5 9.8V19"/><path d="M2.5 19h19"/></svg> Pay with Zelle</button>
+                <p class="form-hint"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 9.5 12 4l9 5.5"/><path d="M4.5 9.8V19"/><path d="M9.5 9.8V19"/><path d="M14.5 9.8V19"/><path d="M19.5 9.8V19"/><path d="M2.5 19h19"/></svg> Send the exact total from your own bank's Zelle transfer, using the order reference we give you as the memo. US bank accounts only. We confirm the payment by hand and ship as soon as it lands.</p>
               </div>
 
               <p class="form-hint" id="noPayMethods" style="display:none">Payments are temporarily unavailable. Please try again shortly, or contact us and we'll take your order directly.</p>
@@ -198,6 +206,8 @@
   </section>
 
   <!-- ===== FOOTER ===== -->
+  </main>
+
   <footer class="site-footer">
     <div class="container footer-grid">
       <div class="footer-brand">
@@ -252,9 +262,9 @@
     </div>
   </footer>
 
-  <script src="js/config.js?v=35"></script>
-  <script src="js/products-data.js?v=36"></script>
-  <script src="js/cart.js?v=35"></script>
-  <script src="js/main.js?v=50"></script>
+  <script src="js/config.js?v=54"></script>
+  <script src="js/products-data.js?v=54"></script>
+  <script src="js/cart.js?v=54"></script>
+  <script src="js/main.js?v=54"></script>
 </body>
 </html>

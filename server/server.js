@@ -59,7 +59,15 @@ app.get('/api/health', (req, res) => res.json({
   // Auto-ship re-invoices through BTCPay, so it rides on the same config —
   // and on email, which is how the customer receives each pay link.
   autoship: btcpay.CONFIGURED,
-  cron: !!CRON_KEY                // is the scheduled-invoice trigger armed?
+  cron: !!CRON_KEY,               // is the scheduled-invoice trigger armed?
+  /* Capability flags. The site is deployed separately from this API (static
+     host + Render), so a page can be newer than the server answering it. A
+     tool whose endpoint is missing would otherwise look like it saved and
+     silently lose the change — admin-products.html reads this and says so
+     instead. Add a flag whenever a new admin endpoint lands. */
+  features: {
+    stockCounts: true             // PATCH /api/products/:id/stock exists
+  }
 }));
 
 /* ============================================================
@@ -395,6 +403,22 @@ app.delete('/api/products/:id', requireAdmin, (req, res) => {
   res.json({ success: true, deleted: removed });
 });
 
+/* ---- ADMIN: set one product's stock count ----
+   Its own route so the admin list can save a count inline without round-tripping
+   the entire product (which would mean re-uploading the image data-URL just to
+   change a number, and would let a stale row overwrite a field edited elsewhere).
+   Send { stockQty: 12 } to set it, or { stockQty: null } to stop tracking. */
+app.patch('/api/products/:id/stock', requireAdmin, (req, res) => {
+  try {
+    const body = req.body || {};
+    const product = productStore.setStock(req.params.id, body.stockQty);
+    if (!product) return res.status(404).json({ error: 'No product with that id.' });
+    res.json({ success: true, product });
+  } catch (err) {
+    res.status(err.status || 400).json({ error: err.message });
+  }
+});
+
 /* ---- ADMIN: list everyone who has signed up ----
    Protected by ADMIN_KEY (sent as the "x-admin-key" header or ?key=…).
    Returns public fields only — never password hashes. */
@@ -613,6 +637,44 @@ function refundReservedPoints(orderId) {
   }
 }
 
+/* ---- stock hold, same lifecycle as the loyalty hold above ----
+
+   Products may carry a stock COUNT (products.js `stockQty`; absent = untracked
+   and unlimited, which is how everything behaved before counts existed). The
+   count comes down when the order is OPENED, not when it is paid: every method
+   here confirms later, so waiting for settlement would let the last vial be
+   promised to several buyers at once. If the order then dies unpaid the units
+   go back on the shelf.
+
+   Throws (409) when a line can't be filled — the caller must let that reach the
+   buyer rather than opening an invoice for goods that aren't there. */
+function reserveOrderStock(order) {
+  const lines = (order && order.items || []).map(i => ({ id: i.id, quantity: i.quantity }));
+  return productStore.reserveStock(lines);      // [] when nothing was tracked
+}
+
+/* Put units back. Idempotent through the `stockReleased` stamp on the order, so
+   a repeated BTCPay webhook or a double-click in admin can't credit twice.
+   Pass `reserved` directly for the case where no order was stored yet (a
+   checkout that threw after taking stock). */
+function releaseOrderStock(orderId, reserved) {
+  if (reserved) {
+    try { productStore.releaseStock(reserved); }
+    catch (e) { console.error('[stock] could not release:', e.message); }
+    return;
+  }
+  const found = store.listAllOrders().find(o => o.orderId === orderId);
+  if (!found || found.stockReleased) return;
+  const held = Array.isArray(found.stockReserved) ? found.stockReserved : [];
+  if (!held.length) return;
+  try {
+    productStore.releaseStock(held);
+    store.updateOrderStatus(orderId, null, { stockReleased: true });
+  } catch (e) {
+    console.error('[stock] could not release for ' + orderId + ':', e.message);
+  }
+}
+
 /* Referral reward — granted once, on the referred buyer's first paid order.
    Credits loyalty points to BOTH the referrer and the new customer, then (if
    email is configured) tells the referrer. Safe to call on every paid order:
@@ -656,7 +718,7 @@ async function sendReferralRewardEmail(referrerId, points) {
    `order.shipping` is the shipping COST (from pricing.js); the delivery
    address arrives separately as `shipping`, stored as shippingAddress so
    the two never collide. */
-function buildOrderRecord({ orderId, order, method, status, email, shipping, transactionId, invoiceId, pointsEarned, pointsRedeemed, subscriptionId }) {
+function buildOrderRecord({ orderId, order, method, status, email, shipping, transactionId, invoiceId, pointsEarned, pointsRedeemed, subscriptionId, stockReserved }) {
   return {
     orderId,
     createdAt: new Date().toISOString(),
@@ -674,7 +736,9 @@ function buildOrderRecord({ orderId, order, method, status, email, shipping, tra
     ...(pointsRedeemed ? { pointsRedeemed } : {}),
     ...(transactionId ? { transactionId } : {}),
     ...(invoiceId ? { invoiceId } : {}),
-    ...(subscriptionId ? { subscriptionId } : {})   // marks an auto-ship shipment
+    ...(subscriptionId ? { subscriptionId } : {}),  // marks an auto-ship shipment
+    // units taken off the shelf when this order opened; what a cancel gives back
+    ...(stockReserved && stockReserved.length ? { stockReserved } : {})
   };
 }
 
@@ -703,6 +767,13 @@ app.post('/api/crypto/checkout', auth.requireAuth, async (req, res) => {
     const order = buildOrder(body.items, { discount });         // authoritative price
     const orderId = newOrderId();
 
+    /* Take the stock BEFORE opening the invoice, and before the first `await`.
+       buildOrder has already checked availability, but only this call checks and
+       decrements in the same turn — between the two, another checkout could take
+       the last unit. Anything that fails after this point must put it back, which
+       is what the catch below does. */
+    const stockReserved = reserveOrderStock(order);
+
     // Build a same-site return URL so BTCPay can send the buyer back to us.
     // Prefer an explicit SITE_URL; otherwise use the caller's Origin (a
     // same-site fetch → our own site). No trusted origin → let BTCPay show
@@ -710,13 +781,20 @@ app.post('/api/crypto/checkout', auth.requireAuth, async (req, res) => {
     const base = (process.env.SITE_URL || req.headers.origin || '').replace(/\/+$/, '');
     const redirectUrl = base ? `${base}/checkout.html?paid=crypto` : '';
 
-    const invoice = await btcpay.createInvoice({
-      order,
-      email: body.email,
-      shipping: body.shipping,
-      orderId,
-      redirectUrl
-    });
+    let invoice;
+    try {
+      invoice = await btcpay.createInvoice({
+        order,
+        email: body.email,
+        shipping: body.shipping,
+        orderId,
+        redirectUrl
+      });
+    } catch (e) {
+      // no invoice, so no order and nothing to pay — the units go straight back
+      releaseOrderStock(null, stockReserved);
+      throw e;
+    }
 
     /* Auto-ship opt-in. Signed-in only — a standing order needs an account to
        manage and cancel it. The plan is created now, alongside the unpaid
@@ -752,11 +830,16 @@ app.post('/api/crypto/checkout', auth.requireAuth, async (req, res) => {
         email: body.email, shipping: body.shipping,
         invoiceId: invoice.id,
         pointsRedeemed,
+        stockReserved,
         subscriptionId: subscription ? subscription.id : ''
       }));
       store.clearCart(req.user.id);
     } catch (e) {
+      /* The invoice exists and is payable, but we have no record of it — so the
+         held units have nothing to release them later. Give them back now; the
+         alternative is stock that is gone forever with no order to point at. */
       console.error('[crypto checkout] could not save order:', e.message);
+      releaseOrderStock(null, stockReserved);
     }
 
     res.status(201).json({
@@ -774,7 +857,8 @@ app.post('/api/crypto/checkout', auth.requireAuth, async (req, res) => {
     });
   } catch (err) {
     console.error('[crypto checkout] failed:', err.message);
-    res.status(400).json({ error: err.message });
+    // 409 = a stock shortfall (someone took the last one first), not bad input
+    res.status(err.status === 409 ? 409 : 400).json({ error: err.message });
   }
 });
 
@@ -802,8 +886,10 @@ app.post('/api/crypto/webhook', (req, res) => {
     markOrderPaid(orderId);
   } else if (evt.type === 'InvoiceExpired' || evt.type === 'InvoiceInvalid') {
     // Nobody paid — hand back any loyalty points the discount was held against
-    // BEFORE cancelling, so the stored pointsRedeemed is still there to read.
+    // and put the reserved units back on the shelf, BOTH before cancelling, so
+    // the stored pointsRedeemed / stockReserved are still there to read.
     refundReservedPoints(orderId);
+    releaseOrderStock(orderId);
     store.updateOrderStatus(orderId, 'cancelled');
   }
 
@@ -866,6 +952,11 @@ app.post('/api/zelle/checkout', auth.requireAuth, async (req, res) => {
     zelle.assertPayable({ order, shipping: body.shipping });     // US-only + send-limit guards
 
     const orderId = newOrderId();
+    /* Held the same way as a crypto invoice. A Zelle order can sit unpaid for
+       days, which is exactly why the units come off the shelf now — otherwise
+       the same vial gets promised again while the first transfer is in flight.
+       Admin cancelling the order gives them back. */
+    const stockReserved = reserveOrderStock(order);
     const instructions = zelle.instructions({ orderId, order });
 
     // Record it whether or not they're signed in. A guest order still has to be
@@ -873,7 +964,7 @@ app.post('/api/zelle/checkout', auth.requireAuth, async (req, res) => {
     // nothing, and the owner has no idea what to ship or where.
     const record = buildOrderRecord({
       orderId, order, method: 'zelle', status: 'awaiting_payment',
-      email: body.email, shipping: body.shipping
+      email: body.email, shipping: body.shipping, stockReserved
     });
     record.expiresAt = instructions.expiresAt;
 
@@ -882,6 +973,7 @@ app.post('/api/zelle/checkout', auth.requireAuth, async (req, res) => {
       if (req.user) store.clearCart(req.user.id);
     } catch (e) {
       console.error('[zelle checkout] could not save order:', e.message);
+      releaseOrderStock(null, stockReserved);   // unrecorded order holds nothing
       return res.status(500).json({ error: 'We could not record your order. Nothing has been charged — please try again.' });
     }
 
@@ -895,7 +987,7 @@ app.post('/api/zelle/checkout', auth.requireAuth, async (req, res) => {
       .catch(err => console.error('[zelle admin-notify] failed:', err.message));
   } catch (err) {
     console.error('[zelle checkout] failed:', err.message);
-    res.status(400).json({ error: err.message });
+    res.status(err.status === 409 ? 409 : 400).json({ error: err.message });
   }
 });
 
@@ -952,6 +1044,7 @@ app.post('/api/admin/orders/:orderId/cancel', requireAdmin, (req, res) => {
     return res.status(400).json({ error: 'That order is already paid — refund it in your bank, then adjust it here.' });
   }
   refundReservedPoints(req.params.orderId);   // give back any held loyalty points
+  releaseOrderStock(req.params.orderId);      // …and any units held off the shelf
   const upd = store.updateOrderStatus(req.params.orderId, 'cancelled', {
     cancelledAt: new Date().toISOString(),
     cancelledBy: (req.user && req.user.email) || 'admin key'
@@ -1110,17 +1203,30 @@ async function runOneSubscription(sub) {
     const order = buildOrder(claimed.items);            // authoritative, re-priced now
     const orderId = claimed.pendingOrderId || newOrderId();
 
+    /* A repeat shipment takes stock like any other order. If the plan's items
+       have run out, buildOrder/reserveStock throw and recordFailure handles it
+       the same way it handles an unreachable BTCPay — the customer is told and
+       the plan retries, rather than an invoice going out for goods we haven't
+       got. Taken before the invoice `await`, released if the invoice fails. */
+    const stockReserved = reserveOrderStock(order);
+
     // Write the reference down BEFORE the invoice exists, so a crash between
     // these two lines is recoverable by the check above.
     subscriptions.update(claimed.id, null, { pendingOrderId: orderId });
 
-    const invoice = await btcpay.createInvoice({
-      order,
-      email: claimed.email || user.email,
-      shipping: claimed.shippingAddress,
-      orderId,
-      redirectUrl: `${SITE()}/account.html#autoship`
-    });
+    let invoice;
+    try {
+      invoice = await btcpay.createInvoice({
+        order,
+        email: claimed.email || user.email,
+        shipping: claimed.shippingAddress,
+        orderId,
+        redirectUrl: `${SITE()}/account.html#autoship`
+      });
+    } catch (e) {
+      releaseOrderStock(null, stockReserved);
+      throw e;
+    }
 
     try {
       store.addOrder(user.id, buildOrderRecord({
@@ -1128,12 +1234,15 @@ async function runOneSubscription(sub) {
         email: claimed.email || user.email,
         shipping: claimed.shippingAddress,
         invoiceId: invoice.id,
+        stockReserved,
         subscriptionId: claimed.id
       }));
     } catch (e) {
       // The invoice is live — a bookkeeping failure must not look like a
-      // failure to invoice, or the next run would bill them twice.
+      // failure to invoice, or the next run would bill them twice. The units
+      // do go back, though: with no order record nothing can ever release them.
       console.error(`[autoship] ${claimed.id}: invoiced but could not record the order:`, e.message);
+      releaseOrderStock(null, stockReserved);
     }
 
     const updated = subscriptions.recordSuccess(claimed.id, orderId);

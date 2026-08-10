@@ -81,8 +81,28 @@ const SEED_ADD_VERSION = 1;    // v1 (2026-08-05): HGH 36 IU (#9)
    block in js/products-data.js, bump the number below, deploy. */
 const COA_SYNC_VERSION = 1;    // v1 (2026-08-09): reports published for #4, #8, #9
 
+/* ---- Listing-copy re-sync (compliance) ----
+   The same write-once problem as the price sync, and the one that matters most:
+   a product's name, category and DESCRIPTION are seeded on a server's first run
+   and never revisited. So the descriptions were rewritten in js/products-data.js
+   during the 2026-07 compliance work, the repo and the static catalog both read
+   correctly, and the live API kept serving the pre-2026-07 copy to every visitor
+   — including "widely researched for skin remodeling, collagen synthesis and
+   tissue regeneration in vitro" on #3, which is exactly the kind of sentence the
+   listing is not allowed to make.
+
+   Copy that breaks the rules cannot be left in place because an admin once
+   edited that field, so this sync deliberately overwrites: bump the number and
+   the next deploy re-applies the seed's name/category/description to every
+   BUILT-IN product, once.
+
+   HOW TO CHANGE LISTING COPY: edit js/products-data.js, bump the number below,
+   deploy. (Or edit it in admin-products.html and leave this alone.) */
+const COPY_SYNC_VERSION = 1;   // v1 (2026-08-10): compliance rewrite + molecular-class categories
+
 const SYNC_FILE = path.join(DATA_DIR, 'products.sync.json');
 const SYNCED_FIELDS = ['price', 'originalPrice'];
+const COPY_FIELDS = ['name', 'category', 'categoryName', 'description'];
 
 function readSyncFile() {
   try {
@@ -172,6 +192,29 @@ function syncCoaFromSeed(list) {
   return changed;
 }
 
+/* Re-apply the seed's listing copy to the built-in products, once per version
+   bump. Returns true when something changed (so the caller saves). */
+function syncCopyFromSeed(list) {
+  if (lastVersion('copyVersion') >= COPY_SYNC_VERSION) return false;
+  const seedById = new Map(SEED.map(s => [Number(s.id), s]));
+  let changed = false;
+  for (const item of list) {
+    const seed = seedById.get(Number(item.id));
+    if (!seed) continue;                       // admin-added product — not ours to touch
+    for (const field of COPY_FIELDS) {
+      if (seed[field] === undefined) continue;
+      if (item[field] === seed[field]) continue;
+      // Loud on purpose: this is the log line that proves the live copy moved.
+      console.log(`[products] copy sync v${COPY_SYNC_VERSION} · #${item.id} ${seed.name} · ${field} replaced`);
+      item[field] = seed[field];
+      changed = true;
+    }
+  }
+  try { recordVersions({ copyVersion: COPY_SYNC_VERSION }); }
+  catch (e) { console.error('[products] could not record the copy version:', e.message); }
+  return changed;
+}
+
 function backfillFromSeed(list) {
   const seedById = new Map(SEED.map(s => [Number(s.id), s]));
   let changed = false;
@@ -195,7 +238,7 @@ function load() {
   if (!fs.existsSync(PRODUCTS_FILE)) {
     try { save(SEED); } catch (e) { /* fall through to in-memory seed */ }
     // A store written from the seed IS at the current versions — nothing to re-apply.
-    try { recordVersions({ version: SEED_SYNC_VERSION, addVersion: SEED_ADD_VERSION, coaVersion: COA_SYNC_VERSION }); }
+    try { recordVersions({ version: SEED_SYNC_VERSION, addVersion: SEED_ADD_VERSION, coaVersion: COA_SYNC_VERSION, copyVersion: COPY_SYNC_VERSION }); }
     catch (e) { /* re-applying later is harmless */ }
     return SEED.map(p => ({ ...p }));
   }
@@ -204,7 +247,7 @@ function load() {
     if (!Array.isArray(arr)) return SEED.map(p => ({ ...p }));
     // Persist both fix-ups so they happen once, not on every read.
     const touched = [addNewSeedProducts(arr), backfillFromSeed(arr), syncCoaFromSeed(arr),
-                     syncPricesFromSeed(arr)].some(Boolean);
+                     syncPricesFromSeed(arr), syncCopyFromSeed(arr)].some(Boolean);
     if (touched) {
       try { save(arr); } catch (e) { console.error('[products] seed fix-ups not saved:', e.message); }
     }
@@ -223,6 +266,43 @@ function save(list) {
 
 const str = (v, max) => String(v == null ? '' : v).slice(0, max || 500);
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+
+/* ---- stock quantity ----
+   `stockQty` is OPTIONAL and tri-state on purpose:
+
+     null / undefined → UNTRACKED. Availability is the `inStock` switch alone,
+                        which is how every product behaved before counts
+                        existed — so nothing changes until a number is entered.
+     0                → tracked and sold out.
+     n > 0            → tracked, n units left.
+
+   `inStock` stays the master switch: an admin can pull a product with stock
+   still on the shelf (a held lot, a documentation problem) and the count is
+   left untouched, waiting. Availability needs BOTH. */
+const STOCK_MAX = 1000000;
+
+function normalizeStock(v) {
+  if (v === null) return null;                     // explicit "stop tracking"
+  if (v === undefined || v === '') return undefined;  // "leave as it is"
+  const n = Math.floor(Number(v));
+  if (!Number.isFinite(n)) return undefined;
+  return Math.max(0, Math.min(STOCK_MAX, n));
+}
+
+/** Units a buyer can actually take right now. null = unlimited (untracked). */
+function availableQty(p) {
+  if (!p || p.inStock === false) return 0;
+  const q = p.stockQty;
+  if (q === null || q === undefined) return null;
+  const n = Number(q);
+  return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : null;
+}
+
+/** Is this product sellable at all? Mirrors availableQty for the boolean case. */
+function isAvailable(p) {
+  const q = availableQty(p);
+  return q === null ? true : q > 0;
+}
 
 /* Build a clean product record from admin input. `existing` (on edit)
    supplies fallbacks — notably the image, which is kept when the form
@@ -256,6 +336,13 @@ function sanitize(data, existing) {
     badge: (data.badge == null || data.badge === '') ? (existing.badge || null) : str(data.badge, 40),
     featured: data.featured === undefined ? !!existing.featured : !!data.featured
   };
+
+  /* Stock count. Absent from the payload = keep whatever the store already has
+     (so an edit that never touches the field cannot silently wipe a count, and
+     an old admin build that doesn't send it stays harmless). */
+  const stock = normalizeStock(data.stockQty);
+  if (stock !== undefined) rec.stockQty = stock;
+  else if (existing.stockQty !== undefined) rec.stockQty = existing.stockQty;
 
   /* Certificate of analysis. Free-form on purpose (the fields differ between a
      single peptide and a blend), but carried through every edit — losing it
@@ -325,6 +412,88 @@ function updateProduct(id, data) {
   return rec;
 }
 
+/* ---- stock: set, reserve, release ----
+
+   WHEN STOCK MOVES. Not at "paid" — every payment method here confirms later
+   (a BTCPay invoice the buyer still has to fund, a Zelle transfer that arrives
+   by hand), so counting down only on settlement would let the last vial be
+   promised to three people at once. Stock is taken when the order is OPENED
+   and handed back if the order dies unpaid. Same shape as the loyalty-points
+   hold in server.js — see reserveLoyaltyPoints/refundReservedPoints.
+
+   WHY IT IS SAFE. load() and save() are synchronous fs calls and node runs one
+   turn at a time, so the read-check-write below cannot interleave with another
+   request. Nothing may `await` between the check and the save. */
+
+/** Set (or clear, with null) the count for one product. Returns the record. */
+function setStock(id, qty) {
+  const list = load();
+  const i = list.findIndex(p => Number(p.id) === Number(id));
+  if (i === -1) return null;
+  const n = normalizeStock(qty === '' ? null : qty);
+  if (n === undefined) { const e = new Error('Enter a whole number, or leave it blank for untracked.'); e.status = 400; throw e; }
+  if (n === null) delete list[i].stockQty;
+  else list[i].stockQty = n;
+  save(list);
+  return list[i];
+}
+
+/**
+ * Take stock for an order, all-or-nothing.
+ * @param {Array<{id, quantity}>} items
+ * @returns {Array<{id, quantity}>} what was actually decremented (tracked lines
+ *          only) — store it on the order so a later release knows what to undo.
+ * @throws  {Error} status 409 if any line can't be filled; NOTHING is decremented.
+ */
+function reserveStock(items) {
+  const list = load();
+  const wanted = [];
+
+  for (const raw of (items || [])) {
+    const i = list.findIndex(p => Number(p.id) === Number(raw.id));
+    if (i === -1) { const e = new Error(`Unknown product id: ${raw && raw.id}`); e.status = 400; throw e; }
+    const p = list[i];
+    const qty = Math.max(1, Math.floor(Number(raw.quantity) || 0));
+    const have = availableQty(p);
+
+    if (have === 0) { const e = new Error(`${p.name} is out of stock.`); e.status = 409; throw e; }
+    if (have === null) continue;                       // untracked — nothing to take
+    if (qty > have) {
+      const e = new Error(`Only ${have} left of ${p.name} — please lower the quantity.`);
+      e.status = 409;
+      throw e;
+    }
+    wanted.push({ index: i, id: Number(p.id), quantity: qty });
+  }
+
+  // every line checked out — now commit them together
+  wanted.forEach(w => { list[w.index].stockQty = Math.max(0, Number(list[w.index].stockQty) - w.quantity); });
+  if (wanted.length) save(list);
+  return wanted.map(w => ({ id: w.id, quantity: w.quantity }));
+}
+
+/**
+ * Put reserved stock back (an expired invoice, a cancelled order, a checkout
+ * that threw after reserving). Only touches products still tracked: if an admin
+ * switched one to untracked in the meantime, there is no count to credit.
+ * @param {Array<{id, quantity}>} reserved
+ */
+function releaseStock(reserved) {
+  if (!Array.isArray(reserved) || !reserved.length) return 0;
+  const list = load();
+  let changed = 0;
+  for (const r of reserved) {
+    const p = list.find(x => Number(x.id) === Number(r.id));
+    if (!p || p.stockQty === undefined || p.stockQty === null) continue;
+    const back = Math.max(0, Math.floor(Number(r.quantity) || 0));
+    if (!back) continue;
+    p.stockQty = Math.min(STOCK_MAX, Number(p.stockQty) + back);
+    changed++;
+  }
+  if (changed) save(list);
+  return changed;
+}
+
 function deleteProduct(id) {
   const list = load();
   const i = list.findIndex(p => Number(p.id) === Number(id));
@@ -341,5 +510,11 @@ module.exports = {
   findProductById,
   addProduct,
   updateProduct,
-  deleteProduct
+  deleteProduct,
+  // stock
+  availableQty,
+  isAvailable,
+  setStock,
+  reserveStock,
+  releaseStock
 };

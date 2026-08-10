@@ -203,6 +203,16 @@ class Cart {
     document.querySelectorAll('.cart-badge').forEach(badge => {
       badge.textContent = count;
       badge.style.display = count > 0 ? 'flex' : 'none';
+      /* The number is decoration for assistive tech — the count belongs in the
+         link's own name, otherwise a screen reader reads the cart link as
+         "Cart 3" only if it happens to walk into the badge span. */
+      badge.setAttribute('aria-hidden', 'true');
+      const link = badge.closest('a');
+      if (link) {
+        link.setAttribute('aria-label', count === 0
+          ? 'Cart, empty'
+          : `Cart, ${count} item${count === 1 ? '' : 's'}`);
+      }
     });
   }
 
@@ -212,8 +222,14 @@ class Cart {
     if (!toast) {
       toast = document.createElement('div');
       toast.className = 'toast';
+      /* role=status + polite: an add-to-cart is confirmation, not an
+         interruption, and the toast is the ONLY confirmation a screen-reader
+         user gets (the badge is aria-hidden above). */
+      toast.setAttribute('role', 'status');
+      toast.setAttribute('aria-live', 'polite');
+      toast.setAttribute('aria-atomic', 'true');
       toast.innerHTML =
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg><span class="toast-msg"></span>';
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg><span class="toast-msg"></span>';
       document.body.appendChild(toast);
     }
     toast.querySelector('.toast-msg').textContent = msg;

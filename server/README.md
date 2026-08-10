@@ -289,6 +289,60 @@ Two ways to change a price, both fine:
 Products an admin **added** are never touched by the sync, and a price an admin
 sets *after* a sync survives — the version has to move again to override it.
 
+## Stock counts
+
+A product may carry `stockQty`, a live unit count. It is **optional and
+tri-state**, so nothing changes until a number is actually entered:
+
+| `stockQty` | Meaning |
+|---|---|
+| absent / `null` | **untracked** — unlimited. Availability is the `inStock` switch alone (how the whole catalog behaved before counts existed). |
+| `0` | tracked and sold out — refused at checkout. |
+| `n > 0` | tracked; `n` units left. |
+
+`inStock` stays the master switch: turning it off withdraws a product from sale
+with its count untouched, waiting. Availability needs **both**.
+
+**Setting it** — `admin-products.html`. Every row has the count inline (type a
+number, Save or press Enter); the add/edit form has the same field. Blank means
+untracked. The inline control is its own endpoint so changing a number doesn't
+re-upload the product's image:
+
+```
+PATCH /api/products/:id/stock     { "stockQty": 12 }   → set
+PATCH /api/products/:id/stock     { "stockQty": null } → stop tracking
+```
+
+**When the count moves.** Stock is taken when an order is **opened**, not when
+it is paid, and given back if the order dies unpaid — the same hold/release
+shape as the loyalty points, and for the same reason: every payment method here
+confirms later (a BTCPay invoice the buyer still has to fund, a Zelle transfer
+that arrives by hand), so counting down only on settlement would promise the
+last vial to several buyers at once.
+
+| Event | Effect |
+|---|---|
+| crypto / Zelle checkout, auto-ship invoice | units reserved (decremented) |
+| BTCPay `InvoiceSettled`, admin "Mark paid" | **no change** — already taken |
+| BTCPay `InvoiceExpired` / `InvoiceInvalid` | units released |
+| admin cancels an unpaid order | units released |
+| invoice creation or order save fails | units released immediately |
+
+What was taken is recorded on the order as `stockReserved`, and a release stamps
+`stockReleased` — so a repeated webhook or a double-click in admin cannot credit
+the same units twice. Reserving is **all-or-nothing**: a basket with one
+unfillable line decrements nothing.
+
+An order larger than the count is refused with a 409 and a message that names
+the number (`Only 2 left of X — please lower the quantity.`). The storefront
+caps its quantity steppers at the same figure and shows "Only N left" below 5,
+but the server is authoritative — `products.reserveStock` is the only thing that
+checks and takes in the same turn.
+
+Covered by `test/stock.test.js` (the counting rules) and
+`test/stock-orders.test.js` (the same rules driven through the real order
+routes, including cancel-and-restore and the two-buyers-one-unit case).
+
 ## Notes & next steps
 
 - **Pricing source of truth:** `pricing.js` + `../js/products-data.js`. Update
