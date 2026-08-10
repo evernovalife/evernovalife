@@ -80,6 +80,59 @@ async function createInvoice({ order, email, shipping, orderId, redirectUrl }) {
   return { id: inv.id, checkoutLink: inv.checkoutLink, status: inv.status };
 }
 
+/* ---- Read side of the Greenfield API ----
+   Everything below is GET-only. The admin console uses it to answer the two
+   questions the local order store cannot: "is BTCPay actually reachable with
+   these keys", and "does BTCPay agree with us about what has been paid".
+
+   A missing permission on the API key comes back as 403, which is a different
+   problem from a wrong URL or a dead host, so the status is passed through
+   rather than flattened into one "failed" string. */
+async function apiGet(path) {
+  if (!CONFIGURED) throw new Error('BTCPay is not configured (missing keys in server/.env).');
+  let res;
+  try {
+    res = await fetch(`${BASE_URL}${path}`, {
+      headers: { 'Authorization': `token ${API_KEY}`, 'Accept': 'application/json' }
+    });
+  } catch (netErr) {
+    const err = new Error(`Could not reach the BTCPay server at ${BASE_URL}.`);
+    err.status = 0;
+    throw err;
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    const err = new Error(res.status === 403
+      ? 'The BTCPay API key is missing a permission for this data.'
+      : res.status === 401
+        ? 'BTCPay rejected the API key.'
+        : `BTCPay returned HTTP ${res.status}. ${text.slice(0, 200)}`);
+    err.status = res.status;
+    throw err;
+  }
+  return res.json();
+}
+
+/** The store this server invoices through — name, default currency, etc. */
+function getStore() {
+  return apiGet(`/api/v1/stores/${STORE_ID}`);
+}
+
+/** Recent invoices, newest first. BTCPay caps `take`; 100 is plenty here. */
+async function listInvoices({ take = 50 } = {}) {
+  const list = await apiGet(`/api/v1/stores/${STORE_ID}/invoices?take=${Math.min(100, Math.max(1, take))}`);
+  return Array.isArray(list) ? list : [];
+}
+
+function getInvoice(id) {
+  return apiGet(`/api/v1/stores/${STORE_ID}/invoices/${encodeURIComponent(id)}`);
+}
+
+/** Per-method detail for one invoice: address, rate, paid vs due, payments. */
+function getInvoicePaymentMethods(id) {
+  return apiGet(`/api/v1/stores/${STORE_ID}/invoices/${encodeURIComponent(id)}/payment-methods`);
+}
+
 /* ---- Verify the BTCPAY-SIG header on a webhook callback.
    BTCPay signs the RAW request body with your webhook secret
    (HMAC-SHA256) and sends it as "sha256=<hex>". Compare in constant
@@ -102,6 +155,10 @@ function verifyWebhookSignature(rawBody, sigHeader) {
 module.exports = {
   createInvoice,
   verifyWebhookSignature,
+  getStore,
+  listInvoices,
+  getInvoice,
+  getInvoicePaymentMethods,
   CONFIGURED,
   CURRENCY,
   BASE_URL,

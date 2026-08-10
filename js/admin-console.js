@@ -28,11 +28,28 @@
   var PAID = 'paid';
   var OPEN = ['pending', 'awaiting_payment'];
 
+  /* ---- test orders ----
+     Braintree ran in SANDBOX (`BRAINTREE_ENV || 'sandbox'`), and the card
+     route stamped an order `paid` the instant the gateway approved it. A test
+     card number therefore produced a real-looking paid order carrying no
+     money. Cards were removed entirely in Aug 2026 — braintree.js, the
+     dependency and POST /api/checkout are gone — so `method: 'card'` can only
+     mean an order from that period.
+
+     Those records are excluded from every figure on this console. Counting
+     them makes revenue, average order and best-sellers all wrong, and the
+     error is permanent because nothing will ever pay them off. They are not
+     deleted or hidden away: the order still exists on the server, and Orders →
+     All still lists it, flagged, so the books can be explained later. */
+  function isTestOrder(o) { return o && o.method === 'card'; }
+  function realOrders(list) { return (list || []).filter(function (o) { return !isTestOrder(o); }); }
+
   var state = {
     orders: null,
     users: null,
     subs: null,
     products: null,
+    btcpay: null,         // loaded on demand — it calls out to another host
     range: 30,            // days; 0 = all time
     view: 'dashboard',
     loading: false
@@ -104,7 +121,8 @@
 
   function summarise(orders, win) {
     var paid = orders.filter(function (o) {
-      return o.status === PAID && (!win.days || inWindow(saleDate(o), win.from, win.to));
+      return o.status === PAID && !isTestOrder(o) &&
+        (!win.days || inWindow(saleDate(o), win.from, win.to));
     });
     var revenue = 0, units = 0;
     paid.forEach(function (o) {
@@ -121,7 +139,7 @@
   }
 
   function openOrders(orders) {
-    return orders.filter(function (o) { return OPEN.indexOf(o.status) !== -1; });
+    return orders.filter(function (o) { return OPEN.indexOf(o.status) !== -1 && !isTestOrder(o); });
   }
 
   function topProducts(paidOrders, limit) {
@@ -277,6 +295,7 @@
   var TITLES = {
     dashboard: ['Dashboard', 'Sales, at a glance'],
     orders: ['Orders', 'Every order, and the ones waiting on money'],
+    btcpay: ['BTCPay', 'What the payment server says, next to what we recorded'],
     autoship: ['Auto-Ship', 'Repeating orders and their next invoice'],
     customers: ['Customers', 'Everyone with an account']
   };
@@ -300,6 +319,7 @@
     if (state.loading && !state.orders) { body.innerHTML = loadingSkeleton(); return; }
 
     if (state.view === 'orders') renderOrders();
+    else if (state.view === 'btcpay') renderBtcpay();
     else if (state.view === 'autoship') renderAutoship();
     else if (state.view === 'customers') renderCustomers();
     else renderDashboard();
@@ -317,9 +337,17 @@
 
   function updateNavTally() {
     var el = document.getElementById('navUnpaid');
-    if (!el) return;
-    var n = state.orders ? openOrders(state.orders).length : 0;
-    el.textContent = n ? String(n) : '';
+    if (el) {
+      var n = state.orders ? openOrders(state.orders).length : 0;
+      el.textContent = n ? String(n) : '';
+    }
+    // Settled at BTCPay but unpaid here — the one BTCPay number worth
+    // carrying on every screen, because it means someone paid and is waiting.
+    var b = document.getElementById('navBtcpay');
+    if (b) {
+      var stuck = (state.btcpay && state.btcpay.invoices || []).filter(function (i) { return i.needsAttention; }).length;
+      b.textContent = stuck ? String(stuck) : '';
+    }
   }
 
   function renderGate(message) {
@@ -402,8 +430,20 @@
       '<div class="adm-card">' +
         '<div class="adm-card-head"><h3>Latest orders</h3>' +
           '<div class="right"><a class="btn btn-ghost btn-sm" href="#orders">See all orders</a></div></div>' +
-        ordersTable(orders.slice(0, 8), { compact: true }) +
-      '</div>';
+        ordersTable(realOrders(orders).slice(0, 8), { compact: true }) +
+      '</div>' +
+
+      // Said once, quietly, at the bottom: the figures above are missing
+      // something, and this is what. Silent exclusions are how books stop
+      // adding up six months later.
+      (orders.length - realOrders(orders).length
+        ? '<p class="adm-note" style="margin:0">' +
+          A.plural(orders.length - realOrders(orders).length, 'sandbox card order') +
+          ' from the retired Braintree gateway ' +
+          (orders.length - realOrders(orders).length === 1 ? 'is' : 'are') +
+          ' left out of every figure on this page — the gateway ran in test mode, so those orders carry no money. ' +
+          'They are still listed under <a href="#orders">Orders → All</a>.</p>'
+        : '');
 
     var seg = document.getElementById('rangeSeg');
     if (seg) {
@@ -471,13 +511,15 @@
 
   function renderOrders() {
     var orders = state.orders || [];
+    // Paid counts real sales only; All is literally everything the server
+    // holds, sandbox orders included, so nothing is invisible from here.
     var counts = {
       open: openOrders(orders).length,
-      paid: orders.filter(function (o) { return o.status === PAID; }).length,
+      paid: realOrders(orders).filter(function (o) { return o.status === PAID; }).length,
       all: orders.length
     };
     var shown = orderFilter === 'all' ? orders
-      : orderFilter === 'paid' ? orders.filter(function (o) { return o.status === PAID; })
+      : orderFilter === 'paid' ? realOrders(orders).filter(function (o) { return o.status === PAID; })
       : openOrders(orders);
 
     body.innerHTML =
@@ -561,8 +603,9 @@
         '<td>' + who + addr + '</td>' +
         '<td>' + esc(itemsText(o.items)) + '</td>' +
         '<td>' + esc(methodLabel(o.method)) +
-          (o.method === 'card' ? '<span class="muted">before cards were removed</span>' : '') + '</td>' +
+          (isTestOrder(o) ? '<span class="muted">sandbox — no money taken</span>' : '') + '</td>' +
         '<td><span class="pill ' + esc(o.status || '') + '">' + esc(String(o.status || '').replace('_', ' ')) + '</span>' +
+          (isTestOrder(o) ? ' <span class="pill test">test</span>' : '') +
           (late ? ' <span class="pill late">past hold</span>' : '') + '</td>' +
         '<td class="num"><strong>' + esc(money(o.total)) + '</strong></td>' +
         (opts.actions ? '<td class="actions">' + actions + '</td>' : '') +
@@ -573,6 +616,164 @@
       '<th>Reference</th><th>Placed</th><th>Customer</th><th>Items</th><th>Paid with</th><th>Status</th>' +
       '<th class="num">Total</th>' + (opts.actions ? '<th></th>' : '') +
       '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+  }
+
+  /* ============================================================
+     BTCPAY
+     Loaded only when this view is opened: it makes the server call out to
+     another host, which is slow and pointless on a dashboard nobody asked
+     to see payment plumbing on.
+     ============================================================ */
+  var btcpayLoading = false;
+
+  async function loadBtcpay(force) {
+    if (btcpayLoading) return;
+    if (state.btcpay && !force) return;
+    btcpayLoading = true;
+    if (state.view === 'btcpay') render();
+    try {
+      state.btcpay = await A.api('/api/admin/btcpay');
+    } catch (e) {
+      // A 404 here means the backend predates this panel, which is a
+      // deployment fact, not a BTCPay problem — say which.
+      state.btcpay = {
+        configured: false,
+        error: e.status === 404
+          ? 'This backend does not have the BTCPay panel yet. Deploy the current server/ to Render.'
+          : e.message
+      };
+    }
+    btcpayLoading = false;
+    if (state.view === 'btcpay') render();
+    updateNavTally();
+  }
+
+  /* BTCPay's invoice states map onto the pills we already have. */
+  var INVOICE_PILL = { Settled: 'paid', Processing: 'pending', New: 'pending', Expired: 'cancelled', Invalid: 'cancelled' };
+
+  function renderBtcpay() {
+    var d = state.btcpay;
+
+    if (!d) {
+      body.innerHTML = '<div class="adm-card">' + A.skeleton(5) + '</div>';
+      loadBtcpay();
+      return;
+    }
+
+    if (!d.configured || d.reachable === false) {
+      body.innerHTML =
+        '<div class="adm-card">' +
+          '<div class="adm-card-head"><h3>BTCPay is not answering</h3>' +
+            '<div class="right"><button class="btn btn-ghost btn-sm" type="button" id="btcRetry">' +
+              A.icon('refresh', 'ic') + ' Try again</button></div></div>' +
+          '<p class="adm-note">' + esc(d.error || 'Unknown problem.') + '</p>' +
+          (d.baseUrl ? '<p class="adm-note" style="margin:0">Configured server: <strong>' + esc(d.baseUrl) + '</strong>' +
+            (d.storeId ? ' · store <code>' + esc(d.storeId) + '</code>' : '') + '</p>'
+            : '<p class="adm-note" style="margin:0">Set <code>BTCPAY_URL</code>, <code>BTCPAY_API_KEY</code> and ' +
+              '<code>BTCPAY_STORE_ID</code> in the backend environment, then redeploy.</p>') +
+        '</div>';
+      var r = document.getElementById('btcRetry');
+      if (r) r.addEventListener('click', function () { loadBtcpay(true); });
+      return;
+    }
+
+    var invoices = d.invoices || [];
+    var settled = invoices.filter(function (i) { return i.status === 'Settled'; });
+    var open = invoices.filter(function (i) { return i.status === 'New' || i.status === 'Processing'; });
+    var dead = invoices.filter(function (i) { return i.status === 'Expired' || i.status === 'Invalid'; });
+    var stuck = invoices.filter(function (i) { return i.needsAttention; });
+    var settledValue = settled.reduce(function (s, i) { return s + (Number(i.amount) || 0); }, 0);
+
+    var rows = invoices.map(function (i) {
+      var created = i.createdTime ? new Date(i.createdTime * 1000).toISOString() : '';
+      var localPill = !i.orderId ? '<span class="muted">no order id</span>'
+        : i.localStatus === 'missing' ? '<span class="pill cancelled">not in our store</span>'
+        : '<span class="pill ' + esc(i.localStatus) + '">' + esc(String(i.localStatus).replace('_', ' ')) + '</span>';
+      return '<tr' + (i.needsAttention ? ' style="background:rgba(224,165,42,.07)"' : '') + '>' +
+        '<td><a href="' + esc(i.checkoutLink || '#') + '" target="_blank" rel="noopener">' +
+          esc(String(i.id).slice(0, 10)) + '…</a>' +
+          (i.buyerEmail ? '<span class="muted">' + esc(i.buyerEmail) + '</span>' : '') + '</td>' +
+        '<td>' + esc(A.date(created, true)) + '<span class="muted">' + esc(A.ago(created)) + '</span></td>' +
+        '<td>' + esc(i.itemDesc || '—') + '</td>' +
+        '<td class="num">' + esc(money(i.amount)) + '<span class="muted">' + esc(i.currency || '') + '</span></td>' +
+        '<td><span class="pill ' + esc(INVOICE_PILL[i.status] || '') + '">' + esc(i.status) + '</span>' +
+          (i.additionalStatus && i.additionalStatus !== 'None'
+            ? '<span class="muted">' + esc(i.additionalStatus) + '</span>' : '') + '</td>' +
+        '<td>' + (i.orderId ? '<span class="ref">' + esc(i.orderId) + '</span><br>' : '') + localPill + '</td>' +
+        '<td class="actions">' + (i.needsAttention
+          ? '<button class="btn btn-primary btn-sm act-paid" data-id="' + esc(i.orderId) +
+            '" data-total="' + esc(money(i.amount)) + '">Release order</button>' : '') + '</td>' +
+        '</tr>';
+    }).join('');
+
+    body.innerHTML =
+      '<div class="kpi-grid">' +
+        kpi('Settled', num(settled.length), money(settledValue) + ' received', '', 'gold') +
+        kpi('Open invoices', num(open.length), 'waiting on payment') +
+        kpi('Expired / invalid', num(dead.length), 'never paid') +
+        kpi('Needs releasing', num(stuck.length), stuck.length ? 'paid at BTCPay, unpaid here' : 'everything matches', '',
+            stuck.length ? 'amber' : '') +
+      '</div>' +
+
+      (stuck.length
+        ? '<div class="adm-card" style="border-color:rgba(224,165,42,.45)">' +
+            '<div class="adm-card-head"><h3>' + A.icon('alert', 'ic') + ' ' +
+              A.plural(stuck.length, 'invoice') + ' settled but still unpaid here</h3></div>' +
+            '<p class="adm-note" style="margin:0">BTCPay has the money; this server never heard about it — almost ' +
+            'always a webhook delivered while the backend was asleep or mid-deploy. The customer has paid and is ' +
+            'waiting. <strong>Release order</strong> below marks it paid, emails them and credits their points, ' +
+            'exactly as the webhook would have. Check the invoice at BTCPay first.</p>' +
+          '</div>'
+        : '') +
+
+      '<div class="adm-card">' +
+        '<div class="adm-card-head"><h3>Connection</h3>' +
+          '<div class="right">' +
+            '<a class="btn btn-ghost btn-sm" href="' + esc(d.baseUrl) + '" target="_blank" rel="noopener">' +
+              A.icon('external', 'ic') + ' Open BTCPay</a>' +
+            '<button class="btn btn-ghost btn-sm" type="button" id="btcRefresh">' +
+              A.icon('refresh', 'ic') + ' Refresh</button>' +
+          '</div></div>' +
+        '<div class="rank">' +
+          connRow('Server', d.baseUrl) +
+          connRow('Store', (d.store && d.store.name ? d.store.name + ' · ' : '') + d.storeId) +
+          connRow('Invoice currency', (d.store && d.store.defaultCurrency) || d.currency || '—') +
+          connRow('Webhook secret', d.hasWebhookSecret ? 'set — payments confirm themselves'
+            : 'NOT set — webhooks cannot be verified, so nothing confirms automatically') +
+        '</div>' +
+      '</div>' +
+
+      '<div class="adm-card">' +
+        '<div class="adm-card-head"><h3>Recent invoices</h3>' +
+          '<span class="hint">straight from BTCPay, newest first</span>' +
+          '<div class="right"><button class="btn btn-ghost btn-sm" type="button" id="btcCsv">' +
+            A.icon('download', 'ic') + ' Export CSV</button></div></div>' +
+        (d.invoiceError ? '<p class="adm-note">' + esc(d.invoiceError) + '</p>' : '') +
+        (invoices.length
+          ? '<div class="adm-table-wrap"><table class="adm-table"><thead><tr>' +
+            '<th>Invoice</th><th>Created</th><th>Items</th><th class="num">Amount</th>' +
+            '<th>BTCPay says</th><th>We say</th><th></th>' +
+            '</tr></thead><tbody>' + rows + '</tbody></table></div>'
+          : A.empty('No invoices yet', 'They appear here the moment a customer starts a crypto checkout.')) +
+      '</div>';
+
+    var rf = document.getElementById('btcRefresh');
+    if (rf) rf.addEventListener('click', function () { loadBtcpay(true); });
+    var csv = document.getElementById('btcCsv');
+    if (csv) csv.addEventListener('click', function () {
+      var out = [['Invoice', 'Created', 'Amount', 'Currency', 'BTCPay status', 'Our order', 'Our status', 'Buyer', 'Items']];
+      invoices.forEach(function (i) {
+        out.push([i.id, i.createdTime ? new Date(i.createdTime * 1000).toISOString() : '', i.amount, i.currency,
+                  i.status, i.orderId, i.localStatus, i.buyerEmail, i.itemDesc]);
+      });
+      A.downloadCsv('ever-nova-btcpay-invoices.csv', out);
+    });
+  }
+
+  function connRow(label, value) {
+    return '<div class="rank-row" style="background:var(--adm-surface-2)">' +
+      '<span class="rank-name">' + esc(label) + '</span>' +
+      '<span class="rank-val" style="font-weight:600;white-space:normal;max-width:60%">' + esc(value || '—') + '</span></div>';
   }
 
   /* ---- AUTO-SHIP ---- */
@@ -636,7 +837,7 @@
     // Spend per account, so the list is worth reading rather than just a
     // signup log.
     var spendBy = {};
-    orders.filter(function (o) { return o.status === PAID; }).forEach(function (o) {
+    realOrders(orders).filter(function (o) { return o.status === PAID; }).forEach(function (o) {
       var k = (o.userEmail || o.email || '').toLowerCase();
       if (!k) return;
       if (!spendBy[k]) spendBy[k] = { total: 0, count: 0, last: '' };
@@ -668,7 +869,7 @@
       '<div class="kpi-grid">' +
         kpi('Accounts', num(users.length), 'registered') +
         kpi('Have ordered', num(withOrders), users.length ? Math.round((withOrders / users.length) * 100) + '% of accounts' : '') +
-        kpi('Guest orders', num(orders.filter(function (o) { return o.guest; }).length), 'checked out without an account') +
+        kpi('Guest orders', num(realOrders(orders).filter(function (o) { return o.guest; }).length), 'checked out without an account') +
       '</div>' +
       '<div class="adm-card">' +
         '<div class="adm-card-head"><h3>Accounts</h3>' +
@@ -710,6 +911,9 @@
       var data = await A.api('/api/admin/orders/' + encodeURIComponent(orderId) + '/paid', { method: 'POST' });
       A.toast(data.alreadyPaid ? orderId + ' was already paid.' : orderId + ' is now paid — the customer has been emailed.', 'success');
       await loadAll({ quiet: true });
+      // Released from the BTCPay panel? Re-pull it, or the row it was fixing
+      // still shows as needing attention.
+      if (state.btcpay) await loadBtcpay(true);
     } catch (e) {
       A.toast(e.message, 'error');
       btn.disabled = false;

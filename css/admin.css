@@ -145,6 +145,9 @@ body.adm {
   margin-bottom: 0.9rem;
 }
 .adm-card-head h3 { font-size: 0.95rem; font-weight: 700; margin: 0; }
+/* An inline glyph in a heading has no intrinsic size to fall back on — left
+   alone it fills the card. */
+.adm-card-head h3 svg { width: 16px; height: 16px; vertical-align: -2px; margin-right: 0.15rem; }
 .adm-card-head .hint { font-size: 0.78rem; color: var(--dark-text-faint); }
 .adm-card-head .right { margin-left: auto; display: flex; gap: 0.45rem; align-items: center; flex-wrap: wrap; }
 
@@ -264,6 +267,9 @@ body.adm {
 .pill.awaiting_payment { background: rgba(224, 165, 42, 0.14); color: var(--accent-amber); border-color: rgba(224, 165, 42, 0.32); }
 .pill.cancelled, .pill.expired { background: rgba(244, 63, 94, 0.12); color: var(--accent-coral); border-color: rgba(244, 63, 94, 0.28); }
 .pill.admin { background: rgba(168, 85, 247, 0.16); color: var(--accent-violet); border-color: rgba(168, 85, 247, 0.34); }
+/* A sandbox order that never carried money — struck through so it cannot be
+   mistaken for a sale at a glance in a list of real ones. */
+.pill.test { background: rgba(148, 163, 184, 0.14); color: var(--dark-text-faint); border-style: dashed; }
 .pill.late { background: rgba(244, 63, 94, 0.12); color: var(--accent-coral); border-color: rgba(244, 63, 94, 0.28); }
 
 /* ---------- empty / loading ---------- */

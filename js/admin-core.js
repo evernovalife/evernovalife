@@ -141,7 +141,9 @@
     alert: '<path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/>',
     play: '<path d="m6 3 14 9-14 9z"/>',
     home: '<path d="M3 12l9-9 9 9"/><path d="M9 21V12h6v9"/>',
-    print: '<path d="M6 9V3h12v6"/><path d="M6 18H4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v7H6z"/>'
+    print: '<path d="M6 9V3h12v6"/><path d="M6 18H4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v7H6z"/>',
+    bitcoin: '<path d="M8 6h6a3 3 0 0 1 0 6H8z"/><path d="M8 12h7a3 3 0 0 1 0 6H8z"/><path d="M8 6v12"/><path d="M11 3v3"/><path d="M11 18v3"/><path d="M14.5 3v3"/><path d="M14.5 18v3"/>',
+    external: '<path d="M14 3h7v7"/><path d="M21 3 10 14"/><path d="M20 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5"/>'
   };
   function icon(name, cls) {
     var body = ICONS[name];
@@ -219,6 +221,7 @@
   var NAV = [
     { key: 'dashboard', href: 'admin.html#dashboard', label: 'Dashboard', icon: 'dashboard' },
     { key: 'orders', href: 'admin.html#orders', label: 'Orders', icon: 'orders', tally: 'navUnpaid' },
+    { key: 'btcpay', href: 'admin.html#btcpay', label: 'BTCPay', icon: 'bitcoin', tally: 'navBtcpay' },
     { key: 'autoship', href: 'admin.html#autoship', label: 'Auto-Ship', icon: 'repeat' },
     { key: 'customers', href: 'admin.html#customers', label: 'Customers', icon: 'users' },
     { key: 'products', href: 'admin-products.html', label: 'Products', icon: 'box' },

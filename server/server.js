@@ -1014,6 +1014,103 @@ app.get('/api/admin/orders', requireAdmin, (req, res) => {
   res.json({ success: true, count: orders.length, orders });
 });
 
+/* ============================================================
+   ADMIN — BTCPay
+   The order store records what THIS server believes. BTCPay records what
+   actually happened on the blockchain. When those two disagree, it is almost
+   always a webhook that never arrived (BTCPay retries, but a deploy or a
+   sleeping instance can still swallow one), and the symptom is a customer who
+   paid sitting at `pending` forever.
+
+   So this endpoint does not just proxy the invoice list — it joins it against
+   our own orders and marks the rows where the two disagree.
+   ============================================================ */
+app.get('/api/admin/btcpay', requireAdmin, async (req, res) => {
+  const base = {
+    configured: btcpay.CONFIGURED,
+    baseUrl: btcpay.BASE_URL,
+    storeId: btcpay.STORE_ID,
+    hasWebhookSecret: btcpay.HAS_WEBHOOK_SECRET,
+    currency: btcpay.CURRENCY
+  };
+  if (!btcpay.CONFIGURED) {
+    return res.json({ success: true, ...base, error: 'BTCPay is not configured on this server.' });
+  }
+
+  // The store lookup is the connectivity test; a failure there is fatal for
+  // the panel, so it reports and stops rather than showing half a screen.
+  let store = null;
+  try {
+    store = await btcpay.getStore();
+  } catch (e) {
+    return res.json({ success: true, ...base, reachable: false, error: e.message, status: e.status });
+  }
+
+  let invoices = [];
+  let invoiceError = null;
+  try {
+    invoices = await btcpay.listInvoices({ take: Number(req.query.take) || 50 });
+  } catch (e) {
+    invoiceError = e.message;
+  }
+
+  const ordersById = new Map(store_listAllOrdersSafe().map(o => [o.orderId, o]));
+
+  const rows = invoices.map(inv => {
+    const meta = inv.metadata || {};
+    const local = meta.orderId ? ordersById.get(meta.orderId) : null;
+    const settled = inv.status === 'Settled';
+    const localPaid = local ? String(local.status).toLowerCase() === 'paid' : false;
+    return {
+      id: inv.id,
+      status: inv.status,
+      additionalStatus: inv.additionalStatus || '',
+      amount: inv.amount,
+      currency: inv.currency,
+      createdTime: inv.createdTime,          // unix seconds
+      expirationTime: inv.expirationTime,
+      checkoutLink: inv.checkoutLink,
+      orderId: meta.orderId || '',
+      buyerEmail: meta.buyerEmail || '',
+      itemDesc: meta.itemDesc || '',
+      localStatus: local ? local.status : (meta.orderId ? 'missing' : ''),
+      /* The row worth acting on: BTCPay says the money settled, our store
+         still says unpaid. That order needs releasing by hand. */
+      needsAttention: settled && !localPaid
+    };
+  });
+
+  res.json({
+    success: true,
+    ...base,
+    reachable: true,
+    store: { id: store.id, name: store.name, defaultCurrency: store.defaultCurrency },
+    invoices: rows,
+    invoiceError
+  });
+});
+
+/* One invoice in full, including what was actually paid on each method —
+   address, rate, amount due vs received. Used by the detail drawer. */
+app.get('/api/admin/btcpay/invoices/:id', requireAdmin, async (req, res) => {
+  if (!btcpay.CONFIGURED) return res.status(400).json({ error: 'BTCPay is not configured on this server.' });
+  try {
+    const [invoice, methods] = await Promise.all([
+      btcpay.getInvoice(req.params.id),
+      btcpay.getInvoicePaymentMethods(req.params.id).catch(() => [])
+    ]);
+    res.json({ success: true, invoice, paymentMethods: methods });
+  } catch (e) {
+    res.status(e.status && e.status >= 400 ? e.status : 502).json({ error: e.message });
+  }
+});
+
+/* Never let a store read break the panel — an unreadable orders file should
+   cost the join, not the whole page. */
+function store_listAllOrdersSafe() {
+  try { return store.listAllOrders(); } catch (e) { return []; }
+}
+
 /* ---- ADMIN: confirm the money landed → mark the order paid ----
    This is the only thing that turns a Zelle order into a real sale, so it's
    deliberately manual: the owner checks their bank, matches the memo against
