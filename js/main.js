@@ -44,42 +44,40 @@ function compassStar(ld, dk) {
 let _vialCounter = 0;
 function createVialSVG(product) {
   const uid = 'v' + (++_vialCounter);
-  const isWater = product.id === 2 || /bacteriostatic\s*water/i.test(product.name || '');
 
   /* ---- geometry (squat clear vial — matched to reference photo) ---- */
   const cx = 100;
-  const bodyW = isWater ? 110 : 100;
-  const bodyH = isWater ? 172 : 140;
-  const bodyTop = isWater ? 110 : 108;
+  const bodyW = 100;
+  const bodyH = 140;
+  const bodyTop = 108;
   const bodyBottom = bodyTop + bodyH;
   const bL = cx - bodyW / 2;
   const bR = cx + bodyW / 2;
   const rBot = 16;
 
-  const neckW = isWater ? 50 : 46;
+  const neckW = 46;
   const nL = cx - neckW / 2;
   const nR = cx + neckW / 2;
 
   /* flip-off cap = royal-blue dome stacked on a silver aluminium crimp band */
-  const capW = isWater ? 62 : 56;
+  const capW = 56;
   const cL = cx - capW / 2;
   const cR = cx + capW / 2;
   const domeTopY = 20, domeBaseY = 44;   // blue dome region
   const bandTopY = 44, bandBotY = 74;    // silver band region
 
   /* label region */
-  const labelTop = isWater ? 156 : 130;
-  const labelH = isWater ? 104 : 98;
+  const labelTop = 130;
+  const labelH = 98;
   const labelBottom = labelTop + labelH;
   const L = f => labelTop + f * labelH;
   const textHalf = bodyW / 2 - 12;
 
   /* contents (kept minimal — clear vial like the reference) */
-  const cakeTop = bodyBottom - (isWater ? 0 : 13);
-  const liquidTop = bodyTop + 16;
+  const cakeTop = bodyBottom - 13;
 
   /* badge */
-  const bw2 = isWater ? 21 : 19;
+  const bw2 = 19;
   const bt = L(0.15);
   const bh = labelH * 0.33;
   const logoSize = bw2 * 1.7;
@@ -106,21 +104,12 @@ function createVialSVG(product) {
      Q ${bL} ${bodyBottom} ${bL} ${bodyBottom - rBot}
      Z`;
 
-  /* ---- contents markup (minimal — clear vial) ---- */
-  let contents;
-  if (isWater) {
-    contents = `
-      <g clip-path="url(#bodyClip_${uid})">
-        <rect x="${bL}" y="${liquidTop}" width="${bodyW}" height="${bodyBottom - liquidTop}" fill="url(#liquid_${uid})" opacity="0.5"/>
-        <ellipse cx="${cx}" cy="${liquidTop}" rx="${bodyW / 2 - 2}" ry="3" fill="#eff6ff" opacity="0.8"/>
-      </g>`;
-  } else {
-    contents = `
+  /* ---- contents markup (minimal — clear vial, lyophilized cake) ---- */
+  const contents = `
       <g clip-path="url(#bodyClip_${uid})">
         <path d="M ${bL + 2} ${cakeTop} Q ${cx} ${cakeTop - 4} ${bR - 2} ${cakeTop} L ${bR - 2} ${bodyBottom} L ${bL + 2} ${bodyBottom} Z" fill="url(#powder_${uid})" opacity="0.92"/>
         <path d="M ${bL + 2} ${cakeTop} Q ${cx} ${cakeTop - 4} ${bR - 2} ${cakeTop}" fill="none" stroke="#ffffff" stroke-width="1" opacity="0.65"/>
       </g>`;
-  }
 
   /* ---- arched text baseline paths ---- */
   const topArc = `M ${cx - textHalf} ${L(0.10)} Q ${cx} ${L(0.10) - 7} ${cx + textHalf} ${L(0.10)}`;
@@ -190,11 +179,6 @@ function createVialSVG(product) {
       <stop offset="0%" stop-color="#dbe2ea"/>
       <stop offset="45%" stop-color="#ffffff"/>
       <stop offset="100%" stop-color="#c2ccd8"/>
-    </linearGradient>
-    <linearGradient id="liquid_${uid}" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0%" stop-color="#bcdcff"/>
-      <stop offset="45%" stop-color="#eaf4ff"/>
-      <stop offset="100%" stop-color="#9cc4f0"/>
     </linearGradient>
     <!-- cylinder curve shading over label -->
     <linearGradient id="labelShade_${uid}" x1="0" y1="0" x2="1" y2="0">
@@ -908,9 +892,10 @@ function coaPanel(product, opts = {}) {
   const coa = product && product.coa;
   const idAttr = opts.modal ? '' : ' id="coa"';
 
-  /* Some items will never have a COA — bacteriostatic water is a reagent, not
-     a peptide. Calling that "pending" would imply a report is coming, so it
-     gets its own state rather than being lumped in with the unreleased lots. */
+  /* Some items will never have a COA — a plain laboratory consumable is not a
+     peptide, so identity and purity analysis does not apply. Calling that
+     "pending" would imply a report is coming, so it gets its own state rather
+     than being lumped in with the unreleased lots. */
   if (coa && coa.status === 'not-applicable') {
     return `
       <section class="coa-panel glass"${idAttr}>

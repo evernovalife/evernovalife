@@ -53,7 +53,6 @@ Named by **product id**:
 | File           | Product                          |
 |----------------|----------------------------------|
 | `1.png`        | Retatrutide                      |
-| `2.png`        | Bacteriostatic Water             |
 | `3.png`        | GHK-Cu (Copper Peptide)          |
 | `4.png`        | Tesamorelin / Ipamorelin Blend   |
 | `5.png`        | MOTS-C                           |

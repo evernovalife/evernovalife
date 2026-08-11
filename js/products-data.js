@@ -1,6 +1,6 @@
 /* ============================================================
    EVER NOVA LIFE — Product Catalog
-   9 SKUs · For in-vitro research and laboratory use only
+   8 SKUs · For in-vitro research and laboratory use only
    Each product: id, name, category, categoryName, price,
    originalPrice, purity, quantity, description, specs{},
    coa{}, inStock, badge, featured, lot
@@ -34,8 +34,7 @@ const CATEGORIES = [
   { key: 'growth',   name: 'Proteins & Long-Chain Peptides', icon: 'helix',    blurb: 'Recombinant proteins and long-chain peptides, supplied lyophilized' },
   { key: 'metabolic',name: 'Peptides & Cofactors',           icon: 'bolt',     blurb: 'Synthetic peptides and coenzymes, supplied lyophilized' },
   { key: 'repair',   name: 'Short-Chain Peptides',           icon: 'lattice',  blurb: 'Tripeptides, oligopeptides and metal-complexed peptides' },
-  { key: 'blends',   name: 'Multi-Peptide Blends',           icon: 'layers',   blurb: 'Co-lyophilized multi-component research formulations' },
-  { key: 'supplies', name: 'Laboratory Reagents',            icon: 'flask',    blurb: 'Reconstitution diluents and laboratory consumables' }
+  { key: 'blends',   name: 'Multi-Peptide Blends',           icon: 'layers',   blurb: 'Co-lyophilized multi-component research formulations' }
 ];
 
 const PRODUCTS = [
@@ -55,8 +54,7 @@ const PRODUCTS = [
       'Molecular Weight': '4731.3 g/mol',
       'Purity (HPLC)': '99.2%',
       'Form': 'Lyophilized powder',
-      'Storage': '-20°C, desiccated',
-      'Reconstitution': 'Bacteriostatic water'
+      'Storage': '-20°C, desiccated'
     },
     coa: {
       status: 'available',
@@ -75,33 +73,6 @@ const PRODUCTS = [
     featured: true
   },
   {
-    id: 2,
-    name: 'Bacteriostatic Water',
-    category: 'supplies',
-    categoryName: 'Laboratory Reagents',
-    price: 8.99,
-    originalPrice: 11.99,
-    purity: '0.9% Benzyl Alcohol',
-    quantity: '10mL',
-    lot: 'ENL-24002',
-    description: 'Sterile water with 0.9% benzyl alcohol for reconstitution of lyophilized research peptides in the laboratory. Multi-dose laboratory reagent.',
-    specs: {
-      'Composition': 'Sterile water + 0.9% benzyl alcohol',
-      'Volume': '10mL multi-dose vial',
-      'Grade': 'Laboratory reagent',
-      'Form': 'Liquid',
-      'Storage': 'Room temperature',
-      'Use': 'Peptide reconstitution'
-    },
-    coa: {
-      status: 'not-applicable',
-      note: 'Bacteriostatic water is a laboratory reagent, not a peptide. Peptide identity and purity analysis does not apply to it, so no certificate of analysis is issued for this item.'
-    },
-    inStock: true,
-    badge: 'Essential',
-    featured: true
-  },
-  {
     id: 3,
     name: 'GHK-Cu (Copper Peptide)',
     category: 'repair',
@@ -117,8 +88,7 @@ const PRODUCTS = [
       'Molecular Weight': '403.9 g/mol',
       'Purity (HPLC)': '99.0%',
       'Form': 'Lyophilized powder',
-      'Storage': '-20°C, desiccated',
-      'Reconstitution': 'Bacteriostatic water'
+      'Storage': '-20°C, desiccated'
     },
     coa: {
       status: 'available',
@@ -151,8 +121,7 @@ const PRODUCTS = [
       'Components': 'Tesamorelin 10mg + Ipamorelin 3mg',
       'Analysis': 'Identity + content per component (blend)',
       'Form': 'Co-lyophilized powder',
-      'Storage': '-20°C, desiccated',
-      'Reconstitution': 'Bacteriostatic water'
+      'Storage': '-20°C, desiccated'
     },
     coa: {
       status: 'available',
@@ -191,8 +160,7 @@ const PRODUCTS = [
       'Molecular Weight': '2174.6 g/mol',
       'Purity (HPLC)': '99.1%',
       'Form': 'Lyophilized powder',
-      'Storage': '-20°C, desiccated',
-      'Reconstitution': 'Bacteriostatic water'
+      'Storage': '-20°C, desiccated'
     },
     coa: {
       status: 'available',
@@ -226,7 +194,6 @@ const PRODUCTS = [
       'Analysis': 'Identity + content per component (blend)',
       'Form': 'Co-lyophilized powder',
       'Storage': '-20°C, desiccated',
-      'Reconstitution': 'Bacteriostatic water',
       'Documentation': 'Available — Janoshik #151337'
     },
     coa: {
@@ -262,7 +229,6 @@ const PRODUCTS = [
       'Analysis': 'Identity + content per component (blend)',
       'Form': 'Co-lyophilized powder',
       'Storage': '-20°C, desiccated',
-      'Reconstitution': 'Bacteriostatic water',
       'Documentation': 'Available — Janoshik #122606'
     },
     coa: {
@@ -297,8 +263,7 @@ const PRODUCTS = [
       'Molecular Weight': '663.4 g/mol',
       'Purity (HPLC)': '99.0%',
       'Form': 'Lyophilized powder',
-      'Storage': '-20°C, desiccated',
-      'Reconstitution': 'Bacteriostatic water'
+      'Storage': '-20°C, desiccated'
     },
     coa: {
       status: 'available',
@@ -334,8 +299,7 @@ const PRODUCTS = [
       'Molecular Weight': '22,124 Da',
       'Potency': '36 IU per vial (≈12mg)',
       'Form': 'Lyophilized powder',
-      'Storage': '-20°C, desiccated',
-      'Reconstitution': 'Bacteriostatic water'
+      'Storage': '-20°C, desiccated'
     },
     coa: {
       status: 'available',

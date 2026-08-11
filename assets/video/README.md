@@ -145,7 +145,6 @@ matte recovered from a lit set will never beat one that was never lost.
 | File | Master | Product | Framing |
 |------|--------|---------|---------|
 | `1.*` | `_base/p1.mp4` | Retatrutide | bottle fit |
-| `2.*` | `_base/p2.mp4` | Bacteriostatic Water | bottle fit |
 | `3.*` | `_base/p3.mp4` | GHK-Cu (Copper Peptide) | bottle fit |
 | `4.*` | `_base/p4.mp4` | Tesamorelin / Ipamorelin Blend | bottle fit |
 | `5.*` | `_base/p5.mp4` | MOTS-C | bottle fit |

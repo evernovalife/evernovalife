@@ -22,7 +22,7 @@ Status legend: **NEEDED** = no source found · **VERIFY** = a claim is on the si
 - **Returns policy** — VERIFY. Copy claims "30-day returns on unopened vials". Confirm the real window, conditions, and restocking terms.
 
 ## Quality / documentation (quality.html)
-- **Lots without a published COA** — RESOLVED 2026-08-09. All eight peptide SKUs now have a report on file; the COA Library documents 8 lots. Bacteriostatic Water is exempt — a reagent, not a peptide, so its page states "Not applicable".
+- **Lots without a published COA** — RESOLVED 2026-08-09. All eight peptide SKUs now have a report on file; the COA Library documents 8 lots.
 - **Two reports do not match the listing they document** — NEEDED. Published as-is at the owner's direction, with the mismatch stated in the `coa.note` on the product page and under **Report scope** in quality.html. Both need a replacement report for the lot and vial actually shipped:
   - **HGH 36 IU** — Janoshik #87374 analyzed a **10 IU** vial of lot CS-h101026 (3.86 mg / 11.58 IU, purity 97.090%). The listing states 36 IU. Either get the 36 IU vial tested, or change the listing to what the report covers.
   - **Tesamorelin / Ipamorelin Blend** — Ozcanium OZ-HPLCMS-0ASZ was issued for an **Ipamorelin + CJC-1295 5mg / 5mg** vial and never analyzes Tesamorelin. Either get the Tesamorelin/Ipamorelin 10mg/3mg blend tested, or relist the product as the Ipamorelin/CJC-1295 blend the report describes.

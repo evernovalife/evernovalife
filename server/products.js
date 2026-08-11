@@ -100,6 +100,22 @@ const COA_SYNC_VERSION = 1;    // v1 (2026-08-09): reports published for #4, #8,
    deploy. (Or edit it in admin-products.html and leave this alone.) */
 const COPY_SYNC_VERSION = 1;   // v1 (2026-08-10): compliance rewrite + molecular-class categories
 
+/* ---- Retired built-ins ----
+   The mirror image of the add sync, and the one that actually matters for a
+   delisting: removing a product from js/products-data.js does NOT remove it
+   from a live deployment. products.json is written once, so a store that
+   already holds the row keeps listing it, pricing it and selling it while the
+   repo shows no such product. Put the id here and bump the version, and the
+   next deploy deletes it from the store exactly once.
+
+   Ids are never reused — nextId() counts from the highest id in the store, so
+   a retired id stays retired even after the row is gone.
+
+   HOW TO RETIRE A PRODUCT: remove it from js/products-data.js, add its id
+   below, bump the number, deploy. */
+const RETIRED_IDS = [2];       // #2 — reagent SKU delisted 2026-08-11
+const RETIRE_VERSION = 1;      // v1 (2026-08-11)
+
 const SYNC_FILE = path.join(DATA_DIR, 'products.sync.json');
 const SYNCED_FIELDS = ['price', 'originalPrice'];
 const COPY_FIELDS = ['name', 'category', 'categoryName', 'description'];
@@ -215,6 +231,24 @@ function syncCopyFromSeed(list) {
   return changed;
 }
 
+/* Drop retired built-ins from the store, once per version bump.
+   Returns true when something was removed (so the caller saves). */
+function removeRetiredProducts(list) {
+  if (lastVersion('retireVersion') >= RETIRE_VERSION) return false;
+  const retired = new Set(RETIRED_IDS.map(Number));
+  let changed = false;
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (!retired.has(Number(list[i].id))) continue;
+    // Loud on purpose: a product leaving the shop should be visible in the log.
+    console.log(`[products] retire v${RETIRE_VERSION} · #${list[i].id} ${list[i].name} removed`);
+    list.splice(i, 1);
+    changed = true;
+  }
+  try { recordVersions({ retireVersion: RETIRE_VERSION }); }
+  catch (e) { console.error('[products] could not record the retire version:', e.message); }
+  return changed;
+}
+
 function backfillFromSeed(list) {
   const seedById = new Map(SEED.map(s => [Number(s.id), s]));
   let changed = false;
@@ -238,7 +272,7 @@ function load() {
   if (!fs.existsSync(PRODUCTS_FILE)) {
     try { save(SEED); } catch (e) { /* fall through to in-memory seed */ }
     // A store written from the seed IS at the current versions — nothing to re-apply.
-    try { recordVersions({ version: SEED_SYNC_VERSION, addVersion: SEED_ADD_VERSION, coaVersion: COA_SYNC_VERSION, copyVersion: COPY_SYNC_VERSION }); }
+    try { recordVersions({ version: SEED_SYNC_VERSION, addVersion: SEED_ADD_VERSION, coaVersion: COA_SYNC_VERSION, copyVersion: COPY_SYNC_VERSION, retireVersion: RETIRE_VERSION }); }
     catch (e) { /* re-applying later is harmless */ }
     return SEED.map(p => ({ ...p }));
   }
@@ -246,8 +280,8 @@ function load() {
     const arr = JSON.parse(fs.readFileSync(PRODUCTS_FILE, 'utf8'));
     if (!Array.isArray(arr)) return SEED.map(p => ({ ...p }));
     // Persist both fix-ups so they happen once, not on every read.
-    const touched = [addNewSeedProducts(arr), backfillFromSeed(arr), syncCoaFromSeed(arr),
-                     syncPricesFromSeed(arr), syncCopyFromSeed(arr)].some(Boolean);
+    const touched = [removeRetiredProducts(arr), addNewSeedProducts(arr), backfillFromSeed(arr),
+                     syncCoaFromSeed(arr), syncPricesFromSeed(arr), syncCopyFromSeed(arr)].some(Boolean);
     if (touched) {
       try { save(arr); } catch (e) { console.error('[products] seed fix-ups not saved:', e.message); }
     }

@@ -24,7 +24,6 @@ generating**, or you are paying to animate typos.
 | # | Product | Tagline as printed | Product name |
 |---|---------|--------------------|--------------|
 | 1 | Retatrutide | `ADVANCING HUMAN PERFORINAIZ` ❌ | tail glyphs mangled |
-| 2 | Bacteriostatic Water | `ADVANCING HUMAN PERFORMANCE` ✅ | clean ✅ |
 | 3 | GHK-Cu | `ADVANCING HUMAN PERFORNAICS` ❌ | clean |
 | 4 | Tesamorelin / Ipamorelin | `ADVANCING HUMAN PERFORMMOS` ❌ | `TESA/IPA` runs off the label ❌ |
 | 5 | MOTS-C | `ADVANCING HUMAN PERFORINAIZ` ❌ | clean |
@@ -291,7 +290,6 @@ Substitute one line into the prompt. Everything else stays identical.
 | # | Product | `LABEL CONTENT` line |
 |---|---------|----------------------|
 | 1 | Retatrutide | `The chrome lettering reads "RETATRUTIDE". The violet band beneath reads "LYOPHILIZED RESEARCH PEPTIDE". The gold dose pill reads "10 mg". The bottom line reads "FOR RESEARCH USE ONLY".` |
-| 2 | Bacteriostatic Water | `The chrome lettering reads "BAC WATER". The violet band beneath reads "STERILE \| MULTIPLE USE". Below it a gold-outlined badge reads "BACTERIOSTATIC WATER". The bottom line reads "FOR RECONSTITUTION USE ONLY". The vial holds clear liquid, not powder.` |
 | 3 | GHK-Cu | `The chrome lettering reads "GHK-Cu". The violet band beneath reads "COPPER TRIPEPTIDE-1". The gold dose pill reads "50 mg". The bottom line reads "FOR RESEARCH USE ONLY".` |
 | 4 | Tesamorelin / Ipamorelin | `The chrome lettering reads "TESA/IPA". Beneath it a line reads "TESAMORELIN / IPAMORELIN", then a violet band reads "CO-LYOPHILIZED PEPTIDE BLEND". The gold dose pill reads "10 mg". The bottom line reads "FOR RESEARCH USE ONLY".` |
 | 5 | MOTS-C | `The chrome lettering reads "MOTS-C". The violet band beneath reads "MITOCHONDRIAL-DERIVED PEPTIDE". The gold dose pill reads "10 mg". The bottom line reads "FOR RESEARCH USE ONLY".` |
@@ -381,6 +379,6 @@ to GoDaddy **before** the HTML, per the asset-cache ordering rule.
 At ~$2.99 per 5s 1080p clip: **~$24** for one clean pass over all eight.
 Budget 2–3 rolls per vial realistically → **$50–75**.
 
-Burn **one vial first** (suggest #2 Bacteriostatic Water — it's the only master
-with clean type, so it isolates video quality from the label problem). Inspect it
-end to end through `make_matte.py` before committing to the other seven.
+Burn **one vial first** — pick the master with the cleanest type, so the test
+isolates video quality from the label problem. Inspect it end to end through
+`make_matte.py` before committing to the rest.

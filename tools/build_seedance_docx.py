@@ -25,7 +25,7 @@ DST = ROOT / 'docs' / 'seedance-vial-prompts.docx'
 SEED = ROOT / 'assets' / 'video' / '_seed'
 
 PRODUCTS = {
-    1: 'Retatrutide', 2: 'Bacteriostatic Water', 3: 'GHK-Cu',
+    1: 'Retatrutide', 3: 'GHK-Cu',
     4: 'Tesamorelin / Ipamorelin Blend', 5: 'MOTS-C',
     6: 'BPC-157 / TB-500 Blend', 7: 'KLOW Blend', 8: 'NAD+',
 }

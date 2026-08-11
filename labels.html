@@ -252,25 +252,23 @@
     function formOf(p){
       var f = (p.specs && (p.specs.Form || p.specs.form));
       if (f) return f;
-      if (p.id === 2 || /bacteriostatic\s*water/i.test(p.name||'')) return 'Sterile solution';
       return 'Lyophilized powder';
     }
     function storageOf(p){
       var s = p.specs && (p.specs.Storage || p.specs.storage);
-      if (!s) return (p.id === 2 ? 'Room temperature' : '−20 °C');
+      if (!s) return '−20 °C';
       return MINUS(s.split(',')[0].trim());
     }
     function componentsOf(p){ return (p.specs && (p.specs.Components || p.specs.components)) || ''; }
     function isBlend(p){ return /blend/i.test(p.name||'') || p.category === 'blends' || !!componentsOf(p); }
-    function isWater(p){ return p.id === 2 || /bacteriostatic\s*water/i.test(p.name||''); }
     // "10mg" -> "10 mg" ; "10mg / 3mg" -> "10 mg / 3 mg" ; keeps a real minus sign
     function doseText(q){ return MINUS(String(q||'')).replace(/(\d)\s*(mg|mcg|ml|iu)\b/gi, function(m,a,b){ return a+' '+b; }); }
-    // purity cell: only a clean HPLC percentage (single peptides). Blends / water omit it.
+    // purity cell: only a clean HPLC percentage (single peptides). Blends omit it.
     function purityCell(p){
       var s = String(p.purity||'').trim();
       return /^\d+(\.\d+)?\s*%$/.test(s) ? s.replace(/\s*%/, '% ') + 'HPLC' : '';
     }
-    function typeToken(p){ return isBlend(p) ? 'BLEND' : isWater(p) ? 'REAGENT' : 'PEPTIDE'; }
+    function typeToken(p){ return isBlend(p) ? 'BLEND' : 'PEPTIDE'; }
     function nameSize(name){
       var n = name.length;
       return n > 26 ? '.84em' : n > 18 ? '.98em' : n > 12 ? '1.12em' : '1.3em';
