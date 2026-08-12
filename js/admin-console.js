@@ -26,7 +26,11 @@
   /* Only a paid order is a sale. Everything else is either still in flight
      (an open invoice, a Zelle transfer nobody has confirmed) or dead. */
   var PAID = 'paid';
-  var OPEN = ['pending', 'awaiting_payment'];
+  /* Open = money not in (or not all of it), so the order is still a decision:
+     confirm it or cancel it. `underpaid` is a crypto invoice that expired with
+     a short payment against it — the coins are in the wallet, the order isn't
+     paid, and it stays here until someone settles it either way. */
+  var OPEN = ['pending', 'awaiting_payment', 'underpaid'];
 
   /* ---- test orders ----
      Braintree ran in SANDBOX (`BRAINTREE_ENV || 'sandbox'`), and the card
@@ -50,6 +54,8 @@
     subs: null,
     products: null,
     btcpay: null,         // loaded on demand — it calls out to another host
+    hooks: null,          // BTCPay webhook wiring, loaded alongside btcpay
+    health: null,         // /api/health — which services the backend actually has
     range: 30,            // days; 0 = all time
     view: 'dashboard',
     loading: false
@@ -71,7 +77,8 @@
       A.api('/api/admin/orders'),
       A.api('/api/admin/users'),
       A.api('/api/admin/subscriptions'),
-      A.api('/api/products')
+      A.api('/api/products'),
+      A.api('/api/health')
     ]);
     state.loading = false;
 
@@ -91,9 +98,12 @@
     state.users = results[1].status === 'fulfilled' ? (results[1].value.users || []) : (state.users || []);
     state.subs = results[2].status === 'fulfilled' ? (results[2].value.subscriptions || []) : (state.subs || []);
     state.products = results[3].status === 'fulfilled' ? (results[3].value.products || []) : (state.products || []);
+    state.health = results[4].status === 'fulfilled' ? results[4].value : (state.health || null);
 
     results.forEach(function (r, i) {
       if (r.status === 'rejected' && r.reason.status !== 0) {
+        // Health is a diagnostic, not data — its failure is not worth a toast.
+        if (i === 4) return;
         A.toast(['Orders', 'Users', 'Auto-ship plans', 'Products'][i] + ': ' + r.reason.message, 'error');
       }
     });
@@ -355,6 +365,27 @@
     A.bindGate(body, function () { loadAll(); });
   }
 
+  /* A store that can't email is a store where orders arrive in silence: the
+     buyer gets no pay link and no receipt, and nobody is told to ship. That
+     failure is invisible from the outside — the dashboard just looks quiet —
+     so it is said out loud here rather than left to be discovered by a
+     customer asking where their order went. */
+  function alertsWarning() {
+    var h = state.health;
+    if (!h) return '';
+    var problems = [];
+    if (h.email === false) problems.push('no <code>SMTP_USER</code> / <code>SMTP_PASS</code>, so <strong>no email is sent to buyers at all</strong> — no pay links, no receipts');
+    if (h.ownerAlerts === false) problems.push('no <code>ADMIN_EMAIL</code>, so <strong>you are not told when an order is placed or paid</strong>');
+    if (!problems.length) return '';
+    return '<div class="adm-card" style="border-color:rgba(244,63,94,.4);background:rgba(244,63,94,.06)">' +
+      '<div class="adm-card-head"><h3>Order notifications are off</h3></div>' +
+      '<ul class="adm-note" style="margin:0;padding-left:1.1rem">' +
+        problems.map(function (p) { return '<li>' + p + '</li>'; }).join('') +
+      '</ul>' +
+      '<p class="adm-note" style="margin:.6rem 0 0">Set these in the backend environment (Render → Environment), then redeploy.</p>' +
+    '</div>';
+  }
+
   /* ---- DASHBOARD ---- */
   function renderDashboard() {
     var orders = state.orders || [];
@@ -376,6 +407,7 @@
     var rangeLabel = state.range ? 'last ' + state.range + ' days' : 'all time';
 
     body.innerHTML =
+      alertsWarning() +
       '<div class="kpi-grid">' +
         kpi('Revenue', money(now.revenue), rangeLabel, delta(now.revenue, prev && prev.revenue), 'gold') +
         kpi('Paid orders', num(now.orders), rangeLabel, delta(now.orders, prev && prev.orders)) +
@@ -513,13 +545,16 @@
     var orders = state.orders || [];
     // Paid counts real sales only; All is literally everything the server
     // holds, sandbox orders included, so nothing is invisible from here.
+    var cancelled = orders.filter(function (o) { return o.status === 'cancelled'; });
     var counts = {
       open: openOrders(orders).length,
       paid: realOrders(orders).filter(function (o) { return o.status === PAID; }).length,
+      cancelled: cancelled.length,
       all: orders.length
     };
     var shown = orderFilter === 'all' ? orders
       : orderFilter === 'paid' ? realOrders(orders).filter(function (o) { return o.status === PAID; })
+      : orderFilter === 'cancelled' ? cancelled
       : openOrders(orders);
 
     body.innerHTML =
@@ -529,6 +564,11 @@
           '<div class="seg" id="orderSeg" role="group" aria-label="Filter orders">' +
             [['open', 'Unpaid (' + counts.open + ')'],
              ['paid', 'Paid (' + counts.paid + ')'],
+             /* Cancelled gets its own tab because it is the state most orders
+                actually end in: an expired crypto invoice. With only Unpaid and
+                Paid on screen, both reading 0, a store full of expired orders
+                looks like a store nobody has ever ordered from. */
+             ['cancelled', 'Cancelled (' + counts.cancelled + ')'],
              ['all', 'All (' + counts.all + ')']].map(function (f) {
               return '<button type="button" data-filter="' + f[0] + '" aria-pressed="' +
                 (orderFilter === f[0]) + '">' + esc(f[1]) + '</button>';
@@ -543,7 +583,17 @@
             'the transfer memo, then mark it paid — that is what emails the customer, credits their points and ' +
             'releases the order. Only confirm money you can actually see. ' +
             '<strong>Crypto</strong> orders sitting at <em>pending</em> settle themselves when the BTCPay invoice is ' +
-            'paid; they only need a Cancel if the invoice expired unpaid.</p>'
+            'paid; they only need a Cancel if the invoice expired unpaid.' +
+            (counts.open === 0 && counts.cancelled
+              ? ' <br><strong>Nothing here does not mean nothing happened:</strong> ' +
+                A.plural(counts.cancelled, 'order') + ' ended cancelled — see the Cancelled tab.'
+              : '') + '</p>'
+          : '') +
+        (orderFilter === 'cancelled'
+          ? '<p class="adm-note">Orders whose payment window closed with nothing received, plus anything cancelled by ' +
+            'hand. These <strong>did</strong> come in — the customer reached checkout and their details are below — ' +
+            'they just never paid. A run of them on crypto usually means the BTCPay invoice expiry is too short for ' +
+            'an on-chain payment to land.</p>'
           : '') +
         ordersTable(shown, { actions: true }) +
       '</div>';
@@ -588,7 +638,15 @@
     }
     var rows = orders.map(function (o) {
       var late = o.status === 'awaiting_payment' && o.expiresAt && new Date(o.expiresAt) < new Date();
-      var who = esc(o.userEmail || o.email || '—') + (o.guest ? ' <span class="muted">guest</span>' : '');
+      /* Two emails can be on one order: the account it was placed from, and the
+         address given at checkout — which is where the receipt goes and who you
+         reply to about the shipment. Showing only the account one sends you to
+         the wrong inbox, so both appear when they differ. */
+      var acct = o.userEmail || '';
+      var contact = o.email || '';
+      var who = esc(acct || contact || '—') + (o.guest ? ' <span class="muted">guest</span>' : '') +
+        (contact && acct && contact.toLowerCase() !== acct.toLowerCase()
+          ? '<span class="muted">contact: ' + esc(contact) + '</span>' : '');
       var addr = opts.compact ? '' : '<span class="muted">' + esc(addressText(o.shippingAddress)) + '</span>';
       var actions = '';
       if (opts.actions && OPEN.indexOf(o.status) !== -1) {
@@ -643,6 +701,15 @@
           : e.message
       };
     }
+    /* Separate call, separate failure: the webhook check needs a permission the
+       invoice list doesn't, so losing it must not cost us the invoices. */
+    try {
+      state.hooks = await A.api('/api/admin/btcpay/webhooks');
+    } catch (e) {
+      state.hooks = { error: e.status === 404
+        ? 'This backend does not have the webhook check yet. Deploy the current server/ to Render.'
+        : e.message };
+    }
     btcpayLoading = false;
     if (state.view === 'btcpay') render();
     updateNavTally();
@@ -650,6 +717,76 @@
 
   /* BTCPay's invoice states map onto the pills we already have. */
   var INVOICE_PILL = { Settled: 'paid', Processing: 'pending', New: 'pending', Expired: 'cancelled', Invalid: 'cancelled' };
+
+  /* The webhook is the whole automatic half of the store: without a working one
+     a paid invoice never becomes a paid order, the buyer never gets a receipt
+     and nobody is told to ship. It fails invisibly, so it gets its own card
+     that names the exact failure rather than a green tick. */
+  function webhookCard() {
+    var h = state.hooks;
+    if (!h) return '';
+
+    var head = function (title, danger) {
+      return '<div class="adm-card"' + (danger ? ' style="border-color:rgba(244,63,94,.45)"' : '') + '>' +
+        '<div class="adm-card-head"><h3>' + title + '</h3>' +
+        '<span class="hint">what confirms a crypto payment</span></div>';
+    };
+
+    if (h.error && !h.webhooks) {
+      return head('Webhook — cannot check', !h.missingPermission) +
+        '<p class="adm-note">' + esc(h.error) + '</p>' +
+        (h.missingPermission
+          ? '<p class="adm-note" style="margin:0">BTCPay has no read-only webhook permission, so this check needs ' +
+            '<code>' + esc(h.missingPermission) + '</code> on the API key. Payments can still confirm without it — ' +
+            'this only means the wiring cannot be <em>verified</em> from here. Check it by hand at ' +
+            '<em>BTCPay → Store Settings → Webhooks</em>.</p>'
+          : '') +
+        '</div>';
+    }
+
+    var ours = h.ourWebhook;
+    var others = (h.webhooks || []).filter(function (w) { return !w.isOurs; });
+    var broken = !ours || !ours.enabled || !h.settledCovered || !h.hasWebhookSecret;
+
+    var lines = '';
+    if (!ours) {
+      lines += connRow('Status', 'NO webhook points at this server — crypto payments will never confirm themselves');
+      lines += connRow('Add this URL in BTCPay', h.expectedUrl || '—');
+    } else {
+      lines += connRow('Status', ours.enabled ? 'connected' : 'DISABLED in BTCPay — nothing is delivered');
+      lines += connRow('URL', ours.url);
+      lines += connRow('Events', ours.everything ? 'all events'
+        : (ours.specificEvents || []).join(', ') || 'none selected');
+      lines += connRow('InvoiceSettled covered', h.settledCovered
+        ? 'yes — a paid invoice marks the order paid'
+        : 'NO — this webhook is not subscribed to InvoiceSettled, so payments never confirm');
+      lines += connRow('Recent failed deliveries', ours.failedRecently
+        ? ours.failedRecently + ' of the last ' + (ours.deliveries || []).length +
+          ' failed — BTCPay retries, but a run of these means orders are being missed'
+        : 'none');
+      var last = (ours.deliveries || [])[0];
+      if (last) {
+        lines += connRow('Last delivery', A.date(last.timestamp ? last.timestamp * 1000 : null, true) +
+          (last.success ? ' · accepted' : ' · FAILED' + (last.errorMessage ? ': ' + last.errorMessage : '')));
+      }
+    }
+    if (!h.hasWebhookSecret) {
+      lines += connRow('Webhook secret', 'NOT set on this server — every delivery is rejected unverified');
+    }
+    if (others.length) {
+      lines += connRow('Other webhooks on this store', others.map(function (w) { return w.url; }).join(', '));
+    }
+
+    return head((broken ? A.icon('alert', 'ic') + ' Webhook — needs attention' : 'Webhook — connected'), broken) +
+      '<div class="rank">' + lines + '</div>' +
+      (!ours
+        ? '<p class="adm-note" style="margin:.6rem 0 0"><strong>Fix:</strong> BTCPay → Store Settings → Webhooks → ' +
+          'Create a new webhook. Payload URL <code>' + esc(h.expectedUrl || '') + '</code>, ' +
+          'events "Send me all events" (or at least InvoiceSettled, InvoiceExpired, InvoiceInvalid), and copy the ' +
+          'secret it shows into <code>BTCPAY_WEBHOOK_SECRET</code> on Render.</p>'
+        : '') +
+      '</div>';
+  }
 
   function renderBtcpay() {
     var d = state.btcpay;
@@ -690,6 +827,9 @@
     var open = invoices.filter(function (i) { return i.status === 'New' || i.status === 'Processing'; });
     var dead = invoices.filter(function (i) { return i.status === 'Expired' || i.status === 'Invalid'; });
     var stuck = invoices.filter(function (i) { return i.needsAttention; });
+    // Expired doesn't mean unpaid: an underpaid or late payment expires too,
+    // and that money is already in the wallet.
+    var deadWithMoney = dead.filter(function (i) { return Number(i.paidAmount) > 0; });
     var settledValue = settled.reduce(function (s, i) { return s + (Number(i.amount) || 0); }, 0);
 
     var rows = invoices.map(function (i) {
@@ -703,14 +843,21 @@
           (i.buyerEmail ? '<span class="muted">' + esc(i.buyerEmail) + '</span>' : '') + '</td>' +
         '<td>' + esc(A.date(created, true)) + '<span class="muted">' + esc(A.ago(created)) + '</span></td>' +
         '<td>' + esc(i.itemDesc || '—') + '</td>' +
-        '<td class="num">' + esc(money(i.amount)) + '<span class="muted">' + esc(i.currency || '') + '</span></td>' +
+        '<td class="num">' + esc(money(i.amount)) +
+          /* A dead invoice with money against it is the row that costs real
+             money to miss, so the amount received is shown next to the amount
+             asked for rather than hidden in the detail drawer. */
+          (Number(i.paidAmount) > 0 && i.status !== 'Settled'
+            ? '<span class="muted">got ' + esc(money(i.paidAmount)) + '</span>'
+            : '<span class="muted">' + esc(i.currency || '') + '</span>') + '</td>' +
         '<td><span class="pill ' + esc(INVOICE_PILL[i.status] || '') + '">' + esc(i.status) + '</span>' +
           (i.additionalStatus && i.additionalStatus !== 'None'
             ? '<span class="muted">' + esc(i.additionalStatus) + '</span>' : '') + '</td>' +
         '<td>' + (i.orderId ? '<span class="ref">' + esc(i.orderId) + '</span><br>' : '') + localPill + '</td>' +
         '<td class="actions">' + (i.needsAttention
           ? '<button class="btn btn-primary btn-sm act-paid" data-id="' + esc(i.orderId) +
-            '" data-total="' + esc(money(i.amount)) + '">Release order</button>' : '') + '</td>' +
+            '" data-total="' + esc(money(i.amount)) + '">' +
+            (i.status === 'Settled' ? 'Release order' : 'Mark paid anyway') + '</button>' : '') + '</td>' +
         '</tr>';
     }).join('');
 
@@ -718,8 +865,10 @@
       '<div class="kpi-grid">' +
         kpi('Settled', num(settled.length), money(settledValue) + ' received', '', 'gold') +
         kpi('Open invoices', num(open.length), 'waiting on payment') +
-        kpi('Expired / invalid', num(dead.length), 'never paid') +
-        kpi('Needs releasing', num(stuck.length), stuck.length ? 'paid at BTCPay, unpaid here' : 'everything matches', '',
+        kpi('Expired / invalid', num(dead.length),
+            deadWithMoney.length ? deadWithMoney.length + ' with money against them' : 'never paid', '',
+            deadWithMoney.length ? 'amber' : '') +
+        kpi('Needs releasing', num(stuck.length), stuck.length ? 'money in, order not released' : 'everything matches', '',
             stuck.length ? 'amber' : '') +
       '</div>' +
 
@@ -754,6 +903,8 @@
             : 'NOT set — webhooks cannot be verified, so nothing confirms automatically') +
         '</div>' +
       '</div>' +
+
+      webhookCard() +
 
       '<div class="adm-card">' +
         '<div class="adm-card-head"><h3>Recent invoices</h3>' +

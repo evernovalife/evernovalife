@@ -197,7 +197,8 @@
     const s = String(status || '').toLowerCase();
     const known = { paid: 'Paid', pending: 'Pending', cancelled: 'Cancelled',
       processing: 'Processing', shipped: 'Shipped', delivered: 'Delivered',
-      awaiting_payment: 'Awaiting payment' };   // Zelle: placed, money not in yet
+      awaiting_payment: 'Awaiting payment',   // Zelle: placed, money not in yet
+      underpaid: 'Payment short' };           // crypto: some money in, not all
     const label = known[s] || (s ? s.charAt(0).toUpperCase() + s.slice(1) : 'Processing');
     const cls = known[s] ? s.replace(/_/g, '-') : 'processing';
     return { cls, label };

@@ -56,6 +56,10 @@ app.get('/api/health', (req, res) => res.json({
   zelle: zelle.CONFIGURED,        // Zelle (manual bank transfer) ready?
   auth: true,                     // email/password accounts always available
   email: mailer.CONFIGURED,       // reset + welcome emails (Gmail SMTP) ready?
+  /* Is there an inbox for owner alerts (new order, paid, underpaid)? Without
+     ADMIN_EMAIL those are built and then dropped, which looks identical to a
+     store nobody is buying from. Boolean only — the address stays private. */
+  ownerAlerts: Boolean(process.env.ADMIN_EMAIL),
   // Auto-ship re-invoices through BTCPay, so it rides on the same config —
   // and on email, which is how the customer receives each pay link.
   autoship: btcpay.CONFIGURED,
@@ -568,7 +572,13 @@ app.get('/api/admin/subscriptions', requireAdmin, (req, res) => {
    Reports the SMTP config, whether connect+login works (or the exact error),
    and (if ?to= given) whether a test message actually sends. */
 app.get('/api/admin/email-test', requireAdmin, async (req, res) => {
-  const out = { config: mailer.config() };
+  /* Where owner notifications go is part of "is email working". A blank
+     ADMIN_EMAIL swallows every new-order and underpaid alert silently — SMTP
+     verifies fine, and nothing is ever sent. */
+  const out = {
+    config: mailer.config(),
+    ownerAlerts: { to: process.env.ADMIN_EMAIL || '', configured: Boolean(process.env.ADMIN_EMAIL) }
+  };
   try {
     await mailer.verify();
     out.verify = 'ok';
@@ -829,6 +839,13 @@ app.post('/api/crypto/checkout', auth.requireAuth, async (req, res) => {
     const order = buildOrder(body.items, { discount });         // authoritative price
     const orderId = newOrderId();
 
+    /* Resolve the buyer's email ONCE and store that, rather than whatever the
+       checkout form happened to send. Every later message — receipt, expiry
+       notice, "your payment came in short" — is addressed from the order
+       record, so an empty field here is an order that can never be written to
+       again. The account address is always there to fall back on. */
+    const buyerEmail = body.email || req.user.email;
+
     /* Take the stock BEFORE opening the invoice, and before the first `await`.
        buildOrder has already checked availability, but only this call checks and
        decrements in the same turn — between the two, another checkout could take
@@ -847,7 +864,7 @@ app.post('/api/crypto/checkout', auth.requireAuth, async (req, res) => {
     try {
       invoice = await btcpay.createInvoice({
         order,
-        email: body.email,
+        email: buyerEmail,
         shipping: body.shipping,
         orderId,
         redirectUrl
@@ -889,7 +906,7 @@ app.post('/api/crypto/checkout', auth.requireAuth, async (req, res) => {
     try {
       store.addOrder(req.user.id, buildOrderRecord({
         orderId, order, method: 'crypto', status: 'pending',
-        email: body.email, shipping: body.shipping,
+        email: buyerEmail, shipping: body.shipping,
         invoiceId: invoice.id,
         pointsRedeemed,
         stockReserved,
@@ -917,6 +934,16 @@ app.post('/api/crypto/checkout', auth.requireAuth, async (req, res) => {
       // than silently dropping it.
       autoshipFailed: wantsAutoship && !subscription
     });
+
+    /* After responding, so neither can fail the sale. The buyer needs the pay
+       link somewhere they can't lose it — a BTCPay invoice expires in minutes
+       and the tab that held it is the only copy otherwise. The owner needs to
+       know an invoice is live, because a crypto payment lands in the wallet
+       whether or not anyone is watching this server. */
+    sendCryptoInvoiceEmail({ email: buyerEmail, orderId, order, checkoutLink: invoice.checkoutLink })
+      .catch(err => console.error('[crypto invoice email] failed:', err.message));
+    notifyAdminOfCryptoOrder({ orderId, order, email: buyerEmail, invoice })
+      .catch(err => console.error('[crypto admin-notify] failed:', err.message));
   } catch (err) {
     console.error('[crypto checkout] failed:', err.message);
     // 409 = a stock shortfall (someone took the last one first), not bad input
@@ -925,9 +952,11 @@ app.post('/api/crypto/checkout', auth.requireAuth, async (req, res) => {
 });
 
 /* ---- webhook: BTCPay calls this whenever an invoice changes state.
-   We verify the signature, then acknowledge. This is where order
-   fulfilment hooks in once you add an order store. ---- */
-app.post('/api/crypto/webhook', (req, res) => {
+   Verify the signature, decide what it means for the order, then
+   acknowledge. The order state is settled BEFORE the 200 goes back, so a
+   caller (or a test) that gets an ok has a store that already agrees; only
+   the emails are left running behind it. ---- */
+app.post('/api/crypto/webhook', async (req, res) => {
   const sig = req.get('BTCPay-Sig');
   if (!btcpay.verifyWebhookSignature(req.rawBody, sig)) {
     console.warn('[crypto webhook] rejected: bad or missing signature');
@@ -941,22 +970,100 @@ app.post('/api/crypto/webhook', (req, res) => {
   // InvoiceInvalid. See https://docs.btcpayserver.org/API/Greenfield/v1/#webhooks
   console.log(`[crypto webhook] ${evt.type} · invoice ${evt.invoiceId || '—'} · order ${orderId || '—'}`);
 
-  // Move the stored order to its final state. Only signed-in orders were
-  // recorded (guest orders have no owner to attach to), so updateOrderStatus
-  // simply no-ops when the order isn't found.
-  if (evt.type === 'InvoiceSettled') {
-    markOrderPaid(orderId);
-  } else if (evt.type === 'InvoiceExpired' || evt.type === 'InvoiceInvalid') {
-    // Nobody paid — hand back any loyalty points the discount was held against
-    // and put the reserved units back on the shelf, BOTH before cancelling, so
-    // the stored pointsRedeemed / stockReserved are still there to read.
-    refundReservedPoints(orderId);
-    releaseOrderStock(orderId);
-    store.updateOrderStatus(orderId, 'cancelled');
+  try {
+    await handleInvoiceEvent(evt, orderId);
+  } catch (err) {
+    /* Still acknowledge. A 500 makes BTCPay redeliver, which re-runs the same
+       decision against an order that may already have moved — and the one
+       thing worse than a missed notification is a duplicated one. */
+    console.error('[crypto webhook] handling failed:', err.message);
   }
-
   res.json({ ok: true });
 });
+
+/* What a BTCPay invoice event does to the order behind it. Only signed-in
+   orders were recorded, so every store update no-ops when the order isn't
+   found. Async because a dead invoice has to be asked "did any money arrive?"
+   before it can be written off.
+
+   Emails are started but NOT awaited: a slow SMTP handshake must not hold the
+   webhook open, and a bounced notification must not look like a failed
+   delivery. Each carries its own .catch so nothing becomes an unhandled
+   rejection. */
+async function handleInvoiceEvent(evt, orderId) {
+  if (evt.type === 'InvoiceSettled') {
+    const upd = markOrderPaid(orderId, { invoiceId: evt.invoiceId || '' });
+    if (!upd || upd.previousStatus === 'paid') return;   // repeat delivery — don't email twice
+    const order = upd.order;
+    sendPaymentConfirmedEmail(order).catch(e => console.error('[paid email] failed:', e.message));
+    notifyAdminOfPaidOrder(order).catch(e => console.error('[paid admin-notify] failed:', e.message));
+    return;
+  }
+
+  if (evt.type !== 'InvoiceExpired' && evt.type !== 'InvoiceInvalid') return;
+
+  const existing = orderId ? store.listAllOrders().find(o => o.orderId === orderId) : null;
+  if (existing && ['paid', 'underpaid', 'cancelled'].includes(String(existing.status).toLowerCase())) {
+    return;    // already decided — a redelivery must not undo it
+  }
+
+  /* An expired invoice is NOT automatically an unpaid one. BTCPay expires an
+     invoice that was underpaid or paid too late, and that money is already in
+     the wallet — cancelling it silently is how a paying customer ends up with
+     nothing and nobody is told. Ask BTCPay what actually landed. */
+  const { amount: paid, known } = await invoicePaidAmount(evt);
+
+  if (paid > 0 || !known) {
+    /* Money arrived but not enough (or not in time). Hold everything exactly as
+       it is — the stock stays reserved and the loyalty points stay held — and
+       put it in front of a human. Admin either marks it paid (buyer sent the
+       rest / owner accepts the shortfall) or cancels it, which is what releases
+       the stock and refunds the points. */
+    store.updateOrderStatus(orderId, 'underpaid', {
+      ...(known ? { paidAmount: paid } : {}),
+      underpaidAt: new Date().toISOString(),
+      invoiceId: evt.invoiceId || (existing && existing.invoiceId) || ''
+    });
+    const order = existing ? { ...existing, ...(known ? { paidAmount: paid } : {}) } : null;
+    const amount = known ? paid : null;
+    notifyAdminOfUnderpaidOrder({ orderId, order, paid: amount, invoiceId: evt.invoiceId })
+      .catch(e => console.error('[underpaid admin-notify] failed:', e.message));
+    sendUnderpaidEmail({ order, orderId, paid: amount })
+      .catch(e => console.error('[underpaid email] failed:', e.message));
+    return;
+  }
+
+  // Nobody paid — hand back any loyalty points the discount was held against
+  // and put the reserved units back on the shelf, BOTH before cancelling, so
+  // the stored pointsRedeemed / stockReserved are still there to read.
+  refundReservedPoints(orderId);
+  releaseOrderStock(orderId);
+  store.updateOrderStatus(orderId, 'cancelled');
+  if (existing) {
+    sendInvoiceExpiredEmail(existing).catch(e => console.error('[expired email] failed:', e.message));
+  }
+}
+
+/* How much money is actually sitting against this invoice, in the store's
+   currency. The expiry webhook carries a `partiallyPaid` flag but no amount,
+   so the invoice itself is the only place the number exists.
+   { amount, known }: `known: false` means "some money arrived but we couldn't
+   read how much" — the caller must still treat that as needing a human, since
+   writing off a paid order is the expensive mistake here. */
+async function invoicePaidAmount(evt) {
+  const flagged = Boolean(evt.partiallyPaid);
+  if (evt.invoiceId) {
+    try {
+      const inv = await btcpay.getInvoice(evt.invoiceId);
+      return { amount: Number(inv && inv.paidAmount) || 0, known: true };
+    } catch (e) {
+      console.error('[crypto webhook] could not read invoice', evt.invoiceId + ':', e.message);
+    }
+  }
+  // No amount available: only the flag decides, and an unflagged event is a
+  // clean expiry (the ordinary abandoned checkout) that can be cancelled.
+  return { amount: 0, known: !flagged };
+}
 
 /* Move an order to paid and credit the buyer for it. Shared by every payment
    that confirms AFTER the order was created: the BTCPay webhook, and an admin
@@ -1024,9 +1131,12 @@ app.post('/api/zelle/checkout', auth.requireAuth, async (req, res) => {
     // Record it whether or not they're signed in. A guest order still has to be
     // reconcilable — otherwise the money arrives with a reference that matches
     // nothing, and the owner has no idea what to ship or where.
+    // Same rule as crypto: store a resolved address, not a possibly-empty form
+    // field, so the order can still be written to after today.
+    const buyerEmail = body.email || (req.user && req.user.email) || '';
     const record = buildOrderRecord({
       orderId, order, method: 'zelle', status: 'awaiting_payment',
-      email: body.email, shipping: body.shipping, stockReserved
+      email: buyerEmail, shipping: body.shipping, stockReserved
     });
     record.expiresAt = instructions.expiresAt;
 
@@ -1043,9 +1153,9 @@ app.post('/api/zelle/checkout', auth.requireAuth, async (req, res) => {
 
     // After responding: the buyer needs these details in writing, and the owner
     // needs to know money is on its way. Neither should be able to fail the sale.
-    sendZelleInstructionsEmail({ email: body.email, orderId, order, instructions })
+    sendZelleInstructionsEmail({ email: buyerEmail, orderId, order, instructions })
       .catch(err => console.error('[zelle email] failed:', err.message));
-    notifyAdminOfZelleOrder({ orderId, order, email: body.email, instructions })
+    notifyAdminOfZelleOrder({ orderId, order, email: buyerEmail, instructions })
       .catch(err => console.error('[zelle admin-notify] failed:', err.message));
   } catch (err) {
     console.error('[zelle checkout] failed:', err.message);
@@ -1148,9 +1258,14 @@ app.get('/api/admin/btcpay', requireAdmin, async (req, res) => {
       buyerEmail: meta.buyerEmail || '',
       itemDesc: meta.itemDesc || '',
       localStatus: local ? local.status : (meta.orderId ? 'missing' : ''),
-      /* The row worth acting on: BTCPay says the money settled, our store
-         still says unpaid. That order needs releasing by hand. */
-      needsAttention: settled && !localPaid
+      paidAmount: inv.paidAmount || '',
+      /* The rows worth acting on. Two different failures, one flag:
+           · BTCPay says the money settled, our store still says unpaid — a
+             webhook that never arrived. The order needs releasing by hand.
+           · money reached the wallet but the invoice died anyway (underpaid, or
+             paid too late). Nobody is owed a shipment yet, but somebody is owed
+             either the rest of the goods or their coins back. */
+      needsAttention: !localPaid && (settled || Number(inv.paidAmount) > 0)
     };
   });
 
@@ -1164,6 +1279,72 @@ app.get('/api/admin/btcpay', requireAdmin, async (req, res) => {
     invoiceError
   });
 });
+
+/* ---- ADMIN: is the confirmation pipe connected? ----
+   Every automatic thing that happens after a crypto payment — order marked
+   paid, buyer's receipt, "ship it" alert — hangs off BTCPay calling
+   /api/crypto/webhook. When that isn't wired up the store is silent in exactly
+   the way a store with no customers is silent, so this answers the question
+   directly: which webhooks exist, where they point, what they're subscribed
+   to, and whether the recent deliveries actually succeeded. */
+app.get('/api/admin/btcpay/webhooks', requireAdmin, async (req, res) => {
+  if (!btcpay.CONFIGURED) return res.status(400).json({ error: 'BTCPay is not configured on this server.' });
+  let hooks;
+  try {
+    hooks = await btcpay.listWebhooks();
+  } catch (e) {
+    /* Listing webhooks needs btcpay.store.webhooks.canmodifywebhooks — BTCPay
+       has no read-only variant. Say so, because "403" here reads as "no
+       webhook" and would send the owner off recreating one that exists. */
+    return res.status(e.status === 403 ? 200 : (e.status && e.status >= 400 ? e.status : 502)).json({
+      success: e.status === 403,
+      error: e.message,
+      ...(e.status === 403 ? { missingPermission: 'btcpay.store.webhooks.canmodifywebhooks' } : {})
+    });
+  }
+
+  const expected = `${SITE_API_BASE(req)}/api/crypto/webhook`;
+  const out = await Promise.all(hooks.map(async h => {
+    let deliveries = [];
+    try { deliveries = await btcpay.listWebhookDeliveries(h.id, { count: 20 }); } catch { /* not fatal */ }
+    const events = h.authorizedEvents || {};
+    return {
+      id: h.id,
+      url: h.url,
+      enabled: h.enabled !== false,
+      everything: Boolean(events.everything),
+      specificEvents: events.specificEvents || [],
+      // Does this hook point at THIS server's endpoint?
+      isOurs: String(h.url || '').replace(/\/+$/, '') === expected,
+      deliveries: deliveries.slice(0, 20).map(d => ({
+        id: d.id, timestamp: d.timestamp, success: d.success,
+        errorMessage: d.errorMessage || '', isRedelivery: Boolean(d.isRedelivery)
+      })),
+      failedRecently: deliveries.filter(d => d.success === false).length
+    };
+  }));
+
+  res.json({
+    success: true,
+    expectedUrl: expected,
+    hasWebhookSecret: btcpay.HAS_WEBHOOK_SECRET,
+    webhooks: out,
+    /* The two ways this is broken without looking broken: nothing points here,
+       or something points here but isn't subscribed to InvoiceSettled. */
+    ourWebhook: out.find(w => w.isOurs) || null,
+    settledCovered: out.some(w => w.isOurs && w.enabled &&
+      (w.everything || w.specificEvents.includes('InvoiceSettled')))
+  });
+});
+
+/* This server's own public base URL, as best it can be known: an explicit
+   API_URL beats the host the admin happens to be calling through. */
+function SITE_API_BASE(req) {
+  const explicit = process.env.API_URL || '';
+  if (explicit) return explicit.replace(/\/+$/, '');
+  const proto = req.get('x-forwarded-proto') || req.protocol || 'https';
+  return `${proto}://${req.get('host')}`;
+}
 
 /* One invoice in full, including what was actually paid on each method —
    address, rate, amount due vs received. Used by the detail drawer. */
@@ -1224,10 +1405,10 @@ app.post('/api/admin/orders/:orderId/cancel', requireAdmin, (req, res) => {
   res.json({ success: true, order: upd && upd.order });
 });
 
-/* ---- emails around a manual payment ---- */
+/* ---- order emails ---- */
 
-/* Shared wrapper so the Zelle emails match the rest of the site. */
-function zelleEmailHtml({ heading, intro, rowsHtml, extraHtml }) {
+/* Shared wrapper so every order email matches the rest of the site. */
+function orderEmailHtml({ heading, intro, rowsHtml, extraHtml }) {
   return `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;color:#1f2937">
     <h2 style="color:#6d28d9;margin-bottom:4px">${escapeHtmlSrv(heading)}</h2>
     <p>${intro}</p>
@@ -1258,7 +1439,7 @@ async function sendZelleInstructionsEmail({ email, orderId, order, instructions 
       `transfer — that's how we match your payment to your order.\n\n` +
       `Order total: $${order.total.toFixed(2)}\nOrder reference: ${orderId}\n\n` +
       `We'll email you again as soon as the payment lands, and ship after that.\n\n— The Ever Nova Life team`,
-    html: zelleEmailHtml({
+    html: orderEmailHtml({
       heading: 'One step left — send your Zelle payment',
       intro: `Thanks for your order. We're holding it for <strong>${escapeHtmlSrv(String(instructions.windowHours))} hours</strong> while we wait for your transfer.`,
       rowsHtml,
@@ -1284,7 +1465,7 @@ async function notifyAdminOfZelleOrder({ orderId, order, email, instructions }) 
       `Items:  ${items}\nMemo to look for: ${instructions.memo}\n\n` +
       `When the transfer lands in your account, confirm it at ${SITE()}/admin.html — that's what marks the order paid ` +
       `and releases it for shipping.\n`,
-    html: zelleEmailHtml({
+    html: orderEmailHtml({
       heading: 'Zelle order awaiting payment',
       intro: `A buyer has placed an order to pay by Zelle. Nothing ships until you confirm the money landed.`,
       rowsHtml: `<table style="border-collapse:collapse;margin:14px 0;font-size:15px">
@@ -1308,10 +1489,205 @@ async function sendPaymentConfirmedEmail(order) {
     subject: `Payment received — Ever Nova Life order ${order.orderId}`,
     text: `We've received your payment of $${total} for order ${order.orderId}. Thank you!\n\n` +
       `Your order is now being prepared and will ship to the address you gave us.\n\n— The Ever Nova Life team`,
-    html: zelleEmailHtml({
+    html: orderEmailHtml({
       heading: 'Payment received ✅',
       intro: `We've received your payment of <strong>$${escapeHtmlSrv(total)}</strong> for order <strong>${escapeHtmlSrv(order.orderId)}</strong>. Thank you!`,
       extraHtml: `<p style="color:#6b7280;font-size:14px">Your order is now being prepared and will ship to the address you gave us.</p>`
+    })
+  });
+}
+
+/* ---- emails around a crypto (BTCPay) order ----
+   Crypto is push-only: the buyer sends the money themselves, from a wallet we
+   have no control over. So every state change is news to somebody — and unlike
+   a card, there is no gateway dashboard that emails on our behalf. */
+
+/* One-line-per-item summary used in both the buyer and owner emails. */
+function itemLines(order) {
+  return ((order && order.items) || []).map(i => `${i.quantity}× ${i.name}`).join(', ') || '—';
+}
+
+/* Plain-text block of the delivery address, for the owner's "ship it" email. */
+function addressText(addr) {
+  if (!addr) return '(no address on the order)';
+  return [addr.name, addr.institution, addr.address,
+    [addr.city, addr.state, addr.postalCode].filter(Boolean).join(', '),
+    addr.countryCode].filter(Boolean).join('\n');
+}
+
+/* The buyer's copy of the pay link. A BTCPay invoice expires in minutes, and
+   the checkout tab is otherwise the only place the link exists — close it and
+   the order is unpayable with no way back to it. */
+async function sendCryptoInvoiceEmail({ email, orderId, order, checkoutLink }) {
+  if (!mailer.CONFIGURED || !email) return;
+  const total = Number(order.total || 0).toFixed(2);
+  return mailer.sendMail({
+    to: email,
+    subject: `Finish paying your Ever Nova Life order ${orderId}`,
+    text: `Thanks for your order.\n\n` +
+      `Order:  ${orderId}\nItems:  ${itemLines(order)}\nTotal:  $${total}\n\n` +
+      `Pay in Bitcoin or Lightning here:\n${checkoutLink}\n\n` +
+      `Important: send the FULL amount the invoice asks for, in one payment, before the invoice ` +
+      `expires. If your wallet or exchange deducts its network fee from what you send, top the ` +
+      `amount up so we receive the full total — a short payment leaves the order unpaid and has ` +
+      `to be sorted out by hand.\n\n` +
+      `We'll email you again the moment the payment confirms, and ship after that.\n\n— The Ever Nova Life team`,
+    html: orderEmailHtml({
+      heading: 'One step left — send your crypto payment',
+      intro: `Thanks for your order. It's reserved for you and will be released as soon as the payment confirms.`,
+      rowsHtml: `<table style="border-collapse:collapse;margin:14px 0;font-size:15px">
+        <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Order</td><td><strong>${escapeHtmlSrv(orderId)}</strong></td></tr>
+        <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Items</td><td>${escapeHtmlSrv(itemLines(order))}</td></tr>
+        <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Total</td><td><strong>$${escapeHtmlSrv(total)}</strong></td></tr>
+      </table>`,
+      extraHtml: `<p><a href="${escapeHtmlSrv(checkoutLink)}" style="display:inline-block;background:#6d28d9;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600">Pay with Bitcoin / Lightning</a></p>
+        <p style="font-size:14px"><strong>Please send the full amount the invoice asks for, in one payment, before it expires.</strong>
+        If your wallet or exchange takes its network fee out of what you send, add it on top — a short
+        payment leaves your order unpaid and has to be sorted out by hand.</p>
+        <p style="color:#6b7280;font-size:14px">We'll email you the moment it confirms, and ship after that.</p>`
+    })
+  });
+}
+
+/* The owner's "an invoice is live" notice. Crypto lands in the wallet whether
+   or not anyone is watching this server, so the order exists in their inbox
+   from the moment it is placed — not only once it pays. */
+async function notifyAdminOfCryptoOrder({ orderId, order, email, invoice }) {
+  const to = process.env.ADMIN_EMAIL || '';
+  if (!mailer.CONFIGURED || !to) return;
+  const total = Number(order.total || 0).toFixed(2);
+  return mailer.sendMail({
+    to,
+    subject: `New crypto order (unpaid): ${orderId} ($${total})`,
+    text: `A buyer opened a crypto invoice. Nothing ships until it confirms.\n\n` +
+      `Order:   ${orderId}\nTotal:   $${total}\nBuyer:   ${email || '(no email)'}\n` +
+      `Items:   ${itemLines(order)}\nInvoice: ${invoice.checkoutLink}\n\n` +
+      `You'll get a second email if it pays. Watch it at ${SITE()}/admin.html → BTCPay.\n`,
+    html: orderEmailHtml({
+      heading: 'New crypto order — unpaid',
+      intro: `A buyer opened a crypto invoice. Nothing ships until it confirms.`,
+      rowsHtml: `<table style="border-collapse:collapse;margin:14px 0;font-size:15px">
+        <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Order</td><td><strong>${escapeHtmlSrv(orderId)}</strong></td></tr>
+        <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Total</td><td><strong>$${escapeHtmlSrv(total)}</strong></td></tr>
+        <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Buyer</td><td>${escapeHtmlSrv(email || '(no email)')}</td></tr>
+        <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Items</td><td>${escapeHtmlSrv(itemLines(order))}</td></tr>
+      </table>`,
+      extraHtml: `<p><a href="${escapeHtmlSrv(invoice.checkoutLink)}" style="color:#6d28d9">View the invoice in BTCPay</a></p>`
+    })
+  });
+}
+
+/* The one email that means "pack a box". */
+async function notifyAdminOfPaidOrder(order) {
+  const to = process.env.ADMIN_EMAIL || '';
+  if (!mailer.CONFIGURED || !to || !order) return;
+  const total = Number(order.total || 0).toFixed(2);
+  const addr = order.shippingAddress || null;
+  return mailer.sendMail({
+    to,
+    subject: `PAID — ship order ${order.orderId} ($${total})`,
+    text: `The money for this order has confirmed. It's ready to ship.\n\n` +
+      `Order:  ${order.orderId}\nTotal:  $${total}\nMethod: ${order.method || '—'}\n` +
+      `Buyer:  ${order.email || '(no email)'}\nItems:  ${itemLines(order)}\n\n` +
+      `Ship to:\n${addressText(addr)}\n\n` +
+      `Full details: ${SITE()}/admin.html → Orders\n`,
+    html: orderEmailHtml({
+      heading: 'Paid — ready to ship',
+      intro: `The money for this order has confirmed.`,
+      rowsHtml: `<table style="border-collapse:collapse;margin:14px 0;font-size:15px">
+        <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Order</td><td><strong>${escapeHtmlSrv(order.orderId)}</strong></td></tr>
+        <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Total</td><td><strong>$${escapeHtmlSrv(total)}</strong></td></tr>
+        <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Buyer</td><td>${escapeHtmlSrv(order.email || '(no email)')}</td></tr>
+        <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Items</td><td>${escapeHtmlSrv(itemLines(order))}</td></tr>
+      </table>`,
+      extraHtml: `<p style="font-size:14px;white-space:pre-line;background:#f9fafb;padding:12px;border-radius:8px">${escapeHtmlSrv(addressText(addr))}</p>`
+    })
+  });
+}
+
+/* Money arrived, but not the full amount (or not before the invoice expired).
+   This is the case that used to be written off silently, so the alert is loud:
+   the store is holding both the buyer's money and the stock until a human
+   decides which way it goes. */
+async function notifyAdminOfUnderpaidOrder({ orderId, order, paid, invoiceId }) {
+  const to = process.env.ADMIN_EMAIL || '';
+  if (!mailer.CONFIGURED || !to) return;
+  const total = order ? Number(order.total || 0).toFixed(2) : '?';
+  const got = paid == null ? 'an unknown amount' : '$' + Number(paid).toFixed(2);
+  const short = (paid != null && order) ? '$' + (Number(order.total || 0) - Number(paid)).toFixed(2) : 'unknown';
+  const link = btcpay.BASE_URL && invoiceId ? `${btcpay.BASE_URL}/i/${invoiceId}` : '';
+  return mailer.sendMail({
+    to,
+    subject: `ACTION NEEDED — underpaid crypto order ${orderId} (${got} of $${total})`,
+    text: `A crypto invoice expired with money against it. The payment is in your wallet; ` +
+      `the order is NOT paid and nothing has shipped.\n\n` +
+      `Order:     ${orderId}\nInvoiced:  $${total}\nReceived:  ${got}\nStill due: ${short}\n` +
+      `Buyer:     ${(order && order.email) || '(no email)'}\nItems:     ${itemLines(order)}\n` +
+      (link ? `Invoice:   ${link}\n` : '') + `\n` +
+      `The stock and any loyalty points stay held until you decide. In ${SITE()}/admin.html:\n` +
+      `  · "Mark paid" if the buyer sent the rest, or you're accepting the shortfall — that ships it.\n` +
+      `  · "Cancel" to release the stock and refund the points. Refund the crypto from your wallet.\n`,
+    html: orderEmailHtml({
+      heading: 'Underpaid crypto order — action needed',
+      intro: `A crypto invoice expired with money against it. The payment is in your wallet, the order is <strong>not paid</strong>, and nothing has shipped.`,
+      rowsHtml: `<table style="border-collapse:collapse;margin:14px 0;font-size:15px">
+        <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Order</td><td><strong>${escapeHtmlSrv(orderId)}</strong></td></tr>
+        <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Invoiced</td><td><strong>$${escapeHtmlSrv(total)}</strong></td></tr>
+        <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Received</td><td><strong>${escapeHtmlSrv(got)}</strong></td></tr>
+        <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Still due</td><td><strong>${escapeHtmlSrv(short)}</strong></td></tr>
+        <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Buyer</td><td>${escapeHtmlSrv((order && order.email) || '(no email)')}</td></tr>
+        <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Items</td><td>${escapeHtmlSrv(itemLines(order))}</td></tr>
+      </table>`,
+      extraHtml: `<p style="font-size:14px">The stock and any loyalty points stay held until you decide:<br>
+        · <strong>Mark paid</strong> if the buyer sent the rest, or you're accepting the shortfall — that ships it.<br>
+        · <strong>Cancel</strong> to release the stock and refund the points, then refund the crypto from your wallet.</p>
+        <p><a href="${SITE()}/admin.html" style="display:inline-block;background:#6d28d9;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600">Open admin</a>
+        ${link ? ` &nbsp; <a href="${escapeHtmlSrv(link)}" style="color:#6d28d9">See the invoice</a>` : ''}</p>`
+    })
+  });
+}
+
+/* …and the buyer's side of the same event. They paid something and heard
+   nothing, which from where they're sitting looks exactly like being robbed. */
+async function sendUnderpaidEmail({ order, orderId, paid }) {
+  const email = order && order.email;
+  if (!mailer.CONFIGURED || !email) return;
+  const total = Number(order.total || 0).toFixed(2);
+  const got = paid == null ? 'part of the amount' : '$' + Number(paid).toFixed(2);
+  const short = paid == null ? '' : ' (about $' + (Number(order.total || 0) - Number(paid)).toFixed(2) + ' short)';
+  return mailer.sendMail({
+    to: email,
+    subject: `We received ${got} for order ${orderId} — it's short of the total`,
+    text: `Thanks for paying — but the payment we received for order ${orderId} was ${got}, ` +
+      `and the invoice was for $${total}${short}. That usually happens when a wallet or exchange ` +
+      `takes its network fee out of the amount sent, or when the invoice expired mid-payment.\n\n` +
+      `Nothing has shipped yet and your money is safe with us. Reply to this email and we'll either ` +
+      `send you a new invoice for the difference or refund what you sent — your choice.\n\n` +
+      `— The Ever Nova Life team`,
+    html: orderEmailHtml({
+      heading: 'Your payment came in short',
+      intro: `Thanks for paying. The payment we received for order <strong>${escapeHtmlSrv(orderId)}</strong> was <strong>${escapeHtmlSrv(got)}</strong>, and the invoice was for <strong>$${escapeHtmlSrv(total)}</strong>${escapeHtmlSrv(short)}.`,
+      extraHtml: `<p style="font-size:14px">That usually happens when a wallet or exchange takes its network fee out of the amount sent, or when the invoice expired part-way through the payment.</p>
+        <p style="font-size:14px"><strong>Nothing has shipped yet and your money is safe with us.</strong> Reply to this email and we'll either send you a new invoice for the difference or refund what you sent — your choice.</p>`
+    })
+  });
+}
+
+/* The abandoned-checkout note. Says plainly that nothing was taken, so an
+   expired invoice never reads as a charge the buyer has to chase. */
+async function sendInvoiceExpiredEmail(order) {
+  if (!mailer.CONFIGURED || !order || !order.email) return;
+  const total = Number(order.total || 0).toFixed(2);
+  return mailer.sendMail({
+    to: order.email,
+    subject: `Your Ever Nova Life invoice expired — nothing was charged`,
+    text: `The payment window for order ${order.orderId} ($${total}) closed before the payment ` +
+      `arrived, so we've released the order. Nothing was taken from you.\n\n` +
+      `Your items are back in stock and you can order again any time at ${SITE()}.\n\n— The Ever Nova Life team`,
+    html: orderEmailHtml({
+      heading: 'Your invoice expired',
+      intro: `The payment window for order <strong>${escapeHtmlSrv(order.orderId)}</strong> ($${escapeHtmlSrv(total)}) closed before a payment arrived, so we've released it. <strong>Nothing was taken from you.</strong>`,
+      extraHtml: `<p><a href="${SITE()}/products.html" style="display:inline-block;background:#6d28d9;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600">Start a new order</a></p>`
     })
   });
 }

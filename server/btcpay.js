@@ -133,6 +133,29 @@ function getInvoicePaymentMethods(id) {
   return apiGet(`/api/v1/stores/${STORE_ID}/invoices/${encodeURIComponent(id)}/payment-methods`);
 }
 
+/* ---- webhooks: is the pipe that confirms payments actually connected? ----
+   Everything downstream of a payment (order marked paid, buyer emailed, owner
+   told to ship) depends on BTCPay calling us back. If that webhook is missing,
+   pointed at the wrong URL, or subscribed to the wrong events, the store looks
+   exactly like a store nobody buys from — so it has to be inspectable.
+
+   BTCPay has no read-only webhook permission: the key needs
+   btcpay.store.webhooks.canmodifywebhooks even to LIST them. A 403 here is
+   therefore a missing permission, not a missing webhook. */
+async function listWebhooks() {
+  const list = await apiGet(`/api/v1/stores/${STORE_ID}/webhooks`);
+  return Array.isArray(list) ? list : [];
+}
+
+/** Recent delivery attempts for one webhook — this is where a silent failure
+    (our host asleep, a 500, a signature mismatch) actually shows up. */
+async function listWebhookDeliveries(webhookId, { count = 20 } = {}) {
+  const list = await apiGet(
+    `/api/v1/stores/${STORE_ID}/webhooks/${encodeURIComponent(webhookId)}/deliveries?count=${Math.min(50, Math.max(1, count))}`
+  );
+  return Array.isArray(list) ? list : [];
+}
+
 /* ---- Verify the BTCPAY-SIG header on a webhook callback.
    BTCPay signs the RAW request body with your webhook secret
    (HMAC-SHA256) and sends it as "sha256=<hex>". Compare in constant
@@ -159,6 +182,8 @@ module.exports = {
   listInvoices,
   getInvoice,
   getInvoicePaymentMethods,
+  listWebhooks,
+  listWebhookDeliveries,
   CONFIGURED,
   CURRENCY,
   BASE_URL,

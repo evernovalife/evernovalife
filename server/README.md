@@ -139,14 +139,56 @@ The order id + full price breakdown + ship-to are stored in the invoice
 `metadata`, so you can reconcile and ship right from the BTCPay invoice screen
 as well as from `admin.html`.
 
-**Order lifecycle.** The order is recorded as `pending` when the invoice opens.
-`/api/crypto/webhook` then verifies the signature and acts on the state:
-`InvoiceSettled` → paid (points earned, referral rewards granted, buyer
-emailed); `InvoiceExpired` / `InvoiceInvalid` → cancelled, and any loyalty
-points held against the discount are returned.
+**Order lifecycle.** The order is recorded as `pending` when the invoice opens,
+and the buyer is emailed the pay link (a BTCPay invoice expires in minutes, and
+the checkout tab is otherwise the only copy of it). `/api/crypto/webhook` then
+verifies the signature and acts on the state:
+
+| BTCPay event | Order becomes | Who is told |
+|---|---|---|
+| `InvoiceSettled` | `paid` — points earned, referral rewards granted | buyer ("payment received"), you ("PAID — ship it") |
+| `InvoiceExpired` / `InvoiceInvalid`, nothing paid | `cancelled` — held points returned, stock released | buyer ("expired, nothing was charged") |
+| `InvoiceExpired` / `InvoiceInvalid`, **money against it** | `underpaid` — stock and points stay held | buyer ("your payment came in short"), you (action needed) |
+
+That last row is the one that bites. **An expired invoice is not the same as an
+unpaid one:** BTCPay expires an invoice that was underpaid or paid too late, and
+those coins are already in your wallet. Such an order is parked at `underpaid`
+and waits for a human — "Mark paid" in `admin.html` releases it (the buyer sent
+the rest, or you're accepting the shortfall), "Cancel" gives back the stock and
+the loyalty points, and the refund itself is a send from your wallet.
+
+**Two BTCPay store settings decide how often that happens** (Store Settings →
+Checkout):
+
+- *Invoice expires if the full amount has not been paid after N minutes* — the
+  default 15 is tight for on-chain Bitcoin. A buyer withdrawing from an exchange
+  can easily take longer than that before the transaction is even broadcast.
+  30–60 is kinder.
+- *Payment tolerance* — 0% means a wallet or exchange that deducts its network
+  fee from the amount sent leaves the order unpaid. 1–2% absorbs that.
+
+And one store *wallet* setting: the checkout is labelled **Bitcoin / Lightning**
+throughout the site, so a Lightning node has to actually be connected in BTCPay
+(Store → Lightning). With on-chain as the only method, every buyer is subject to
+mempool timing inside that expiry window — check an invoice's `paymentMethods`:
+`["BTC-CHAIN"]` alone means Lightning is off.
 
 > Volatility tip: set your BTCPay store to auto-convert or settle in a
 > stablecoin if you don't want to hold BTC.
+
+**Is the webhook actually connected?** `GET /api/admin/btcpay/webhooks` (and the
+Webhook card in admin.html → BTCPay) lists what BTCPay has registered, whether
+one points at this server, whether it covers `InvoiceSettled`, and how the last
+20 deliveries went. Nothing confirms automatically without it, and it fails
+silently — a store with a dead webhook looks exactly like a store with no
+customers. Listing webhooks needs `btcpay.store.webhooks.canmodifywebhooks` on
+the API key (BTCPay has no read-only variant).
+
+**Notifications need both `SMTP_USER`/`SMTP_PASS` and `ADMIN_EMAIL`.** Without
+the first, buyers get no pay link and no receipt; without the second, *you* are
+never told an order happened. `GET /api/health` reports both (`email`,
+`ownerAlerts`), the admin dashboard warns when either is off, and
+`GET /api/admin/email-test` names the inbox owner alerts are going to.
 
 ## Zelle — manual bank transfer (US only)
 

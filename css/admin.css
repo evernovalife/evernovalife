@@ -265,6 +265,9 @@ body.adm {
 .pill.paid { background: rgba(52, 211, 153, 0.14); color: var(--accent-mint); border-color: rgba(52, 211, 153, 0.3); }
 .pill.pending { background: rgba(34, 211, 238, 0.12); color: var(--accent-cyan); border-color: rgba(34, 211, 238, 0.28); }
 .pill.awaiting_payment { background: rgba(224, 165, 42, 0.14); color: var(--accent-amber); border-color: rgba(224, 165, 42, 0.32); }
+/* Money arrived but not all of it — louder than "awaiting", because the store
+   is holding the buyer's coins as well as the stock. */
+.pill.underpaid { background: rgba(244, 63, 94, 0.16); color: var(--accent-coral); border-color: rgba(244, 63, 94, 0.4); }
 .pill.cancelled, .pill.expired { background: rgba(244, 63, 94, 0.12); color: var(--accent-coral); border-color: rgba(244, 63, 94, 0.28); }
 .pill.admin { background: rgba(168, 85, 247, 0.16); color: var(--accent-violet); border-color: rgba(168, 85, 247, 0.34); }
 /* A sandbox order that never carried money — struck through so it cannot be

@@ -39,20 +39,38 @@ process.env.CRON_KEY = 'test-cron-crypto';
 process.env.BTCPAY_WEBHOOK_SECRET = 'test-webhook-secret';
 process.env.SUBSCRIPTION_INPROCESS_CRON = '0';   // no background timer during tests
 process.env.SITE_URL = 'https://evernovalife.com';
+// An admin ACCOUNT (not the key) — the underpaid tests need someone who can
+// settle a parked order, and the key path is covered in authz.test.js.
+process.env.ADMIN_EMAILS = 'boss-crypto@example.com';
 delete process.env.ADMIN_KEY;
 
 /* The stub gateway. Started before the app is required, because btcpay.js
-   reads BTCPAY_URL at module load. */
+   reads BTCPAY_URL at module load.
+   POST … /invoices  → opens one, and is what `invoices` counts.
+   GET  … /invoices/:id → reads one back, including how much has been paid
+   against it (paidAmounts below). Reads are NOT counted as openings. */
 const invoices = [];
+const paidAmounts = new Map();          // invoiceId → paidAmount, as BTCPay reports it
 const btcpayStub = http.createServer((req, res) => {
   let raw = '';
   req.on('data', c => (raw += c));
   req.on('end', () => {
+    const reply = obj => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(obj));
+    };
+    const read = /\/invoices\/([^/?]+)/.exec(req.url);
+    if (req.method === 'GET' && read) {
+      const id = decodeURIComponent(read[1]);
+      return reply({
+        id, status: 'Expired', checkoutLink: `https://pay.test/i/${id}`,
+        paidAmount: paidAmounts.has(id) ? paidAmounts.get(id) : '0'
+      });
+    }
     const payload = JSON.parse(raw || '{}');
     invoices.push({ url: req.url, auth: req.headers.authorization, payload });
     const id = 'inv-' + invoices.length;
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ id, checkoutLink: `https://pay.test/i/${id}`, status: 'New' }));
+    reply({ id, checkoutLink: `https://pay.test/i/${id}`, status: 'New' });
   });
 });
 
@@ -111,6 +129,20 @@ async function buyer() {
   return r.body;
 }
 
+/* The one account in ADMIN_EMAILS. Registered on first use, signed in after. */
+let _admin = null;
+async function admin() {
+  if (_admin) return _admin;
+  const creds = { email: 'boss-crypto@example.com', password: 'password123' };
+  const r = await api('/api/auth/register', {
+    method: 'POST', body: { firstName: 'Boss', lastName: 'Admin', ...creds }
+  });
+  const got = r.status === 201 ? r.body : (await api('/api/auth/login', { method: 'POST', body: creds })).body;
+  assert.ok(got && got.user && got.user.isAdmin, 'the admin account has admin powers');
+  _admin = got;
+  return _admin;
+}
+
 const SHIPPING = {
   name: 'Jane Doe', address: '123 Science Park Dr',
   city: 'Boston', state: 'MA', postalCode: '02115', countryCode: 'US',
@@ -155,6 +187,22 @@ test('the BTCPay invoice is opened for the server-priced total', async () => {
   assert.match(sent.auth, /^token test-key$/, 'Greenfield API-key auth scheme');
   assert.equal(Number(sent.payload.amount), res.body.total, 'invoice amount = the total we priced');
   assert.equal(sent.payload.metadata.orderId, res.body.orderId, 'our order id rides on the invoice');
+});
+
+/* Every message after checkout — receipt, expiry notice, "you paid short" — is
+   addressed from the stored order, so a blank email there is a buyer who can
+   never be contacted again about their own order. */
+test('the order always carries an address to write to, even with no email at checkout', async () => {
+  const b = await buyer();
+  const res = await api('/api/crypto/checkout', {
+    method: 'POST', token: b.token,
+    body: { items: [{ id: productId, quantity: 1 }], shipping: SHIPPING }   // no email field
+  });
+  assert.equal(res.status, 201);
+  const mine = store.listOrders(b.user.id).find(o => o.orderId === res.body.orderId);
+  assert.equal(mine.email, b.user.email, 'it falls back to the account address');
+  assert.equal(invoices[invoices.length - 1].payload.metadata.buyerEmail, b.user.email,
+    'and BTCPay is told the same address');
 });
 
 test('the order opens as pending and only the webhook can pay it', async () => {
@@ -220,6 +268,86 @@ test('held points come back when the invoice expires — exactly once', async ()
   await webhook(evt);
   await webhook(evt);
   assert.equal(loyalty.getBalance(b.user.id), afterHold + held, 'repeat deliveries do not double-refund');
+});
+
+/* ============================================================
+   2b) An expired invoice with money against it is NOT a write-off
+   BTCPay expires an underpaid (or late-paid) invoice, and those coins
+   are already in the wallet. Cancelling that silently is how a paying
+   customer ends up with nothing and nobody is told, so the order is
+   parked as `underpaid` with its stock and points still held.
+   ============================================================ */
+test('an underpaid expiry parks the order instead of cancelling it', async () => {
+  const b = await buyer();
+  loyalty.earn(b.user.id, 1000, 'test seed', {});
+  const res = await openOrder(b.token, { pointsToRedeem: 500 });
+  const held = res.body.pointsRedeemed;
+  assert.ok(held > 0, 'points were held against the invoice');
+  const afterHold = loyalty.getBalance(b.user.id);
+
+  // The stub answers getInvoice with a partial paidAmount for this id.
+  paidAmounts.set(res.body.invoiceId, '12.34');
+  const evt = JSON.stringify({
+    type: 'InvoiceExpired', invoiceId: res.body.invoiceId,
+    partiallyPaid: true, metadata: { orderId: res.body.orderId }
+  });
+
+  const ok = await webhook(evt);
+  assert.equal(ok.status, 200);
+
+  const mine = store.listOrders(b.user.id).find(o => o.orderId === res.body.orderId);
+  assert.equal(mine.status, 'underpaid', 'money arrived, so the order is not written off');
+  assert.equal(mine.paidAmount, 12.34, 'what actually landed is recorded on the order');
+  assert.equal(loyalty.getBalance(b.user.id), afterHold,
+    'the points stay held — releasing them would let the buyer spend a discount we already gave');
+
+  // A redelivery must not turn the parked order into a cancellation.
+  await webhook(evt);
+  assert.equal(
+    store.listOrders(b.user.id).find(o => o.orderId === res.body.orderId).status, 'underpaid',
+    'a repeat delivery leaves the decision with the human'
+  );
+
+  // …and admin can still settle it either way. Marking it paid is the "buyer
+  // sent the rest / we accept the shortfall" route out.
+  const boss = await admin();
+  const paidRes = await api('/api/admin/orders/' + res.body.orderId + '/paid', {
+    method: 'POST', token: boss.token, body: { paymentRef: 'topped up' }
+  });
+  assert.equal(paidRes.status, 200);
+  assert.equal(
+    store.listOrders(b.user.id).find(o => o.orderId === res.body.orderId).status, 'paid',
+    'an underpaid order can still be released by hand'
+  );
+});
+
+test('an expiry with nothing paid still cancels, and the paid amount is read from BTCPay', async () => {
+  const b = await buyer();
+  const res = await openOrder(b.token);
+  paidAmounts.set(res.body.invoiceId, '0');       // BTCPay says: nothing landed
+
+  const ok = await webhook(JSON.stringify({
+    type: 'InvoiceExpired', invoiceId: res.body.invoiceId, metadata: { orderId: res.body.orderId }
+  }));
+  assert.equal(ok.status, 200);
+  assert.equal(
+    store.listOrders(b.user.id).find(o => o.orderId === res.body.orderId).status, 'cancelled',
+    'an abandoned checkout is still released'
+  );
+});
+
+test('a partial-payment flag with no readable amount is parked, not cancelled', async () => {
+  const b = await buyer();
+  const res = await openOrder(b.token);
+  // No invoiceId on the event → the amount cannot be looked up. The flag alone
+  // has to be enough, because writing off a paid order is the costly mistake.
+  const ok = await webhook(JSON.stringify({
+    type: 'InvoiceExpired', partiallyPaid: true, metadata: { orderId: res.body.orderId }
+  }));
+  assert.equal(ok.status, 200);
+  const mine = store.listOrders(b.user.id).find(o => o.orderId === res.body.orderId);
+  assert.equal(mine.status, 'underpaid', 'unknown-but-partial is still a human decision');
+  assert.equal(mine.paidAmount, undefined, 'no amount is invented');
 });
 
 /* ============================================================

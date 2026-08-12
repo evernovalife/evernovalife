@@ -1319,6 +1319,9 @@ body.coa-lightbox-open { overflow: hidden; }
 .order-status.pending { background: rgba(251,146,60,0.18); color: var(--accent-amber); }
 .order-status.cancelled { background: rgba(148,163,184,0.18); color: #94a3b8; }
 .order-status.awaiting-payment { background: rgba(167,139,250,0.18); color: var(--accent-purple); }
+/* Crypto payment landed short of the total — we're holding their money, so the
+   badge reads as something to act on, not as a quiet "pending". */
+.order-status.underpaid { background: rgba(244,63,94,0.18); color: var(--accent-coral, #f43f5e); }
 
 /* ============================================================
    LOYALTY POINTS + REFERRAL
