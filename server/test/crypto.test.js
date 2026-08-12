@@ -351,6 +351,66 @@ test('a partial-payment flag with no readable amount is parked, not cancelled', 
 });
 
 /* ============================================================
+   2c) Fulfilment — only a paid order ships
+   The last step of a sale, and the only one with no automation behind it.
+   Shipping goods against an order that isn't paid is the expensive
+   mistake, so the endpoint refuses everything except `paid`.
+   ============================================================ */
+test('only a paid order can be marked shipped', async () => {
+  const b = await buyer();
+  const boss = await admin();
+  const res = await openOrder(b.token);
+  const ship = () => api('/api/admin/orders/' + res.body.orderId + '/shipped', {
+    method: 'POST', token: boss.token, body: { carrier: 'USPS', tracking: '9400111' }
+  });
+
+  const tooEarly = await ship();
+  assert.equal(tooEarly.status, 400, 'a pending order cannot ship');
+  assert.match(tooEarly.body.error, /not paid/i);
+
+  // Underpaid is refused with its own reason: the house rule is full payment.
+  paidAmounts.set(res.body.invoiceId, '5.00');
+  await webhook(JSON.stringify({
+    type: 'InvoiceExpired', invoiceId: res.body.invoiceId,
+    partiallyPaid: true, metadata: { orderId: res.body.orderId }
+  }));
+  const shortPaid = await ship();
+  assert.equal(shortPaid.status, 400, 'a short-paid order cannot ship either');
+  assert.match(shortPaid.body.error, /full amount/i);
+
+  // Pay it in full, and it goes out.
+  await api('/api/admin/orders/' + res.body.orderId + '/paid', { method: 'POST', token: boss.token });
+  const ok = await ship();
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.alreadyShipped, false);
+
+  const mine = store.listOrders(b.user.id).find(o => o.orderId === res.body.orderId);
+  assert.equal(mine.status, 'shipped');
+  assert.equal(mine.carrier, 'USPS');
+  assert.equal(mine.tracking, '9400111');
+  assert.ok(mine.shippedAt, 'the send date is recorded');
+
+  // Re-posting corrects a mistyped number without re-announcing the shipment.
+  const again = await api('/api/admin/orders/' + res.body.orderId + '/shipped', {
+    method: 'POST', token: boss.token, body: { carrier: 'USPS', tracking: '9400222' }
+  });
+  assert.equal(again.body.alreadyShipped, true, 'a second post is an edit, not a new shipment');
+  assert.equal(
+    store.listOrders(b.user.id).find(o => o.orderId === res.body.orderId).tracking, '9400222',
+    'the tracking number was corrected'
+  );
+});
+
+test('an ordinary customer cannot mark their own order shipped', async () => {
+  const b = await buyer();
+  const res = await openOrder(b.token);
+  const mine = await api('/api/admin/orders/' + res.body.orderId + '/shipped', {
+    method: 'POST', token: b.token, body: {}
+  });
+  assert.equal(mine.status, 401, 'fulfilment is an admin action');
+});
+
+/* ============================================================
    3) Auto-ship: a due plan is INVOICED, never charged
    ============================================================ */
 test('a due plan is invoiced, and the shipment stays unpaid until settled', async () => {

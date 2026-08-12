@@ -24,6 +24,7 @@ const store = require('./store.js');
 const loyalty = require('./loyalty.js');
 const subscriptions = require('./subscriptions.js');
 const productStore = require('./products.js');
+const shippingRates = require('./shipping.js');
 const mailer = require('./email.js');
 
 const app = express();
@@ -353,12 +354,15 @@ app.post('/api/subscriptions', auth.requireAuth, async (req, res) => {
    read off the catalog, and guests reach checkout too. */
 app.post('/api/quote', (req, res) => {
   try {
-    const order = buildOrder((req.body && req.body.items) || []);
+    const body = req.body || {};
+    const order = buildOrder(body.items || [], { shippingMethod: body.shippingMethod });
     res.json({
       success: true,
       items: order.items,          // [{ id, name, unitPrice, quantity, lineTotal }]
       subtotal: order.subtotal,
       shipping: order.shipping,
+      shippingMethod: order.shippingMethod,
+      shippingLabel: order.shippingLabel,
       tax: order.tax,
       total: order.total
     });
@@ -421,6 +425,45 @@ app.post('/api/products', requireAdmin, (req, res) => {
   try {
     const product = productStore.addProduct(req.body || {});
     res.status(201).json({ success: true, product });
+  } catch (err) {
+    res.status(err.status || 400).json({ error: err.message });
+  }
+});
+
+/* ============================================================
+   SHIPPING RATES
+   The fee used to be a constant in three files. Now it is data the
+   owner edits, and the checkout offers exactly what is enabled.
+   Public GET (checkout has to show the options to guests too);
+   an admin sees the disabled ones as well, since those are what
+   they are about to turn on.
+   ============================================================ */
+app.get('/api/shipping', (req, res) => {
+  const admin = isAdminRequest(req);
+  res.json({
+    success: true,
+    methods: admin ? shippingRates.listAll() : shippingRates.listEnabled(),
+    // Never let the browser guess which one is preselected: it decides the
+    // fee, so the server names the default.
+    defaultMethod: (shippingRates.quote(null, 0).method || {}).id || ''
+  });
+});
+
+/* Add or edit one. Same route for both: the id is the key, and a blank id on a
+   new method is derived from its name. */
+app.post('/api/shipping', requireAdmin, (req, res) => {
+  try {
+    const method = shippingRates.upsert(req.body || {});
+    res.json({ success: true, method, methods: shippingRates.listAll() });
+  } catch (err) {
+    res.status(err.status || 400).json({ error: err.message });
+  }
+});
+
+app.delete('/api/shipping/:id', requireAdmin, (req, res) => {
+  try {
+    const removed = shippingRates.remove(req.params.id);
+    res.json({ success: true, removed, methods: shippingRates.listAll() });
   } catch (err) {
     res.status(err.status || 400).json({ error: err.message });
   }
@@ -747,6 +790,27 @@ function releaseOrderStock(orderId, reserved) {
   }
 }
 
+/* An order that was written off and then turns out to be a sale after all — a
+   webhook that arrived late, or an owner marking a cancelled order paid because
+   the money did land — had its units put back on the shelf. Now that it ships,
+   take them off again, or the count is one too high forever.
+
+   A shortfall is stamped, not thrown: the money is already in and the order is
+   already paid, so the honest outcome is a flagged order rather than a refused
+   payment. */
+function retakeStockIfReleased(order) {
+  if (!order || !order.stockReleased) return;
+  const held = Array.isArray(order.stockReserved) ? order.stockReserved : [];
+  if (!held.length) return;
+  try {
+    productStore.reserveStock(held.map(l => ({ id: l.id, quantity: l.quantity })));
+    store.updateOrderStatus(order.orderId, null, { stockReleased: false });
+  } catch (e) {
+    console.error('[stock] could not re-take stock for ' + order.orderId + ':', e.message);
+    store.updateOrderStatus(order.orderId, null, { stockShort: true });
+  }
+}
+
 /* Referral reward — granted once, on the referred buyer's first paid order.
    Credits loyalty points to BOTH the referrer and the new customer, then (if
    email is configured) tells the referrer. Safe to call on every paid order:
@@ -800,6 +864,9 @@ function buildOrderRecord({ orderId, order, method, status, email, shipping, tra
     subtotal: order.subtotal,
     discount: order.discount || 0,
     shippingCost: order.shipping,
+    // Which service was bought, so the packing queue knows how fast it has to
+    // go out — a fee on its own doesn't say that.
+    ...(order.shippingLabel ? { shippingMethod: order.shippingMethod, shippingLabel: order.shippingLabel } : {}),
     tax: order.tax,
     total: order.total,
     email: email || '',
@@ -836,7 +903,8 @@ app.post('/api/crypto/checkout', auth.requireAuth, async (req, res) => {
     // rather than spending-on-settle is what stops the same balance funding
     // two open invoices at once.
     const discount = plannedDiscount(req.user, body.pointsToRedeem);
-    const order = buildOrder(body.items, { discount });         // authoritative price
+    // The browser names the service; shipping.js sets what it costs.
+    const order = buildOrder(body.items, { discount, shippingMethod: body.shippingMethod });
     const orderId = newOrderId();
 
     /* Resolve the buyer's email ONCE and store that, rather than whatever the
@@ -1078,6 +1146,7 @@ function markOrderPaid(orderId, patch) {
     ...(patch || {})
   });
   if (!upd || upd.previousStatus === 'paid') return upd;
+  retakeStockIfReleased(upd.order);
   if (upd.userId === store.GUEST_KEY) return upd;      // guest order — no account to credit
   try {
     const o = upd.order;
@@ -1117,7 +1186,7 @@ app.post('/api/zelle/checkout', auth.requireAuth, async (req, res) => {
     // No points discount here: the money arrives by hand, so there's no charge
     // to reduce, and reserving points against an order that may never be paid
     // would strand them. The UI hides Zelle while points are being redeemed.
-    const order = buildOrder(body.items);                       // authoritative price
+    const order = buildOrder(body.items, { shippingMethod: body.shippingMethod });
     zelle.assertPayable({ order, shipping: body.shipping });     // US-only + send-limit guards
 
     const orderId = newOrderId();
@@ -1259,13 +1328,19 @@ app.get('/api/admin/btcpay', requireAdmin, async (req, res) => {
       itemDesc: meta.itemDesc || '',
       localStatus: local ? local.status : (meta.orderId ? 'missing' : ''),
       paidAmount: inv.paidAmount || '',
+      /* An invoice with no orderId was raised inside BTCPay itself, not through
+         checkout — a test, or a bill sent by hand. There is no order behind it
+         to release, so it is labelled rather than flagged. */
+      unlinked: !meta.orderId,
       /* The rows worth acting on. Two different failures, one flag:
            · BTCPay says the money settled, our store still says unpaid — a
              webhook that never arrived. The order needs releasing by hand.
            · money reached the wallet but the invoice died anyway (underpaid, or
              paid too late). Nobody is owed a shipment yet, but somebody is owed
-             either the rest of the goods or their coins back. */
-      needsAttention: !localPaid && (settled || Number(inv.paidAmount) > 0)
+             either the rest of the goods or their coins back.
+         Both need an order to act ON: without an orderId there is nothing to
+         mark paid, and offering the button anyway just fails the request. */
+      needsAttention: Boolean(meta.orderId) && !localPaid && (settled || Number(inv.paidAmount) > 0)
     };
   });
 
@@ -1385,6 +1460,48 @@ app.post('/api/admin/orders/:orderId/paid', requireAdmin, (req, res) => {
   sendPaymentConfirmedEmail(upd.order)
     .catch(err => console.error('[payment confirmed email] failed:', err.message));
   res.json({ success: true, order: upd.order });
+});
+
+/* ---- ADMIN: the order has left the building ----
+   The last step of a sale, and the only one that isn't automatic: a paid order
+   sits in the "To ship" queue until someone packs it and records how it went
+   out. Recording it here is what tells the customer, so the tracking number
+   reaches them instead of living in a courier's website.
+
+   Only a PAID order can ship. Anything else is either not a sale yet or was
+   written off, and shipping goods against it is the expensive kind of mistake.
+   Re-posting on an already-shipped order updates the tracking (a courier
+   number typed wrong is a normal thing to fix) but does not re-send the email. */
+app.post('/api/admin/orders/:orderId/shipped', requireAdmin, (req, res) => {
+  const existing = store.listAllOrders().find(o => o.orderId === req.params.orderId);
+  if (!existing) return res.status(404).json({ error: 'No order with that reference.' });
+
+  const status = String(existing.status).toLowerCase();
+  if (status !== 'paid' && status !== 'shipped') {
+    return res.status(400).json({
+      error: status === 'underpaid'
+        ? 'That order is short-paid, not paid. We only ship on the full amount — collect the rest or cancel and refund it.'
+        : `That order is "${existing.status}", not paid. Nothing ships until the money is in.`
+    });
+  }
+
+  const body = req.body || {};
+  const carrier = String(body.carrier || '').trim().slice(0, 60);
+  const tracking = String(body.tracking || '').trim().slice(0, 120);
+  const patch = {
+    shippedAt: existing.shippedAt || new Date().toISOString(),
+    shippedBy: (req.user && req.user.email) || 'admin key',
+    ...(carrier ? { carrier } : {}),
+    ...(tracking ? { tracking } : {})
+  };
+  const upd = store.updateOrderStatus(req.params.orderId, 'shipped', patch);
+  const alreadyShipped = status === 'shipped';
+
+  if (!alreadyShipped) {
+    sendShippedEmail(upd.order)
+      .catch(err => console.error('[shipped email] failed:', err.message));
+  }
+  res.json({ success: true, alreadyShipped, order: upd && upd.order });
 });
 
 /* ---- ADMIN: cancel an order that was never paid ----
@@ -1624,9 +1741,12 @@ async function notifyAdminOfUnderpaidOrder({ orderId, order, paid, invoiceId }) 
       `Order:     ${orderId}\nInvoiced:  $${total}\nReceived:  ${got}\nStill due: ${short}\n` +
       `Buyer:     ${(order && order.email) || '(no email)'}\nItems:     ${itemLines(order)}\n` +
       (link ? `Invoice:   ${link}\n` : '') + `\n` +
-      `The stock and any loyalty points stay held until you decide. In ${SITE()}/admin.html:\n` +
-      `  · "Mark paid" if the buyer sent the rest, or you're accepting the shortfall — that ships it.\n` +
-      `  · "Cancel" to release the stock and refund the points. Refund the crypto from your wallet.\n`,
+      `Nothing ships on a short payment. The stock and any loyalty points stay held until you decide. ` +
+      `In ${SITE()}/admin.html:\n` +
+      `  · "Cancel & refund" — the normal outcome. Releases the stock and the points; send the ` +
+      `${got} back from your wallet.\n` +
+      `  · Collect the difference first: raise an invoice in BTCPay for ${short} with ${orderId} in the ` +
+      `description and send the buyer the link. Only once that clears should you mark the order paid.\n`,
     html: orderEmailHtml({
       heading: 'Underpaid crypto order — action needed',
       intro: `A crypto invoice expired with money against it. The payment is in your wallet, the order is <strong>not paid</strong>, and nothing has shipped.`,
@@ -1638,9 +1758,9 @@ async function notifyAdminOfUnderpaidOrder({ orderId, order, paid, invoiceId }) 
         <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Buyer</td><td>${escapeHtmlSrv((order && order.email) || '(no email)')}</td></tr>
         <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Items</td><td>${escapeHtmlSrv(itemLines(order))}</td></tr>
       </table>`,
-      extraHtml: `<p style="font-size:14px">The stock and any loyalty points stay held until you decide:<br>
-        · <strong>Mark paid</strong> if the buyer sent the rest, or you're accepting the shortfall — that ships it.<br>
-        · <strong>Cancel</strong> to release the stock and refund the points, then refund the crypto from your wallet.</p>
+      extraHtml: `<p style="font-size:14px"><strong>Nothing ships on a short payment.</strong> The stock and any loyalty points stay held until you decide:<br>
+        · <strong>Cancel &amp; refund</strong> — the normal outcome. Releases the stock and the points; send the ${escapeHtmlSrv(got)} back from your wallet.<br>
+        · <strong>Collect the difference first:</strong> raise an invoice in BTCPay for ${escapeHtmlSrv(short)} with ${escapeHtmlSrv(orderId)} in the description, send the buyer the link, and only mark this order paid once that clears.</p>
         <p><a href="${SITE()}/admin.html" style="display:inline-block;background:#6d28d9;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600">Open admin</a>
         ${link ? ` &nbsp; <a href="${escapeHtmlSrv(link)}" style="color:#6d28d9">See the invoice</a>` : ''}</p>`
     })
@@ -1661,14 +1781,44 @@ async function sendUnderpaidEmail({ order, orderId, paid }) {
     text: `Thanks for paying — but the payment we received for order ${orderId} was ${got}, ` +
       `and the invoice was for $${total}${short}. That usually happens when a wallet or exchange ` +
       `takes its network fee out of the amount sent, or when the invoice expired mid-payment.\n\n` +
-      `Nothing has shipped yet and your money is safe with us. Reply to this email and we'll either ` +
-      `send you a new invoice for the difference or refund what you sent — your choice.\n\n` +
+      `We only ship an order once it is paid in full, so this one is on hold — nothing has shipped, ` +
+      `and your money is safe with us. Reply to this email and we'll either send you a fresh invoice ` +
+      `for the difference so the order can go out, or refund what you sent. Your choice, and there's ` +
+      `no rush either way.\n\n` +
       `— The Ever Nova Life team`,
     html: orderEmailHtml({
       heading: 'Your payment came in short',
       intro: `Thanks for paying. The payment we received for order <strong>${escapeHtmlSrv(orderId)}</strong> was <strong>${escapeHtmlSrv(got)}</strong>, and the invoice was for <strong>$${escapeHtmlSrv(total)}</strong>${escapeHtmlSrv(short)}.`,
       extraHtml: `<p style="font-size:14px">That usually happens when a wallet or exchange takes its network fee out of the amount sent, or when the invoice expired part-way through the payment.</p>
-        <p style="font-size:14px"><strong>Nothing has shipped yet and your money is safe with us.</strong> Reply to this email and we'll either send you a new invoice for the difference or refund what you sent — your choice.</p>`
+        <p style="font-size:14px">We only ship an order once it is paid in full, so this one is on hold. <strong>Nothing has shipped and your money is safe with us.</strong> Reply to this email and we'll either send you a fresh invoice for the difference so the order can go out, or refund what you sent — your choice, and there's no rush either way.</p>`
+    })
+  });
+}
+
+/* The only email the customer actually waits for. Carrier and tracking are
+   optional — plenty of small shipments go out without a number — so the email
+   works either way rather than refusing to send without one. */
+async function sendShippedEmail(order) {
+  if (!mailer.CONFIGURED || !order || !order.email) return;
+  const addr = order.shippingAddress || null;
+  const track = [order.carrier, order.tracking].filter(Boolean).join(' · ');
+  return mailer.sendMail({
+    to: order.email,
+    subject: `Your Ever Nova Life order ${order.orderId} has shipped`,
+    text: `Good news — order ${order.orderId} is on its way.\n\n` +
+      `Items:  ${itemLines(order)}\n` +
+      (track ? `Tracking: ${track}\n` : '') +
+      `\nShipping to:\n${addressText(addr)}\n\n` +
+      `Reply to this email if anything arrives damaged or doesn't match the order.\n\n— The Ever Nova Life team`,
+    html: orderEmailHtml({
+      heading: 'Your order is on its way',
+      intro: `Order <strong>${escapeHtmlSrv(order.orderId)}</strong> has shipped.`,
+      rowsHtml: `<table style="border-collapse:collapse;margin:14px 0;font-size:15px">
+        <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Items</td><td>${escapeHtmlSrv(itemLines(order))}</td></tr>
+        ${track ? `<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Tracking</td><td><strong>${escapeHtmlSrv(track)}</strong></td></tr>` : ''}
+      </table>`,
+      extraHtml: `<p style="font-size:14px;white-space:pre-line;background:#f9fafb;padding:12px;border-radius:8px">${escapeHtmlSrv(addressText(addr))}</p>
+        <p style="color:#6b7280;font-size:14px">Reply to this email if anything arrives damaged or doesn't match the order.</p>`
     })
   });
 }

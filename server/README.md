@@ -84,6 +84,10 @@ The server also serves the static site, so open **http://localhost:4242/checkout
 | GET    | `/api/admin/orders`    | Admin: all orders (`?status=awaiting_payment`)   |
 | POST   | `/api/admin/orders/:id/paid`   | Admin: confirm a manual payment landed   |
 | POST   | `/api/admin/orders/:id/cancel` | Admin: cancel an order that was never paid |
+| POST   | `/api/admin/orders/:id/shipped` | Admin: record the shipment (carrier + tracking) and email the customer |
+| GET    | `/api/shipping`        | Delivery methods offered at checkout (admins also see disabled ones) |
+| POST   | `/api/shipping`        | Admin: add or edit a delivery method |
+| DELETE | `/api/shipping/:id`    | Admin: remove a delivery method |
 | POST   | `/api/auth/register`   | Create an account (bcrypt) → returns a JWT       |
 | POST   | `/api/auth/login`      | Verify email + password → returns a JWT          |
 | GET    | `/api/auth/me`         | Current user (needs `Authorization: Bearer …`)   |
@@ -148,7 +152,7 @@ verifies the signature and acts on the state:
 |---|---|---|
 | `InvoiceSettled` | `paid` — points earned, referral rewards granted | buyer ("payment received"), you ("PAID — ship it") |
 | `InvoiceExpired` / `InvoiceInvalid`, nothing paid | `cancelled` — held points returned, stock released | buyer ("expired, nothing was charged") |
-| `InvoiceExpired` / `InvoiceInvalid`, **money against it** | `underpaid` — stock and points stay held | buyer ("your payment came in short"), you (action needed) |
+| `InvoiceExpired` / `InvoiceInvalid`, **money against it** | `underpaid` — stock and points stay held, and it can never ship in this state | buyer ("your payment came in short"), you (action needed) |
 
 That last row is the one that bites. **An expired invoice is not the same as an
 unpaid one:** BTCPay expires an invoice that was underpaid or paid too late, and
@@ -175,6 +179,33 @@ mempool timing inside that expiry window — check an invoice's `paymentMethods`
 
 > Volatility tip: set your BTCPay store to auto-convert or settle in a
 > stablecoin if you don't want to hold BTC.
+
+**Shipping fees are data, not code.** `server/shipping.js` holds the delivery
+methods (name, fee, delivery estimate, free-over threshold, offered yes/no) on
+the DATA_DIR disk, seeded once with the three rates the site has always
+published — Standard $9.99 free over $100 enabled, Expedited $19.99 and
+Overnight $34.99 **disabled**, since those cost real money to honour and are the
+owner's call to switch on. Edit them in **admin.html → Shipping rates**; the
+change applies to the next checkout with no deploy.
+
+The browser sends a method **id**, never a fee: `pricing.js` looks up what that
+method costs, so a tampered client can at worst pick a cheaper service the store
+already offers. An unknown or since-disabled id falls back to the cheapest
+enabled method rather than failing a checkout. Checkout is never left with
+nothing to charge — the last enabled method can't be disabled or deleted. The
+public table on `shipping.html` renders from the same list, so it can't advertise
+a rate the checkout doesn't charge.
+
+**Full payment or nothing.** A short payment never becomes a sale on its own,
+and `/api/admin/orders/:id/shipped` refuses an `underpaid` order outright. The
+two ways out are: cancel and refund the coins from your wallet (the normal one),
+or raise a fresh BTCPay invoice for the difference with the order reference in
+its description and only mark the order paid once that clears.
+
+**Shipping.** A paid order lands in **admin.html → To ship**: one card per
+parcel with the address, the items and a printable packing slip (no prices on
+it). Recording carrier + tracking marks it `shipped` and emails the customer;
+re-posting corrects a mistyped number without emailing again.
 
 **Is the webhook actually connected?** `GET /api/admin/btcpay/webhooks` (and the
 Webhook card in admin.html → BTCPay) lists what BTCPay has registered, whether

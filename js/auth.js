@@ -223,8 +223,12 @@
     if (window.wishlist && typeof window.wishlist.count === 'function') {
       setNum('statWishlist', window.wishlist.count());
     }
+    /* Every status a sale can be in AFTER the money landed — an order that has
+       shipped is still money they spent, and dropping it once it left the
+       warehouse would make this total shrink over time. */
+    const PAID_STATES = ['paid', 'shipped', 'delivered'];
     const spent = orders
-      .filter(o => String(o.status).toLowerCase() === 'paid')
+      .filter(o => PAID_STATES.includes(String(o.status).toLowerCase()))
       .reduce((sum, o) => sum + (Number(o.total) || 0), 0);
     setNum('statSpent', money(spent));
 
@@ -235,9 +239,13 @@
     }
     box.innerHTML = orders.slice(0, 10).map(o => {
       const b = statusBadge(o.status);
+      // The tracking number is the whole reason someone opens this page after
+      // ordering, so it sits on the row rather than in an email they may have
+      // lost.
+      const track = [o.carrier, o.tracking].filter(Boolean).join(' · ');
       return `<div class="order-row">
         <div><strong>${esc(o.orderId)}</strong> <span class="text-muted">${esc(orderDate(o.createdAt))}</span></div>
-        <div class="text-muted">${esc(orderItemsSummary(o.items))}</div>
+        <div class="text-muted">${esc(orderItemsSummary(o.items))}${track ? `<br><span class="text-muted">Tracking: ${esc(track)}</span>` : ''}</div>
         <div>${esc(money(o.total))}</div>
         <span class="order-status ${b.cls}">${esc(b.label)}</span>
       </div>`;

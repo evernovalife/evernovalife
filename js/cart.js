@@ -1,7 +1,10 @@
 /* ============================================================
    EVER NOVA LIFE — Shopping Cart
    localStorage persistence · badge sync · toast notifications
-   Pricing: free shipping over $100, else $9.99 · 8% tax
+   Pricing: shipping comes from the server's rate table (owner-editable
+   in admin), 8% tax. The figures below are only what the cart shows
+   before the server has answered — POST /api/quote is authoritative,
+   and the invoice is built from the server's own arithmetic.
    ============================================================ */
 
 const CART_KEY = 'evernovalife_cart';
@@ -9,6 +12,26 @@ const WISHLIST_KEY = 'evernovalife_wishlist';
 const FREE_SHIP_THRESHOLD = 100;
 const SHIP_FLAT = 9.99;
 const TAX_RATE = 0.08;
+
+/* The shipping method the buyer picked, and the live rate table behind it.
+   Set by checkout.html once GET /api/shipping answers; until then the cart
+   falls back to the flat figures above, which is what it always showed. */
+let SHIP_RATES = null;      // [{ id, name, price, eta, freeOver }]
+let SHIP_CHOICE = '';       // method id
+
+function setShippingRates(methods, chosenId) {
+  SHIP_RATES = Array.isArray(methods) && methods.length ? methods : null;
+  if (chosenId) SHIP_CHOICE = String(chosenId);
+}
+function setShippingChoice(id) { SHIP_CHOICE = String(id || ''); }
+function shippingChoice() { return SHIP_CHOICE; }
+/* The rate row in force right now: the chosen method, or the cheapest offered —
+   the same fallback the server applies, so the two agree. */
+function currentShippingRate() {
+  if (!SHIP_RATES) return null;
+  return SHIP_RATES.find(m => m.id === SHIP_CHOICE) ||
+    SHIP_RATES.slice().sort((a, b) => a.price - b.price)[0] || null;
+}
 
 /* ------------------------------------------------------------
    Per-account storage scope
@@ -229,7 +252,19 @@ class Cart {
 
   getShipping() {
     if (this.items.length === 0) return 0;
+    const rate = currentShippingRate();
+    if (rate) {
+      const free = Number(rate.freeOver) > 0 && this.getSubtotal() >= Number(rate.freeOver);
+      return free ? 0 : Number(rate.price) || 0;
+    }
     return this.getSubtotal() >= FREE_SHIP_THRESHOLD ? 0 : SHIP_FLAT;
+  }
+
+  /* What to label the shipping line — "Shipping (Overnight)" beats "Shipping"
+     the moment there is more than one service to buy. */
+  getShippingLabel() {
+    const rate = currentShippingRate();
+    return rate ? rate.name : '';
   }
 
   getTax() {
@@ -314,4 +349,16 @@ class Wishlist {
 /* Global singletons */
 const cart = new Cart();
 const wishlist = new Wishlist();
-if (typeof window !== 'undefined') { window.cart = cart; window.wishlist = wishlist; }
+if (typeof window !== 'undefined') {
+  window.cart = cart;
+  window.wishlist = wishlist;
+  /* The shipping rate table, reachable from main.js (checkout) without either
+     file importing the other — both are plain scripts on the page. */
+  window.ENLShipping = {
+    setRates: setShippingRates,
+    setChoice: setShippingChoice,
+    choice: shippingChoice,
+    current: currentShippingRate,
+    rates: () => SHIP_RATES
+  };
+}

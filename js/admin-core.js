@@ -133,6 +133,7 @@
     repeat: '<path d="m17 2 4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>',
     users: '<circle cx="9" cy="8" r="4"/><path d="M2 21c0-4 3.5-6 7-6s7 2 7 6"/><path d="M17 4a4 4 0 0 1 0 8"/><path d="M21 21c0-3-1.5-4.8-4-5.6"/>',
     box: '<path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/>',
+    truck: '<path d="M3 17V6h11v11"/><path d="M14 9h4l3 3v5h-7"/><circle cx="7" cy="18.5" r="1.8"/><circle cx="17" cy="18.5" r="1.8"/>',
     tag: '<path d="M20.6 13.4 12 22l-9-9V4a1 1 0 0 1 1-1h9z"/><circle cx="7.5" cy="7.5" r="1.5"/>',
     refresh: '<path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/>',
     download: '<path d="M12 3v12"/><path d="m7 12 5 5 5-5"/><path d="M4 21h16"/>',
@@ -221,6 +222,8 @@
   var NAV = [
     { key: 'dashboard', href: 'admin.html#dashboard', label: 'Dashboard', icon: 'dashboard' },
     { key: 'orders', href: 'admin.html#orders', label: 'Orders', icon: 'orders', tally: 'navUnpaid' },
+    { key: 'ship', href: 'admin.html#ship', label: 'To ship', icon: 'box', tally: 'navShip' },
+    { key: 'rates', href: 'admin.html#rates', label: 'Shipping rates', icon: 'truck' },
     { key: 'btcpay', href: 'admin.html#btcpay', label: 'BTCPay', icon: 'bitcoin', tally: 'navBtcpay' },
     { key: 'autoship', href: 'admin.html#autoship', label: 'Auto-Ship', icon: 'repeat' },
     { key: 'customers', href: 'admin.html#customers', label: 'Customers', icon: 'users' },

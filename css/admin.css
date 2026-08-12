@@ -162,6 +162,45 @@ body.adm {
 .adm-grid.two { grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr); align-items: start; }
 .adm-grid.split { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); align-items: start; }
 
+/* ---------- to-ship cards ----------
+   Built to be worked through with a box in front of you: the address is set
+   large enough to copy onto a label at a glance, and the tracking fields sit on
+   one row with the button so finishing a parcel is a single sweep. */
+.ship-h {
+  margin: 0 0 0.4rem; font-size: 0.72rem; font-weight: 700;
+  letter-spacing: 0.08em; text-transform: uppercase; color: var(--dark-text-faint);
+}
+.ship-addr {
+  margin: 0 0 0.5rem; font-size: 1rem; line-height: 1.5; font-weight: 600;
+  color: var(--dark-text); user-select: all;   /* select the whole block in one go */
+}
+.ship-form {
+  display: flex; gap: 0.7rem; align-items: flex-end; flex-wrap: wrap;
+  margin-top: 1rem; padding-top: 0.9rem; border-top: 1px solid var(--adm-line-soft);
+}
+.ship-form .form-field { margin-bottom: 0; flex: 1 1 190px; min-width: 0; }
+.ship-form .form-field label { font-size: 0.78rem; }
+.ship-form .form-field .muted { font-weight: 400; }
+.ship-form .btn { flex: none; }
+@media (max-width: 560px) {
+  .ship-form { align-items: stretch; }
+  .ship-form .btn { width: 100%; }
+}
+
+/* ---------- shipping-rate forms ----------
+   Five short numeric/text fields and a button on one line, wrapping to as many
+   rows as the width allows: these are rates being compared against each other,
+   so they belong side by side rather than stacked. */
+.rate-form { display: flex; gap: 0.7rem; align-items: flex-end; flex-wrap: wrap; }
+.rate-form .form-field { margin-bottom: 0; flex: 1 1 130px; min-width: 0; }
+.rate-form .form-field label { font-size: 0.78rem; }
+.rate-form .rate-enabled { flex: none; margin: 0 0 0.55rem; font-size: 0.85rem; white-space: nowrap; }
+.rate-form .btn { flex: none; }
+.rate-edit-row > td { background: var(--adm-surface-2); }
+@media (max-width: 560px) {
+  .rate-form .btn { width: 100%; }
+}
+
 /* ---------- KPI tiles ---------- */
 .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(196px, 1fr)); gap: var(--adm-gap); }
 
@@ -268,6 +307,8 @@ body.adm {
 /* Money arrived but not all of it — louder than "awaiting", because the store
    is holding the buyer's coins as well as the stock. */
 .pill.underpaid { background: rgba(244, 63, 94, 0.16); color: var(--accent-coral); border-color: rgba(244, 63, 94, 0.4); }
+.pill.shipped { background: rgba(34, 211, 238, 0.14); color: var(--accent-cyan); border-color: rgba(34, 211, 238, 0.3); }
+.pill.delivered { background: rgba(52, 211, 153, 0.14); color: var(--accent-mint); border-color: rgba(52, 211, 153, 0.3); }
 .pill.cancelled, .pill.expired { background: rgba(244, 63, 94, 0.12); color: var(--accent-coral); border-color: rgba(244, 63, 94, 0.28); }
 .pill.admin { background: rgba(168, 85, 247, 0.16); color: var(--accent-violet); border-color: rgba(168, 85, 247, 0.34); }
 /* A sandbox order that never carried money — struck through so it cannot be

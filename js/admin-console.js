@@ -56,6 +56,7 @@
     btcpay: null,         // loaded on demand — it calls out to another host
     hooks: null,          // BTCPay webhook wiring, loaded alongside btcpay
     health: null,         // /api/health — which services the backend actually has
+    rates: null,          // shipping methods (what checkout charges for delivery)
     range: 30,            // days; 0 = all time
     view: 'dashboard',
     loading: false
@@ -78,7 +79,8 @@
       A.api('/api/admin/users'),
       A.api('/api/admin/subscriptions'),
       A.api('/api/products'),
-      A.api('/api/health')
+      A.api('/api/health'),
+      A.api('/api/shipping')
     ]);
     state.loading = false;
 
@@ -99,12 +101,17 @@
     state.subs = results[2].status === 'fulfilled' ? (results[2].value.subscriptions || []) : (state.subs || []);
     state.products = results[3].status === 'fulfilled' ? (results[3].value.products || []) : (state.products || []);
     state.health = results[4].status === 'fulfilled' ? results[4].value : (state.health || null);
+    state.rates = results[5].status === 'fulfilled' ? (results[5].value.methods || []) : (state.rates || null);
 
     results.forEach(function (r, i) {
       if (r.status === 'rejected' && r.reason.status !== 0) {
         // Health is a diagnostic, not data — its failure is not worth a toast.
         if (i === 4) return;
-        A.toast(['Orders', 'Users', 'Auto-ship plans', 'Products'][i] + ': ' + r.reason.message, 'error');
+        // Shipping rates: a 404 just means the backend predates them, and the
+        // view says so in place. Anything else is worth a word.
+        if (i === 5 && r.reason.status === 404) return;
+        A.toast(['Orders', 'Users', 'Auto-ship plans', 'Products', 'Health', 'Shipping rates'][i] +
+          ': ' + r.reason.message, 'error');
       }
     });
 
@@ -150,6 +157,14 @@
 
   function openOrders(orders) {
     return orders.filter(function (o) { return OPEN.indexOf(o.status) !== -1 && !isTestOrder(o); });
+  }
+
+  /* Paid, not yet shipped — the fulfilment queue. Sandbox orders are excluded:
+     nothing was ever bought, so there is nothing to pack. Oldest first, because
+     the person who has waited longest should be packed first. */
+  function toShip(orders) {
+    return orders.filter(function (o) { return o.status === PAID && !isTestOrder(o); })
+      .sort(function (a, b) { return new Date(a.paidAt || a.createdAt) - new Date(b.paidAt || b.createdAt); });
   }
 
   function topProducts(paidOrders, limit) {
@@ -305,6 +320,8 @@
   var TITLES = {
     dashboard: ['Dashboard', 'Sales, at a glance'],
     orders: ['Orders', 'Every order, and the ones waiting on money'],
+    ship: ['To ship', 'Paid orders waiting to go out, with everything you need to pack them'],
+    rates: ['Shipping rates', 'What checkout charges for delivery — edit it here, it applies immediately'],
     btcpay: ['BTCPay', 'What the payment server says, next to what we recorded'],
     autoship: ['Auto-Ship', 'Repeating orders and their next invoice'],
     customers: ['Customers', 'Everyone with an account']
@@ -329,6 +346,8 @@
     if (state.loading && !state.orders) { body.innerHTML = loadingSkeleton(); return; }
 
     if (state.view === 'orders') renderOrders();
+    else if (state.view === 'ship') renderShip();
+    else if (state.view === 'rates') renderRates();
     else if (state.view === 'btcpay') renderBtcpay();
     else if (state.view === 'autoship') renderAutoship();
     else if (state.view === 'customers') renderCustomers();
@@ -357,6 +376,13 @@
     if (b) {
       var stuck = (state.btcpay && state.btcpay.invoices || []).filter(function (i) { return i.needsAttention; }).length;
       b.textContent = stuck ? String(stuck) : '';
+    }
+    // Paid and not yet out the door — the one number that means "someone is
+    // waiting for a parcel", so it rides on every screen.
+    var s = document.getElementById('navShip');
+    if (s) {
+      var n2 = state.orders ? toShip(state.orders).length : 0;
+      s.textContent = n2 ? String(n2) : '';
     }
   }
 
@@ -609,6 +635,334 @@
     if (csv) csv.addEventListener('click', function () { exportOrders(shown, orderFilter); });
   }
 
+  /* ============================================================
+     SHIPPING RATES
+     What checkout charges for delivery, as editable data. The fee used to be a
+     constant compiled into the pricing code, which meant the published table,
+     the browser's arithmetic and the amount actually invoiced were three copies
+     kept in step by hand. Saving here changes what the next customer pays.
+
+     A method with `freeOver` set costs nothing once the cart's subtotal reaches
+     that figure — 0 means never free.
+     ============================================================ */
+  function renderRates() {
+    var rates = state.rates;
+
+    if (!rates) {
+      body.innerHTML = '<div class="adm-card">' +
+        '<div class="adm-card-head"><h3>Shipping rates are not available</h3></div>' +
+        '<p class="adm-note" style="margin:0">This backend does not have the shipping rate table yet — deploy the ' +
+        'current <code>server/</code> to Render. Until then checkout charges the built-in flat rate ' +
+        '($9.99, free over $100).</p></div>';
+      return;
+    }
+
+    var enabled = rates.filter(function (m) { return m.enabled; });
+
+    body.innerHTML =
+      '<div class="adm-card">' +
+        '<div class="adm-card-head"><h3>Delivery options</h3>' +
+          '<span class="hint">what the customer picks and pays at checkout</span></div>' +
+        '<p class="adm-note">Edits apply to the <strong>next</strong> checkout immediately — no deploy needed. ' +
+          'Only <strong>enabled</strong> methods are offered; if just one is enabled the checkout shows no picker and ' +
+          'simply charges it. Checkout needs at least one enabled method, so the last one cannot be turned off or ' +
+          'deleted. <strong>Free over</strong> is the cart subtotal at which that method becomes free — set 0 for never.</p>' +
+        '<div class="adm-table-wrap"><table class="adm-table"><thead><tr>' +
+          '<th>Method</th><th>Delivery estimate</th><th class="num">Fee</th><th class="num">Free over</th>' +
+          '<th>Offered</th><th></th>' +
+        '</tr></thead><tbody>' +
+        rates.map(rateRow).join('') +
+        '</tbody></table></div>' +
+      '</div>' +
+
+      '<div class="adm-card">' +
+        '<div class="adm-card-head"><h3>Add a method</h3>' +
+          '<span class="hint">e.g. a cold-chain or Saturday service</span></div>' +
+        rateForm('new', { id: '', name: '', eta: '', price: '', freeOver: 0, enabled: true, sort: 50 }) +
+      '</div>' +
+
+      (enabled.length === 1
+        ? '<p class="adm-note">Right now every order is <strong>' + esc(enabled[0].name) + '</strong> at ' +
+          esc(money(enabled[0].price)) +
+          (Number(enabled[0].freeOver) > 0 ? ', free over ' + esc(money(enabled[0].freeOver)) : '') +
+          '. Enable a second method to give customers a choice at checkout.</p>'
+        : '') +
+
+      '<p class="adm-note">The public rate table on <a href="shipping.html" target="_blank" rel="noopener">shipping.html</a> ' +
+        'reads from this same list, so it updates itself — nothing to keep in step by hand.</p>';
+  }
+
+  /* One row per method, with its own inline form. Editing in place beats a modal
+     here: the whole point is comparing the rates against each other. */
+  function rateRow(m) {
+    return '<tr>' +
+      '<td><strong>' + esc(m.name) + '</strong><span class="muted">' + esc(m.id) + '</span></td>' +
+      '<td>' + esc(m.eta || '—') + '</td>' +
+      '<td class="num">' + esc(money(m.price)) + '</td>' +
+      '<td class="num">' + (Number(m.freeOver) > 0 ? esc(money(m.freeOver)) : '<span class="muted">never</span>') + '</td>' +
+      '<td><span class="pill ' + (m.enabled ? 'paid' : 'cancelled') + '">' +
+        (m.enabled ? 'at checkout' : 'hidden') + '</span></td>' +
+      '<td class="actions">' +
+        '<button class="btn btn-ghost btn-sm act-rate-edit" data-id="' + esc(m.id) + '">Edit</button> ' +
+        '<button class="btn btn-ghost btn-sm act-rate-del" data-id="' + esc(m.id) +
+          '" data-name="' + esc(m.name) + '">Delete</button>' +
+      '</td>' +
+    '</tr>' +
+    /* The edit form lives in the table as a hidden sibling row, so opening it
+       cannot reorder or reflow the list above it. */
+    '<tr class="rate-edit-row" id="rate-edit-' + esc(m.id) + '" hidden>' +
+      '<td colspan="6">' + rateForm(m.id, m) + '</td>' +
+    '</tr>';
+  }
+
+  function rateForm(key, m) {
+    var p = 'rate-' + key + '-';
+    return '<div class="rate-form">' +
+      '<div class="form-field"><label for="' + p + 'name">Name</label>' +
+        '<input id="' + p + 'name" type="text" value="' + esc(m.name || '') + '" placeholder="Overnight"></div>' +
+      '<div class="form-field"><label for="' + p + 'eta">Delivery estimate</label>' +
+        '<input id="' + p + 'eta" type="text" value="' + esc(m.eta || '') + '" placeholder="Next business day"></div>' +
+      '<div class="form-field"><label for="' + p + 'price">Fee ($)</label>' +
+        '<input id="' + p + 'price" type="number" min="0" step="0.01" value="' + esc(m.price) + '" placeholder="34.99"></div>' +
+      '<div class="form-field"><label for="' + p + 'free">Free over ($)</label>' +
+        '<input id="' + p + 'free" type="number" min="0" step="1" value="' + esc(m.freeOver || 0) + '" placeholder="0"></div>' +
+      '<div class="form-field"><label for="' + p + 'sort">Order</label>' +
+        '<input id="' + p + 'sort" type="number" min="0" step="10" value="' + esc(m.sort == null ? 50 : m.sort) + '"></div>' +
+      '<label class="form-check rate-enabled"><input id="' + p + 'enabled" type="checkbox" ' +
+        (m.enabled !== false ? 'checked' : '') + '> Offer at checkout</label>' +
+      '<button class="btn btn-primary act-rate-save" data-key="' + esc(key) + '" data-id="' + esc(m.id || '') + '">' +
+        (key === 'new' ? 'Add method' : 'Save') + '</button>' +
+    '</div>';
+  }
+
+  function toggleRateEdit(id) {
+    var row = document.getElementById('rate-edit-' + id);
+    if (row) row.hidden = !row.hidden;
+  }
+
+  async function saveRate(key, id, btn) {
+    var p = 'rate-' + key + '-';
+    var val = function (suffix) { var el = document.getElementById(p + suffix); return el ? el.value : ''; };
+    var checked = function (suffix) { var el = document.getElementById(p + suffix); return !!(el && el.checked); };
+    var payload = {
+      id: id || '',
+      name: val('name'),
+      eta: val('eta'),
+      price: Number(val('price')) || 0,
+      freeOver: Number(val('free')) || 0,
+      sort: Number(val('sort')) || 50,
+      enabled: checked('enabled')
+    };
+    if (!payload.name.trim()) { A.toast('Give the method a name.', 'error'); return; }
+
+    btn.disabled = true;
+    var label = btn.textContent;
+    btn.textContent = 'Saving…';
+    try {
+      var data = await A.api('/api/shipping', { method: 'POST', body: payload });
+      state.rates = data.methods || state.rates;
+      A.toast(payload.name + ' saved — it applies to the next checkout.', 'success');
+      render();
+    } catch (e) {
+      A.toast(e.message, 'error');
+      btn.disabled = false;
+      btn.textContent = label;
+    }
+  }
+
+  async function deleteRate(id, name, btn) {
+    if (!window.confirm('Delete the "' + name + '" shipping method?\n\n' +
+        'Customers will no longer be able to choose it. Orders already placed keep the fee they were charged.')) return;
+    btn.disabled = true;
+    try {
+      var data = await A.api('/api/shipping/' + encodeURIComponent(id), { method: 'DELETE' });
+      state.rates = data.methods || state.rates;
+      A.toast(name + ' deleted.', 'success');
+      render();
+    } catch (e) { A.toast(e.message, 'error'); btn.disabled = false; }
+  }
+
+  /* ============================================================
+     TO SHIP
+     The end of the sale, and the only step with no automation behind it. A paid
+     order is a promise with a deadline, so this view is built to be worked
+     THROUGH rather than read: one card per parcel, everything needed to pack it
+     on that card, and the two things that finish it — the tracking number and
+     the button that emails it to the customer.
+     ============================================================ */
+  function renderShip() {
+    var orders = state.orders || [];
+    var queue = toShip(orders);
+    var shipped = orders.filter(function (o) { return o.status === 'shipped' || o.status === 'delivered'; })
+      .sort(function (a, b) { return new Date(b.shippedAt || b.paidAt) - new Date(a.shippedAt || a.paidAt); });
+
+    body.innerHTML =
+      '<div class="kpi-grid">' +
+        kpi('Waiting to ship', num(queue.length), queue.length ? 'someone is waiting' : 'all caught up', '',
+            queue.length ? 'amber' : '') +
+        kpi('Units to pack', num(queue.reduce(function (s, o) {
+          return s + (o.items || []).reduce(function (n, i) { return n + (Number(i.quantity) || 0); }, 0);
+        }, 0)), 'across the queue') +
+        kpi('Shipped', num(shipped.length), 'all time') +
+      '</div>' +
+      (queue.length
+        ? queue.map(shipCard).join('')
+        : '<div class="adm-card">' +
+            A.empty('Nothing to ship', 'Paid orders appear here the moment the money confirms.') +
+          '</div>') +
+      (shipped.length
+        ? '<div class="adm-card">' +
+            '<div class="adm-card-head"><h3>Already shipped</h3>' +
+              '<span class="hint">newest first</span></div>' +
+            '<div class="adm-table-wrap"><table class="adm-table"><thead><tr>' +
+              '<th>Reference</th><th>Shipped</th><th>Customer</th><th>Items</th><th>Tracking</th>' +
+            '</tr></thead><tbody>' +
+            shipped.map(function (o) {
+              return '<tr>' +
+                '<td><span class="ref">' + esc(o.orderId) + '</span></td>' +
+                '<td>' + esc(A.date(o.shippedAt, true)) + '<span class="muted">' + esc(A.ago(o.shippedAt)) + '</span></td>' +
+                '<td>' + esc(o.email || o.userEmail || '—') + '</td>' +
+                '<td>' + esc(itemsText(o.items)) + '</td>' +
+                '<td>' + esc([o.carrier, o.tracking].filter(Boolean).join(' · ') || '—') + '</td>' +
+              '</tr>';
+            }).join('') +
+            '</tbody></table></div>' +
+          '</div>'
+        : '');
+  }
+
+  /* One parcel. The address is deliberately shown as a block you can read out
+     loud onto a label, not as a table row. */
+  function shipCard(o) {
+    var a = o.shippingAddress || {};
+    var lines = [
+      String(a.name || '').trim(),
+      String(a.institution || '').trim(),
+      String(a.address || '').trim(),
+      [a.city, a.state, a.postalCode].filter(Boolean).join(', '),
+      String(a.countryCode || a.country || '').trim()
+    ].filter(Boolean);
+
+    return '<div class="adm-card">' +
+      '<div class="adm-card-head">' +
+        '<h3><span class="ref">' + esc(o.orderId) + '</span></h3>' +
+        '<span class="hint">paid ' + esc(A.ago(o.paidAt || o.createdAt)) + ' · ' + esc(money(o.total)) + ' · ' +
+          esc(methodLabel(o.method)) +
+          /* Which delivery service they bought — an Overnight order that sits in
+             this queue overnight is a refund waiting to happen. */
+          (o.shippingLabel ? ' · <strong>' + esc(o.shippingLabel) + '</strong>' : '') + '</span>' +
+        '<div class="right">' +
+          '<button class="btn btn-ghost btn-sm act-slip" data-id="' + esc(o.orderId) + '">' +
+            A.icon('print', 'ic') + ' Packing slip</button>' +
+        '</div>' +
+      '</div>' +
+      (o.stockShort
+        ? '<p class="adm-note" style="color:var(--accent-coral)">Stock could not be re-taken for this order — check the ' +
+          'count on these products before you pack it.</p>'
+        : '') +
+      '<div class="adm-grid split">' +
+        '<div>' +
+          '<h4 class="ship-h">Ship to</h4>' +
+          '<p class="ship-addr">' + lines.map(esc).join('<br>') + '</p>' +
+          '<p class="adm-note" style="margin:0">' +
+            esc(o.email || o.userEmail || 'no email') +
+            (a.researchField ? ' · ' + esc(a.researchField) : '') +
+          '</p>' +
+        '</div>' +
+        '<div>' +
+          '<h4 class="ship-h">Pack</h4>' +
+          '<div class="rank">' +
+            (o.items || []).map(function (i) {
+              return '<div class="rank-row" style="background:var(--adm-surface-2)">' +
+                '<span class="rank-name">' + esc(i.name) + '</span>' +
+                '<span class="rank-val">×' + esc(i.quantity) + '</span></div>';
+            }).join('') +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="ship-form">' +
+        '<div class="form-field">' +
+          '<label for="carrier-' + esc(o.orderId) + '">Carrier <span class="muted">optional</span></label>' +
+          '<input id="carrier-' + esc(o.orderId) + '" type="text" value="' + esc(o.carrier || '') +
+            '" placeholder="USPS, UPS, FedEx…" autocomplete="off">' +
+        '</div>' +
+        '<div class="form-field">' +
+          '<label for="track-' + esc(o.orderId) + '">Tracking number <span class="muted">optional</span></label>' +
+          '<input id="track-' + esc(o.orderId) + '" type="text" value="' + esc(o.tracking || '') +
+            '" placeholder="9400 1000 0000 0000 0000 00" autocomplete="off">' +
+        '</div>' +
+        '<button class="btn btn-primary act-ship" data-id="' + esc(o.orderId) + '">Mark shipped &amp; email customer</button>' +
+      '</div>' +
+      '<p class="adm-note" style="margin:.55rem 0 0">Marking it shipped emails the customer with the tracking number ' +
+        'above. Leave the fields blank if there is no number to give them.</p>' +
+    '</div>';
+  }
+
+  async function markShipped(orderId, btn) {
+    var carrier = (document.getElementById('carrier-' + orderId) || {}).value || '';
+    var tracking = (document.getElementById('track-' + orderId) || {}).value || '';
+    btn.disabled = true;
+    var label = btn.textContent;
+    btn.textContent = 'Sending…';
+    try {
+      var data = await A.api('/api/admin/orders/' + encodeURIComponent(orderId) + '/shipped', {
+        method: 'POST', body: { carrier: carrier, tracking: tracking }
+      });
+      A.toast(data.alreadyShipped
+        ? orderId + ': tracking updated.'
+        : orderId + ' marked shipped — the customer has been emailed.', 'success');
+      await loadAll({ quiet: true });
+    } catch (e) {
+      A.toast(e.message, 'error');
+      btn.disabled = false;
+      btn.textContent = label;
+    }
+  }
+
+  /* A printable slip for the box. Opened in its own window with its own styles:
+     the console's dark theme is not something anyone wants to put through a
+     printer, and the slip has to be readable in black and white. */
+  function packingSlip(orderId) {
+    var o = (state.orders || []).find(function (x) { return x.orderId === orderId; });
+    if (!o) { A.toast('That order is no longer loaded — press Refresh.', 'error'); return; }
+    var a = o.shippingAddress || {};
+    var rows = (o.items || []).map(function (i) {
+      return '<tr><td>' + esc(i.name) + '</td><td class="n">' + esc(i.quantity) + '</td></tr>';
+    }).join('');
+    var addr = [a.name, a.institution, a.address,
+      [a.city, a.state, a.postalCode].filter(Boolean).join(', '), a.countryCode || a.country]
+      .filter(Boolean).map(esc).join('<br>');
+
+    var w = window.open('', '_blank', 'width=760,height=900');
+    if (!w) { A.toast('Your browser blocked the print window.', 'error'); return; }
+    w.document.write(
+      '<!doctype html><html><head><meta charset="utf-8"><title>Packing slip ' + esc(o.orderId) + '</title>' +
+      '<style>' +
+      'body{font:14px/1.5 Arial,Helvetica,sans-serif;color:#111;margin:36px;max-width:620px}' +
+      'h1{font-size:18px;margin:0 0 2px}.sub{color:#666;font-size:12px;margin:0 0 22px}' +
+      'h2{font-size:12px;letter-spacing:.09em;text-transform:uppercase;color:#666;margin:22px 0 6px}' +
+      '.addr{font-size:15px;line-height:1.45}' +
+      'table{border-collapse:collapse;width:100%;margin-top:4px}' +
+      'th,td{text-align:left;padding:7px 8px;border-bottom:1px solid #ddd}' +
+      'th{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:#666}' +
+      '.n{text-align:right;width:70px}' +
+      '.foot{margin-top:26px;padding-top:12px;border-top:1px solid #ddd;color:#666;font-size:11px}' +
+      '@media print{body{margin:0}}' +
+      '</style></head><body>' +
+      '<h1>Ever Nova Life</h1>' +
+      '<p class="sub">Packing slip · order ' + esc(o.orderId) + ' · placed ' + esc(A.date(o.createdAt)) +
+        (o.shippingLabel ? ' · ' + esc(o.shippingLabel) : '') + '</p>' +
+      '<h2>Ship to</h2><div class="addr">' + addr + '</div>' +
+      '<h2>Contents</h2><table><thead><tr><th>Item</th><th class="n">Qty</th></tr></thead><tbody>' + rows +
+      '</tbody></table>' +
+      '<div class="foot">All products are sold strictly for in-vitro research and laboratory use only. ' +
+      'Not for human consumption. No prices are shown on this slip.</div>' +
+      '</body></html>');
+    w.document.close();
+    w.focus();
+    w.print();
+  }
+
   function addressText(a) {
     if (!a) return '';
     var who = String(a.name || ((a.firstName || '') + ' ' + (a.lastName || ''))).trim();
@@ -650,9 +1004,17 @@
       var addr = opts.compact ? '' : '<span class="muted">' + esc(addressText(o.shippingAddress)) + '</span>';
       var actions = '';
       if (opts.actions && OPEN.indexOf(o.status) !== -1) {
-        actions = '<button class="btn btn-primary btn-sm act-paid" data-id="' + esc(o.orderId) +
-          '" data-total="' + esc(money(o.total)) + '">Mark paid</button> ' +
-          '<button class="btn btn-ghost btn-sm act-cancel" data-id="' + esc(o.orderId) + '">Cancel</button>';
+        /* On a short-paid order the emphasis is reversed on purpose: the house
+           rule is full payment or nothing, so refunding is the normal outcome
+           and "mark paid" is the exception you take only after the rest of the
+           money has actually arrived. */
+        actions = o.status === 'underpaid'
+          ? '<button class="btn btn-primary btn-sm act-cancel" data-id="' + esc(o.orderId) + '">Cancel &amp; refund</button> ' +
+            '<button class="btn btn-ghost btn-sm act-paid" data-id="' + esc(o.orderId) +
+            '" data-total="' + esc(money(o.total)) + '">Paid in full now</button>'
+          : '<button class="btn btn-primary btn-sm act-paid" data-id="' + esc(o.orderId) +
+            '" data-total="' + esc(money(o.total)) + '">Mark paid</button> ' +
+            '<button class="btn btn-ghost btn-sm act-cancel" data-id="' + esc(o.orderId) + '">Cancel</button>';
       }
       return '<tr>' +
         '<td><span class="ref">' + esc(o.orderId) + '</span>' +
@@ -854,10 +1216,19 @@
           (i.additionalStatus && i.additionalStatus !== 'None'
             ? '<span class="muted">' + esc(i.additionalStatus) + '</span>' : '') + '</td>' +
         '<td>' + (i.orderId ? '<span class="ref">' + esc(i.orderId) + '</span><br>' : '') + localPill + '</td>' +
-        '<td class="actions">' + (i.needsAttention
-          ? '<button class="btn btn-primary btn-sm act-paid" data-id="' + esc(i.orderId) +
-            '" data-total="' + esc(money(i.amount)) + '">' +
-            (i.status === 'Settled' ? 'Release order' : 'Mark paid anyway') + '</button>' : '') + '</td>' +
+        /* The button only exists where there is an order to act on. An invoice
+           raised inside BTCPay carries no order id, so "Release order" would
+           post an empty reference and simply fail. */
+        '<td class="actions">' + (i.needsAttention && i.orderId
+          ? (i.status === 'Settled'
+              ? '<button class="btn btn-primary btn-sm act-paid" data-id="' + esc(i.orderId) +
+                '" data-total="' + esc(money(i.amount)) + '">Release order</button>'
+              /* Short-paid: the store ships on full payment only, so releasing
+                 it is not offered here. Handle it from Orders, where cancel and
+                 refund is the primary action. */
+              : '<a class="btn btn-ghost btn-sm" href="admin.html#orders">Short paid — see Orders</a>')
+          : (i.status === 'Settled' && !i.orderId
+              ? '<span class="muted">raised in BTCPay — no store order</span>' : '')) + '</td>' +
         '</tr>';
     }).join('');
 
@@ -1064,6 +1435,12 @@
      ============================================================ */
 
   async function markPaid(orderId, total, btn) {
+    /* No reference, nothing to mark. This used to reach the server as
+       /api/admin/orders//paid and come back as an unexplained failure. */
+    if (!orderId) {
+      A.toast('That invoice has no order reference — it was raised inside BTCPay, so there is no order here to release.', 'error');
+      return;
+    }
     if (!window.confirm('Confirm you have received ' + total + ' for ' + orderId + '?\n\n' +
         'Only do this once the money is actually in your bank account. It marks the order paid, ' +
         'emails the customer, and credits their reward points.')) return;
@@ -1077,6 +1454,9 @@
       // Released from the BTCPay panel? Re-pull it, or the row it was fixing
       // still shows as needing attention.
       if (state.btcpay) await loadBtcpay(true);
+      /* A payment confirmed is a parcel to pack, so go straight there rather
+         than leaving the order to be found again later. */
+      if (!data.alreadyPaid) window.location.hash = 'ship';
     } catch (e) {
       A.toast(e.message, 'error');
       btn.disabled = false;
@@ -1085,8 +1465,18 @@
   }
 
   async function cancelOrder(orderId, btn) {
-    if (!window.confirm('Cancel ' + orderId + '?\n\nUse this when the payment never arrived. ' +
-        'It releases the reserved stock and any held reward points. It does not refund anything.')) return;
+    var o = (state.orders || []).find(function (x) { return x.orderId === orderId; });
+    /* A short-paid order is the one case where cancelling leaves money behind:
+       the coins are in the wallet and nothing here can send them back, so the
+       prompt names the amount and says whose job that is. */
+    var short = o && o.status === 'underpaid';
+    var got = short && o.paidAmount ? money(o.paidAmount) : 'what they sent';
+    if (!window.confirm(short
+        ? 'Cancel ' + orderId + ' and refund ' + got + '?\n\n' +
+          'This releases the reserved stock and any held reward points, and marks the order dead. ' +
+          'It does NOT move any crypto — you must send ' + got + ' back from your BTCPay wallet yourself.'
+        : 'Cancel ' + orderId + '?\n\nUse this when the payment never arrived. ' +
+          'It releases the reserved stock and any held reward points. It does not refund anything.')) return;
     btn.disabled = true;
     try {
       await A.api('/api/admin/orders/' + encodeURIComponent(orderId) + '/cancel', { method: 'POST' });
@@ -1157,6 +1547,11 @@
       if (!t) return;
       if (t.id === 'refreshBtn') { loadAll(); return; }
       if (t.classList.contains('act-paid')) markPaid(t.getAttribute('data-id'), t.getAttribute('data-total'), t);
+      else if (t.classList.contains('act-ship')) markShipped(t.getAttribute('data-id'), t);
+      else if (t.classList.contains('act-rate-edit')) toggleRateEdit(t.getAttribute('data-id'));
+      else if (t.classList.contains('act-rate-save')) saveRate(t.getAttribute('data-key'), t.getAttribute('data-id'), t);
+      else if (t.classList.contains('act-rate-del')) deleteRate(t.getAttribute('data-id'), t.getAttribute('data-name'), t);
+      else if (t.classList.contains('act-slip')) packingSlip(t.getAttribute('data-id'));
       else if (t.classList.contains('act-cancel')) cancelOrder(t.getAttribute('data-id'), t);
       else if (t.classList.contains('act-del-user')) deleteUser(t.getAttribute('data-id'), t.getAttribute('data-name'), t);
       else if (t.classList.contains('act-due')) dueNow(t.getAttribute('data-id'), t);

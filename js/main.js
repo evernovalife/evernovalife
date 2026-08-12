@@ -1955,9 +1955,11 @@ function checkoutTotals() {
   const subtotal = round2(q ? q.subtotal : cart.getSubtotal());
   const discount = round2(Math.min(enlRedeem().discount || 0, subtotal));
   const shipping = round2(q ? q.shipping : cart.getShipping());
+  // Which service the fee is for, so the summary can say "Shipping (Overnight)".
+  const shippingLabel = (q && q.shippingLabel) || (cart.getShippingLabel ? cart.getShippingLabel() : '');
   const taxable = round2(Math.max(0, subtotal - discount));
   const tax = round2(taxable * TAX_RATE);
-  return { subtotal, discount, shipping, taxable, tax, total: round2(taxable + shipping + tax) };
+  return { subtotal, discount, shipping, shippingLabel, taxable, tax, total: round2(taxable + shipping + tax) };
 }
 
 /* The checkout line items, as their own function so a fresh server quote can
@@ -1971,6 +1973,115 @@ function renderCheckoutLineItems() {
   }
   el.innerHTML = cart.items.map(i =>
     `<div class="summary-row"><span>${escapeHtml(i.name)} × ${i.quantity}</span><span>${formatPrice(i.price * i.quantity)}</span></div>`).join('');
+}
+
+/* The published rate table on shipping.html, drawn from the same source that
+   charges the customer. It used to be hand-written HTML, which is how the page
+   came to advertise an Expedited and an Overnight service the checkout had no
+   way to sell. The static rows in the page stay as the offline fallback. */
+async function renderPublicRateTable() {
+  const tbody = document.getElementById('rateRows');
+  if (!tbody || typeof fetch === 'undefined') return;
+  let methods;
+  try {
+    const res = await fetch(API_BASE + '/api/shipping');
+    if (!res.ok) return;                              // keep the static rows
+    const d = await res.json().catch(() => null);
+    methods = d && d.success && Array.isArray(d.methods) ? d.methods : null;
+  } catch (e) { return; }
+  if (!methods || !methods.length) return;
+
+  /* A method with a free-shipping threshold is TWO rows for the reader — what it
+     costs, and the condition under which it costs nothing — because that is the
+     question they came to the page with. */
+  const rows = [];
+  methods.forEach(m => {
+    rows.push(`<tr><td>${escapeHtml(m.name)}</td><td>${escapeHtml(m.eta || '—')}</td>` +
+      `<td>${formatPrice(Number(m.price) || 0)}</td></tr>`);
+    if (Number(m.freeOver) > 0) {
+      rows.push(`<tr><td>Free ${escapeHtml(m.name)} (orders over ${formatPrice(Number(m.freeOver))})</td>` +
+        `<td>${escapeHtml(m.eta || '—')}</td><td>FREE</td></tr>`);
+    }
+  });
+  tbody.innerHTML = rows.join('');
+}
+
+/* ============================================================
+   DELIVERY SPEED
+   The rates are owner-editable data now (admin → Shipping), so the
+   options here are whatever the server says is enabled — the page
+   never hard-codes a fee, and the amount charged is decided by the
+   server from the method id alone.
+   ============================================================ */
+function enlShipChoice() {
+  return (window.ENLShipping && window.ENLShipping.choice()) || '';
+}
+
+/* Load the enabled methods and preselect one. The server names the default so
+   the browser can't pick the cheapest by accident (or on purpose). */
+async function loadShippingMethods() {
+  if (typeof fetch === 'undefined' || !window.ENLShipping) return null;
+  let saved = '';
+  try { saved = sessionStorage.getItem('enl_ship_method') || ''; } catch (e) {}
+  try {
+    const res = await fetch(API_BASE + '/api/shipping');
+    if (!res.ok) return null;                       // older backend → flat rate as before
+    const d = await res.json().catch(() => null);
+    if (!d || !d.success || !Array.isArray(d.methods) || !d.methods.length) return null;
+    const valid = saved && d.methods.some(m => m.id === saved) ? saved : (d.defaultMethod || d.methods[0].id);
+    window.ENLShipping.setRates(d.methods, valid);
+    return d;
+  } catch (e) {
+    return null;                                    // offline → flat rate as before
+  }
+}
+
+/* One radio per enabled method. Rendered only when there is a real choice to
+   make: a single method is not a decision, it's just a line on the bill. */
+function renderShippingOptions(el) {
+  if (!el || !window.ENLShipping) return;
+  const rates = window.ENLShipping.rates();
+  if (!rates || rates.length < 2) { el.innerHTML = ''; el.hidden = true; return; }
+  el.hidden = false;
+  const chosen = enlShipChoice();
+  const subtotal = cart.getSubtotal();
+
+  /* No step number on this heading: the section is hidden when there is only
+     one service, and a numbered step that vanishes leaves a gap in the count. */
+  el.innerHTML = `
+    <h3 class="form-section-title">Delivery speed</h3>
+    <div class="ship-options" role="radiogroup" aria-label="Delivery speed">
+      ${rates.map(m => {
+        const free = Number(m.freeOver) > 0 && subtotal >= Number(m.freeOver);
+        const cost = free ? 'FREE' : formatPrice(Number(m.price) || 0);
+        const note = !free && Number(m.freeOver) > 0
+          ? `free over ${formatPrice(Number(m.freeOver))}` : '';
+        return `<label class="ship-option${m.id === chosen ? ' selected' : ''}">
+          <input type="radio" name="shipMethod" value="${escapeHtml(m.id)}" ${m.id === chosen ? 'checked' : ''}>
+          <span class="ship-option-main">
+            <span class="ship-option-name">${escapeHtml(m.name)}</span>
+            ${m.eta ? `<span class="ship-option-eta">${escapeHtml(m.eta)}</span>` : ''}
+          </span>
+          <span class="ship-option-cost">${cost}${note ? `<span class="ship-option-note">${note}</span>` : ''}</span>
+        </label>`;
+      }).join('')}
+    </div>`;
+
+  el.querySelectorAll('input[name="shipMethod"]').forEach(input => {
+    input.addEventListener('change', () => onShippingMethodChange(input.value, el));
+  });
+}
+
+/* A new service means a new total, and the total has to come from the server —
+   so re-quote, then repaint. Remembered for this tab only: a method chosen days
+   ago shouldn't quietly upgrade a later order. */
+async function onShippingMethodChange(id, el) {
+  window.ENLShipping.setChoice(id);
+  try { sessionStorage.setItem('enl_ship_method', id); } catch (e) {}
+  renderShippingOptions(el);
+  await loadCheckoutQuote();
+  renderCheckoutSummary(document.getElementById('checkoutSummary'));
+  renderCheckoutLineItems();
 }
 
 /* Ask the server what this cart actually costs.
@@ -1987,7 +2098,11 @@ async function loadCheckoutQuote() {
     const res = await fetch(API_BASE + '/api/quote', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items: cart.items.map(i => ({ id: i.id, quantity: i.quantity })) })
+      body: JSON.stringify({
+        items: cart.items.map(i => ({ id: i.id, quantity: i.quantity })),
+        // Which delivery service, never its price — the server owns the rate.
+        shippingMethod: enlShipChoice()
+      })
     });
     if (!res.ok) return null;              // 400/404/409 → keep the local figures
     const q = await res.json().catch(() => null);
@@ -2036,7 +2151,7 @@ function renderCheckoutSummary(el) {
 
   el.innerHTML = `
     <div class="summary-row"><span>Subtotal (${cart.getItemCount()} items)</span><span>${formatPrice(t.subtotal)}</span></div>
-    <div class="summary-row"><span>Shipping</span><span>${t.shipping === 0 ? 'FREE' : formatPrice(t.shipping)}</span></div>
+    <div class="summary-row"><span>Shipping${t.shippingLabel ? ` (${escapeHtml(t.shippingLabel)})` : ''}</span><span>${t.shipping === 0 ? 'FREE' : formatPrice(t.shipping)}</span></div>
     ${t.discount > 0 ? `<div class="summary-row discount"><span>Points discount</span><span>−${formatPrice(t.discount)}</span></div>` : ''}
     <div class="summary-row"><span>Tax (${taxRateLabel()})</span><span>${formatPrice(t.tax)}</span></div>
     <div class="summary-row total"><span>Total</span><span>${formatPrice(t.total)}</span></div>
@@ -2269,6 +2384,7 @@ async function submitCryptoOrder(form, btn) {
       body: JSON.stringify({
         items: cart.items.map(i => ({ id: i.id, quantity: i.quantity })),
         shipping: checkout,
+        shippingMethod: enlShipChoice(),           // the service; the server sets its price
         email: checkout.email,
         pointsToRedeem: enlRedeem().points || 0,   // server clamps to the real balance
         autoship: autoshipSelection()
@@ -2375,6 +2491,7 @@ async function submitZelleOrder(form, btn) {
       body: JSON.stringify({
         items: cart.items.map(i => ({ id: i.id, quantity: i.quantity })),
         shipping: checkout,
+        shippingMethod: enlShipChoice(),           // the service; the server sets its price
         email: checkout.email
       })
     });
@@ -2432,12 +2549,19 @@ function initCheckoutPage() {
   renderCheckoutSummary(summary);
   // pull the signed-in points balance, then re-render so the redeem control appears
   loadCheckoutLoyalty().then(() => renderCheckoutSummary(summary));
-  // …and have the server price this exact cart, so the total on screen is the
-  // total the invoice will ask for.
-  loadCheckoutQuote().then(() => {
-    renderCheckoutSummary(summary);
-    renderCheckoutLineItems();
-  });
+  /* Rates first, then the quote: the quote's shipping figure depends on which
+     method is selected, so asking in the other order prices the cart twice and
+     shows the wrong fee in between. */
+  const shipBox = document.getElementById('shippingOptions');
+  loadShippingMethods()
+    .then(() => {
+      renderShippingOptions(shipBox);
+      return loadCheckoutQuote();
+    })
+    .then(() => {
+      renderCheckoutSummary(summary);
+      renderCheckoutLineItems();
+    });
 
   renderCheckoutLineItems();
 
@@ -2847,6 +2971,7 @@ document.addEventListener('DOMContentLoaded', () => {
     case 'faq.html': initFAQPage(); break;
     case 'contact.html': initContactForm(); break;
     case 'wishlist.html': renderWishlistPage(); break;
+    case 'shipping.html': renderPublicRateTable(); break;
   }
 
   // pull the live (admin-managed) catalog and repaint product views
