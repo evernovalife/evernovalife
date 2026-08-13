@@ -149,6 +149,15 @@ const SHIPPING = {
   institution: 'Acme Research Lab', researchField: 'Peptide Chemistry'
 };
 
+/* The token in a pay link, derived the same way the server derives it: an
+   HMAC of the order reference under the server secret. Computed here rather
+   than read back from the API, so a test can assert that a link the server
+   never handed out still opens the right order — and only that order. */
+function payTokenOf(orderId) {
+  return crypto.createHmac('sha256', process.env.JWT_SECRET)
+    .update('pay:' + orderId).digest('hex').slice(0, 32);
+}
+
 /* BTCPay signs the RAW body; the server must verify against it. */
 function sign(rawBody) {
   return 'sha256=' + crypto.createHmac('sha256', 'test-webhook-secret').update(rawBody).digest('hex');
@@ -319,6 +328,254 @@ test('an underpaid expiry parks the order instead of cancelling it', async () =>
     store.listOrders(b.user.id).find(o => o.orderId === res.body.orderId).status, 'paid',
     'an underpaid order can still be released by hand'
   );
+});
+
+/* ============================================================
+   2b) …and the buyer can settle it themselves
+   A short payment used to be a dead end: the invoice they underpaid is
+   expired, BTCPay won't reopen it, and the only way out was an email
+   thread with a human. The order now carries a signed link that raises a
+   fresh invoice for exactly the difference, and a payment against that
+   link finishes the order without anyone touching admin.
+   ============================================================ */
+async function shortPay(amountPaid) {
+  const b = await buyer();
+  const res = await openOrder(b.token);
+  paidAmounts.set(res.body.invoiceId, String(amountPaid));
+  await webhook(JSON.stringify({
+    type: 'InvoiceExpired', invoiceId: res.body.invoiceId,
+    partiallyPaid: true, metadata: { orderId: res.body.orderId }
+  }));
+  const order = store.listOrders(b.user.id).find(o => o.orderId === res.body.orderId);
+  assert.equal(order.status, 'underpaid');
+  return { b, res, order };
+}
+
+/* The pay link is the credential. It has to work for someone who isn't signed
+   in — and it must not work for someone holding a different order's link. */
+test('the short-paid order carries a pay link, and only its own token opens it', async () => {
+  const { b, res, order } = await shortPay('30.00');
+
+  const mine = (await api('/api/orders', { token: b.token })).body.orders
+    .find(o => o.orderId === res.body.orderId);
+  assert.ok(mine.payUrl, 'the account page is handed a link to finish paying');
+  assert.equal(mine.amountDue, Number((order.total - 30).toFixed(2)), 'and the amount still owed');
+
+  const t = new URL(mine.payUrl).searchParams.get('t');
+  const bal = await api(`/api/orders/${res.body.orderId}/balance?t=${t}`);
+  assert.equal(bal.status, 200);
+  assert.equal(bal.body.paid, 30, 'what they already sent is counted, not forgotten');
+  assert.equal(bal.body.due, mine.amountDue);
+  assert.equal(bal.body.payable, true);
+
+  // Signed for THIS order only.
+  const forged = await api(`/api/orders/${res.body.orderId}/balance?t=${'0'.repeat(32)}`);
+  assert.equal(forged.status, 404, 'a made-up token opens nothing');
+
+  const other = await shortPay('10.00');
+  const otherUrl = (await api('/api/orders', { token: other.b.token })).body.orders
+    .find(o => o.orderId === other.res.body.orderId).payUrl;
+  const crossed = await api(`/api/orders/${res.body.orderId}/balance?t=` +
+    new URL(otherUrl).searchParams.get('t'));
+  assert.equal(crossed.status, 404, "another order's token doesn't unlock this one");
+});
+
+test('the balance invoice is raised for the shortfall, not the whole order again', async () => {
+  const { res, order } = await shortPay('40.00');
+  const due = Number((order.total - 40).toFixed(2));
+
+  const before = invoices.length;
+  const made = await api(`/api/orders/${res.body.orderId}/balance/invoice`, {
+    method: 'POST', body: { t: payTokenOf(res.body.orderId) }
+  });
+  assert.equal(made.status, 200);
+  assert.equal(made.body.due, due);
+  assert.equal(invoices.length, before + 1, 'exactly one new invoice');
+  const raised = invoices[invoices.length - 1].payload;
+  assert.equal(raised.amount, due.toFixed(2), 'billed for the difference only');
+  assert.equal(raised.metadata.kind, 'balance', 'tagged so the webhook can tell it apart');
+  assert.equal(raised.metadata.orderId, res.body.orderId);
+
+  // A second press inside the reuse window returns the same invoice rather
+  // than littering BTCPay with abandoned ones.
+  const again = await api(`/api/orders/${res.body.orderId}/balance/invoice`, {
+    method: 'POST', body: { t: payTokenOf(res.body.orderId) }
+  });
+  assert.equal(again.body.checkoutLink, made.body.checkoutLink);
+  assert.equal(invoices.length, before + 1, 'no second invoice for a double-tap');
+});
+
+test('paying the balance settles the order, with both payments counted', async () => {
+  const { b, res, order } = await shortPay('50.00');
+  const made = await api(`/api/orders/${res.body.orderId}/balance/invoice`, {
+    method: 'POST', body: { t: payTokenOf(res.body.orderId) }
+  });
+
+  const ok = await webhook(JSON.stringify({
+    type: 'InvoiceSettled', invoiceId: made.body.invoiceId,
+    metadata: { orderId: res.body.orderId, kind: 'balance' }
+  }));
+  assert.equal(ok.status, 200);
+
+  const done = store.listOrders(b.user.id).find(o => o.orderId === res.body.orderId);
+  assert.equal(done.status, 'paid', 'the top-up finishes the order with no admin involved');
+  assert.equal(done.paidAmount, order.total, 'both payments add up to the total');
+  assert.equal(done.invoiceId, res.body.invoiceId, 'the original invoice reference survives');
+  assert.equal(done.balanceInvoiceId, made.body.invoiceId, 'and the top-up is recorded alongside it');
+});
+
+test('a balance invoice that is itself underpaid adds up instead of overwriting', async () => {
+  const { b, res, order } = await shortPay('20.00');
+  const made = await api(`/api/orders/${res.body.orderId}/balance/invoice`, {
+    method: 'POST', body: { t: payTokenOf(res.body.orderId) }
+  });
+  paidAmounts.set(made.body.invoiceId, '15.00');          // short again
+
+  await webhook(JSON.stringify({
+    type: 'InvoiceExpired', invoiceId: made.body.invoiceId,
+    partiallyPaid: true, metadata: { orderId: res.body.orderId, kind: 'balance' }
+  }));
+
+  const after = store.listOrders(b.user.id).find(o => o.orderId === res.body.orderId);
+  assert.equal(after.status, 'underpaid', 'still short, so still parked');
+  assert.equal(after.paidAmount, 35, 'the second partial is ADDED to the first, not swapped for it');
+  const bal = await api(`/api/orders/${res.body.orderId}/balance?t=${payTokenOf(res.body.orderId)}`);
+  assert.equal(bal.body.due, Number((order.total - 35).toFixed(2)));
+});
+
+test('nothing can be billed twice: a paid or cancelled order refuses a balance invoice', async () => {
+  const { res } = await shortPay('25.00');
+  const boss = await admin();
+  await api('/api/admin/orders/' + res.body.orderId + '/paid', { method: 'POST', token: boss.token });
+
+  const nope = await api(`/api/orders/${res.body.orderId}/balance/invoice`, {
+    method: 'POST', body: { t: payTokenOf(res.body.orderId) }
+  });
+  assert.equal(nope.status, 409, 'an order that is paid owes nothing');
+
+  const bal = await api(`/api/orders/${res.body.orderId}/balance?t=${payTokenOf(res.body.orderId)}`);
+  assert.equal(bal.body.payable, false, 'and the pay page says so rather than offering a button');
+});
+
+test('an unreadable partial payment is never turned into a bill', async () => {
+  const b = await buyer();
+  const res = await openOrder(b.token);
+  // No invoiceId → the amount cannot be looked up. Billing the full total here
+  // would charge them a second time for money already sent.
+  await webhook(JSON.stringify({
+    type: 'InvoiceExpired', partiallyPaid: true, metadata: { orderId: res.body.orderId }
+  }));
+
+  const mine = (await api('/api/orders', { token: b.token })).body.orders
+    .find(o => o.orderId === res.body.orderId);
+  assert.equal(mine.status, 'underpaid');
+  assert.equal(mine.payUrl, undefined, 'no self-serve link when the balance is unknowable');
+
+  const bal = await api(`/api/orders/${res.body.orderId}/balance?t=${payTokenOf(res.body.orderId)}`);
+  assert.equal(bal.body.payable, false);
+  const nope = await api(`/api/orders/${res.body.orderId}/balance/invoice`, {
+    method: 'POST', body: { t: payTokenOf(res.body.orderId) }
+  });
+  assert.equal(nope.status, 409);
+});
+
+test('only an admin can email a pay link, and only for a collectable balance', async () => {
+  const { b, res } = await shortPay('60.00');
+  const boss = await admin();
+
+  const asBuyer = await api('/api/admin/orders/' + res.body.orderId + '/pay-link', {
+    method: 'POST', token: b.token
+  });
+  assert.equal(asBuyer.status, 401, 'a customer cannot drive the admin endpoint');
+
+  const sent = await api('/api/admin/orders/' + res.body.orderId + '/pay-link', {
+    method: 'POST', token: boss.token
+  });
+  assert.equal(sent.status, 200);
+  assert.ok(sent.body.payUrl.includes(res.body.orderId), 'the link names the order it settles');
+  assert.equal(sent.body.due, sent.body.due);
+
+  // …and refuses an order with nothing outstanding.
+  const clean = await openOrder(b.token);
+  const refused = await api('/api/admin/orders/' + clean.body.orderId + '/pay-link', {
+    method: 'POST', token: boss.token
+  });
+  assert.equal(refused.status, 400);
+});
+
+/* An order released by hand before anyone noticed the payment was short is the
+   worst version of this bug: the store and BTCPay stop disagreeing, so nothing
+   automatic will ever look at it again, and the goods ship for part of the
+   price. The correction has to be able to reverse a `paid`. */
+test('an order wrongly marked paid on a partial payment can be re-opened and collected', async () => {
+  const { b, res, order } = await shortPay('36.80');
+  const boss = await admin();
+  await api('/api/admin/orders/' + res.body.orderId + '/paid', { method: 'POST', token: boss.token });
+  const find = () => store.listOrders(b.user.id).find(o => o.orderId === res.body.orderId);
+  assert.equal(find().status, 'paid', 'released by hand, shortfall unnoticed');
+
+  const due = Number((order.total - 36.8).toFixed(2));
+  const fix = await api('/api/admin/orders/' + res.body.orderId + '/collect-balance', {
+    method: 'POST', token: boss.token, body: { received: 36.8 }
+  });
+  assert.equal(fix.status, 200);
+  assert.equal(fix.body.due, due);
+  assert.equal(find().status, 'underpaid', 'a paid order that was never paid goes back to short');
+
+  // The buyer's own page now offers the way out…
+  const mine = (await api('/api/orders', { token: b.token })).body.orders
+    .find(o => o.orderId === res.body.orderId);
+  assert.equal(mine.amountDue, due);
+
+  // …and paying it finishes the order for good.
+  const made = await api(`/api/orders/${res.body.orderId}/balance/invoice`, {
+    method: 'POST', body: { t: payTokenOf(res.body.orderId) }
+  });
+  assert.equal(made.body.due, due);
+  await webhook(JSON.stringify({
+    type: 'InvoiceSettled', invoiceId: made.body.invoiceId,
+    metadata: { orderId: res.body.orderId, kind: 'balance' }
+  }));
+  assert.equal(find().status, 'paid');
+  assert.equal(find().paidAmount, order.total);
+});
+
+test('a shipped order is never re-opened, and a full payment is not "short"', async () => {
+  const { res, order } = await shortPay('12.00');
+  const boss = await admin();
+  const collect = (body) => api('/api/admin/orders/' + res.body.orderId + '/collect-balance', {
+    method: 'POST', token: boss.token, body
+  });
+
+  assert.equal((await collect({ received: order.total })).status, 400,
+    'nothing outstanding is not a balance to collect');
+  assert.equal((await collect({ received: 'lots' })).status, 400, 'an unreadable amount is refused');
+
+  await api('/api/admin/orders/' + res.body.orderId + '/paid', { method: 'POST', token: boss.token });
+  await api('/api/admin/orders/' + res.body.orderId + '/shipped', {
+    method: 'POST', token: boss.token, body: { carrier: 'USPS', tracking: '94001' }
+  });
+  assert.equal((await collect({ received: 12 })).status, 400,
+    'a parcel that has already gone does not go back in the queue');
+});
+
+/* ============================================================
+   2c) The invoice window itself
+   Every dead order in the store's first month died the same way: BTCPay's
+   default 15-minute window closed while the buyer was still moving coin,
+   and whatever had arrived was banked as a partial. The window and the
+   dust tolerance are set on every invoice we raise, so they can't be lost
+   to someone forgetting a store setting.
+   ============================================================ */
+test('invoices are raised with a real payment window and a dust tolerance', async () => {
+  const b = await buyer();
+  await openOrder(b.token);
+  const checkout = invoices[invoices.length - 1].payload.checkout;
+  assert.ok(checkout.expirationMinutes >= 30, 'a buyer gets long enough to actually pay');
+  assert.ok(checkout.monitoringMinutes >= checkout.expirationMinutes,
+    'a late payment is still seen after the window closes');
+  assert.ok(checkout.paymentTolerance > 0 && checkout.paymentTolerance <= 5,
+    'wallet-fee dust settles instead of parking a real order');
 });
 
 test('an expiry with nothing paid still cancels, and the paid amount is read from BTCPay', async () => {

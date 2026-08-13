@@ -24,21 +24,65 @@ if (!CONFIGURED) {
     'Crypto checkout is disabled until you fill them into server/.env.');
 }
 
+/* ---- how long a buyer gets, and how exact they have to be ----
+   These are set on every invoice we raise, so they don't depend on anyone
+   remembering to change a store setting in the BTCPay UI. BTCPay's own
+   defaults are what turned real buyers into "partially paid, expired":
+
+     expirationMinutes  how long the invoice stays payable. The default is 15,
+                        which is not enough time to open a wallet, fund it or
+                        move coin off an exchange — and an invoice that dies
+                        mid-payment banks whatever arrived as a partial.
+     monitoringMinutes  how long after expiry we keep watching the address, so
+                        a late payment is still SEEN and can be settled rather
+                        than landing in the wallet unattached to anything.
+     paymentTolerance   percent under the asking price that still counts as
+                        paid in full. This exists for wallet-fee dust — the
+                        sender's wallet deducting its network fee from the
+                        amount sent — NOT for real shortfalls. Keep it small.
+     speedPolicy        confirmations required before BTCPay calls it settled.
+
+   All overridable from server/.env; the clamps stop a typo (0, or 100) from
+   turning into free goods or an invoice nobody can pay in time. */
+function envNum(name, fallback, min, max) {
+  const n = Number(process.env[name]);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+const EXPIRY_MINUTES = envNum('BTCPAY_EXPIRY_MINUTES', 60, 10, 1440);
+const MONITORING_MINUTES = envNum('BTCPAY_MONITORING_MINUTES', 1440, 0, 20160);
+const PAYMENT_TOLERANCE = envNum('BTCPAY_PAYMENT_TOLERANCE', 1, 0, 5);
+const SPEED_POLICY = process.env.BTCPAY_SPEED_POLICY || 'MediumSpeed';
+
 /* ---- Create a hosted invoice from an authoritative order.
    `order` comes from pricing.js (server-priced); the browser never
    sends the amount. The metadata is echoed back on the webhook and
    shown in the BTCPay invoice, so the merchant can reconcile + ship.
-   Returns { id, checkoutLink, status }. ---- */
-async function createInvoice({ order, email, shipping, orderId, redirectUrl }) {
+
+   `amount` bills for less than the order total — a top-up invoice for
+   whatever is still owed after a short payment. `kind` rides back on the
+   webhook so the handler can tell "the order's invoice settled" from "the
+   balance invoice settled", which mean different things for an order that is
+   already parked as underpaid.
+
+   Returns { id, checkoutLink, status, amount }. ---- */
+async function createInvoice({ order, email, shipping, orderId, redirectUrl, amount, kind, note }) {
   if (!CONFIGURED) throw new Error('BTCPay is not configured (missing keys in server/.env).');
 
-  const itemDesc = order.items.map(i => `${i.quantity}x ${i.name}`).join(', ');
+  const due = Number(amount != null ? amount : order.total);
+  if (!Number.isFinite(due) || due <= 0) {
+    throw new Error('Refusing to raise an invoice for nothing — there is no amount owed.');
+  }
+
+  const items = Array.isArray(order.items) ? order.items : [];
+  const itemDesc = note || items.map(i => `${i.quantity}x ${i.name}`).join(', ');
 
   const payload = {
-    amount: order.total.toFixed(2),
+    amount: due.toFixed(2),
     currency: CURRENCY,
     metadata: {
       orderId,
+      kind: kind || 'order',
       buyerEmail: email || '',
       itemDesc,
       // full breakdown so the order can be reconciled + shipped from BTCPay
@@ -47,11 +91,15 @@ async function createInvoice({ order, email, shipping, orderId, redirectUrl }) {
         shipping: order.shipping,
         tax: order.tax,
         total: order.total,
-        items: order.items
+        items
       },
       shipping: shipping || null
     },
     checkout: {
+      expirationMinutes: EXPIRY_MINUTES,
+      monitoringMinutes: MONITORING_MINUTES,
+      paymentTolerance: PAYMENT_TOLERANCE,
+      speedPolicy: SPEED_POLICY,
       redirectAutomatically: true,
       ...(redirectUrl ? { redirectURL: redirectUrl } : {})
     }
@@ -77,7 +125,7 @@ async function createInvoice({ order, email, shipping, orderId, redirectUrl }) {
   }
 
   const inv = await res.json();
-  return { id: inv.id, checkoutLink: inv.checkoutLink, status: inv.status };
+  return { id: inv.id, checkoutLink: inv.checkoutLink, status: inv.status, amount: due };
 }
 
 /* ---- Read side of the Greenfield API ----
@@ -188,5 +236,13 @@ module.exports = {
   CURRENCY,
   BASE_URL,
   STORE_ID,
-  HAS_WEBHOOK_SECRET: Boolean(WEBHOOK_SECRET)
+  HAS_WEBHOOK_SECRET: Boolean(WEBHOOK_SECRET),
+  // Surfaced so the admin panel can show the window a buyer actually gets,
+  // rather than the one somebody assumes is configured.
+  CHECKOUT: {
+    expirationMinutes: EXPIRY_MINUTES,
+    monitoringMinutes: MONITORING_MINUTES,
+    paymentTolerance: PAYMENT_TOLERANCE,
+    speedPolicy: SPEED_POLICY
+  }
 };

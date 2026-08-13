@@ -243,11 +243,19 @@
       // ordering, so it sits on the row rather than in an email they may have
       // lost.
       const track = [o.carrier, o.tracking].filter(Boolean).join(' · ');
+      /* An order that came up short is the one row here with something left to
+         do on it. The server sends the link only for orders that can actually
+         be topped up, so its presence IS the condition — the page never has to
+         work out whether a balance is collectable. */
+      const owe = o.payUrl && o.amountDue > 0
+        ? `<div><a class="btn btn-primary btn-sm" href="${esc(o.payUrl)}">Pay the remaining ${esc(money(o.amountDue))}</a></div>`
+        : '';
       return `<div class="order-row">
         <div><strong>${esc(o.orderId)}</strong> <span class="text-muted">${esc(orderDate(o.createdAt))}</span></div>
         <div class="text-muted">${esc(orderItemsSummary(o.items))}${track ? `<br><span class="text-muted">Tracking: ${esc(track)}</span>` : ''}</div>
         <div>${esc(money(o.total))}</div>
         <span class="order-status ${b.cls}">${esc(b.label)}</span>
+        ${owe}
       </div>`;
     }).join('');
   }

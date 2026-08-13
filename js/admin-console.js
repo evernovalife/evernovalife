@@ -1009,7 +1009,17 @@
            and "mark paid" is the exception you take only after the rest of the
            money has actually arrived. */
         actions = o.status === 'underpaid'
-          ? '<button class="btn btn-primary btn-sm act-cancel" data-id="' + esc(o.orderId) + '">Cancel &amp; refund</button> ' +
+          /* The first button is the one that usually ends this well: the buyer
+             is short, not gone, and the link lets them finish without anyone
+             sending an email by hand. Cancel-and-refund is the fallback, and
+             "paid in full now" only after the rest of the money has landed. */
+          /* No pay-link button when the balance is unknowable (BTCPay flagged a
+             partial payment but wouldn't say how much) — there is no honest
+             amount to bill, and billing the total would charge them twice. */
+          ? (o.canCollect === false ? '' :
+              '<button class="btn btn-primary btn-sm act-paylink" data-id="' + esc(o.orderId) +
+              '" data-due="' + esc(money(dueOn(o))) + '">Email pay link</button> ') +
+            '<button class="btn btn-ghost btn-sm act-cancel" data-id="' + esc(o.orderId) + '">Cancel &amp; refund</button> ' +
             '<button class="btn btn-ghost btn-sm act-paid" data-id="' + esc(o.orderId) +
             '" data-total="' + esc(money(o.total)) + '">Paid in full now</button>'
           : '<button class="btn btn-primary btn-sm act-paid" data-id="' + esc(o.orderId) +
@@ -1027,7 +1037,13 @@
         '<td><span class="pill ' + esc(o.status || '') + '">' + esc(String(o.status || '').replace('_', ' ')) + '</span>' +
           (isTestOrder(o) ? ' <span class="pill test">test</span>' : '') +
           (late ? ' <span class="pill late">past hold</span>' : '') + '</td>' +
-        '<td class="num"><strong>' + esc(money(o.total)) + '</strong></td>' +
+        '<td class="num"><strong>' + esc(money(o.total)) + '</strong>' +
+          /* On a short payment the total is the least useful number on the row:
+             what matters is how much is still outstanding. */
+          (o.status === 'underpaid'
+            ? '<span class="muted">' + esc(money(o.paidAmount)) + ' in · ' +
+              esc(money(dueOn(o))) + ' short</span>'
+            : '') + '</td>' +
         (opts.actions ? '<td class="actions">' + actions + '</td>' : '') +
         '</tr>';
     }).join('');
@@ -1193,6 +1209,11 @@
     // and that money is already in the wallet.
     var deadWithMoney = dead.filter(function (i) { return Number(i.paidAmount) > 0; });
     var settledValue = settled.reduce(function (s, i) { return s + (Number(i.amount) || 0); }, 0);
+    /* Money arrived against this invoice, but not all of it and it never
+       settled. Worth acting on WHATEVER our own store believes: an order
+       marked paid by hand against a partial payment looks healthy on every
+       other screen, which is precisely why it is the row that costs money. */
+    var short = invoices.filter(shortHere);
 
     var rows = invoices.map(function (i) {
       var created = i.createdTime ? new Date(i.createdTime * 1000).toISOString() : '';
@@ -1219,14 +1240,17 @@
         /* The button only exists where there is an order to act on. An invoice
            raised inside BTCPay carries no order id, so "Release order" would
            post an empty reference and simply fail. */
-        '<td class="actions">' + (i.needsAttention && i.orderId
+        '<td class="actions">' + (i.orderId && (i.needsAttention || shortHere(i))
           ? (i.status === 'Settled'
               ? '<button class="btn btn-primary btn-sm act-paid" data-id="' + esc(i.orderId) +
                 '" data-total="' + esc(money(i.amount)) + '">Release order</button>'
-              /* Short-paid: the store ships on full payment only, so releasing
-                 it is not offered here. Handle it from Orders, where cancel and
-                 refund is the primary action. */
-              : '<a class="btn btn-ghost btn-sm" href="admin.html#orders">Short paid — see Orders</a>')
+              /* Short-paid. The store ships on full payment only, so releasing
+                 it is not offered — collecting the rest is. This is the one
+                 place that knows what BTCPay actually received, which is
+                 exactly what an order wrongly marked paid is missing. */
+              : '<button class="btn btn-primary btn-sm act-collect" data-id="' + esc(i.orderId) +
+                '" data-got="' + esc(Number(i.paidAmount) || 0) +
+                '" data-total="' + esc(Number(i.amount) || 0) + '">Collect the rest</button>')
           : (i.status === 'Settled' && !i.orderId
               ? '<span class="muted">raised in BTCPay — no store order</span>' : '')) + '</td>' +
         '</tr>';
@@ -1242,6 +1266,18 @@
         kpi('Needs releasing', num(stuck.length), stuck.length ? 'money in, order not released' : 'everything matches', '',
             stuck.length ? 'amber' : '') +
       '</div>' +
+
+      (short.length
+        ? '<div class="adm-card" style="border-color:rgba(224,165,42,.45)">' +
+            '<div class="adm-card-head"><h3>' + A.icon('alert', 'ic') + ' ' +
+              A.plural(short.length, 'invoice') + ' paid part-way</h3></div>' +
+            '<p class="adm-note" style="margin:0">Someone sent money and stopped short of the total — usually ' +
+            'their wallet took its network fee out of the amount, or the payment window closed mid-transfer. ' +
+            'The coins are in your wallet and the goods are still on the shelf. <strong>Collect the rest</strong> ' +
+            'below records what actually arrived and emails the buyer a link that opens a fresh invoice for ' +
+            'the difference — it works even on an order this store already calls paid.</p>' +
+          '</div>'
+        : '') +
 
       (stuck.length
         ? '<div class="adm-card" style="border-color:rgba(224,165,42,.45)">' +
@@ -1464,6 +1500,107 @@
     }
   }
 
+  /* An invoice that took money and never settled. Deliberately blind to what
+     our own order store says — the dangerous case is the one where the two
+     already agree because a human made them agree. */
+  function shortHere(i) {
+    var got = Number(i.paidAmount) || 0;
+    return i.status !== 'Settled' && got > 0 && got < (Number(i.amount) || 0);
+  }
+
+  /* Re-open an order at what is genuinely outstanding, and send the buyer a
+     link for it. The amount is asked for rather than assumed: BTCPay's figure
+     is the right default, but the owner may have taken part of it another way,
+     and the number typed here becomes the order's truth. */
+  async function collectBalance(orderId, got, total, btn) {
+    var suggested = (Number(got) || 0).toFixed(2);
+    var typed = window.prompt(
+      'How much has actually been received for ' + orderId + '?\n\n' +
+      'BTCPay says ' + money(got) + ' of ' + money(total) + '. Correct it if you have taken part of it ' +
+      'another way. We will re-open the order for the difference and email the buyer a link to pay it.',
+      suggested);
+    if (typed === null) return;
+    var received = Number(String(typed).replace(/[^0-9.]/g, ''));
+    if (!isFinite(received) || received < 0) { A.toast('That is not an amount.', 'error'); return; }
+    var due = (Number(total) || 0) - received;
+    if (due <= 0) { A.toast('That covers the whole order — nothing to collect.', 'error'); return; }
+    if (!window.confirm('Ask the buyer for ' + money(due) + ' on ' + orderId + '?\n\n' +
+        'The order goes back to “payment short”, so nothing ships until the rest arrives. ' +
+        'They get a link that opens a fresh crypto invoice for exactly ' + money(due) + ' — when it clears, ' +
+        'the order marks itself paid and moves to “To ship”.')) return;
+
+    btn.disabled = true;
+    var label = btn.textContent;
+    btn.textContent = 'Sending…';
+    try {
+      var data = await A.api('/api/admin/orders/' + encodeURIComponent(orderId) + '/collect-balance', {
+        method: 'POST', body: { received: received }
+      });
+      if (data.sent) {
+        A.toast(orderId + ' re-opened for ' + money(data.due) + ' — link emailed to ' + data.to + '.', 'success');
+        btn.textContent = 'Link sent';
+      } else {
+        window.prompt(data.reason || 'Send this link to the buyer yourself:', data.payUrl);
+        btn.textContent = label;
+        btn.disabled = false;
+      }
+      await loadAll({ quiet: true });
+      await loadBtcpay(true);
+    } catch (e) {
+      if (e.data && e.data.payUrl) {
+        window.prompt('The order was re-opened but the email did not go out. Send this link by hand:', e.data.payUrl);
+      }
+      A.toast(e.message, 'error');
+      btn.disabled = false;
+      btn.textContent = label;
+    }
+  }
+
+  /* What a short-paid order still owes. The server sends `amountDue` on orders
+     it will collect for; this falls back to total-minus-received so a backend
+     that predates the balance work still shows a sensible figure. */
+  function dueOn(o) {
+    if (!o) return 0;
+    if (typeof o.amountDue === 'number') return o.amountDue;
+    return Math.max(0, (Number(o.total) || 0) - (Number(o.paidAmount) || 0));
+  }
+
+  /* Re-send the buyer the link that lets them pay the difference themselves.
+     They already get one automatically the moment the shortfall is detected —
+     this is for the orders that went short before that existed, and for the
+     buyer who deleted the email. */
+  async function sendPayLink(orderId, due, btn) {
+    var o = (state.orders || []).find(function (x) { return x.orderId === orderId; });
+    var to = (o && o.email) || 'the buyer';
+    if (!window.confirm('Email ' + to + ' a link to pay the outstanding ' + (due || 'balance') +
+        ' on ' + orderId + '?\n\n' +
+        'The link opens a fresh crypto invoice for exactly that amount and never expires. ' +
+        'If they pay it, the order marks itself paid and lands in “To ship” — you do nothing.')) return;
+    btn.disabled = true;
+    var label = btn.textContent;
+    btn.textContent = 'Sending…';
+    try {
+      var data = await A.api('/api/admin/orders/' + encodeURIComponent(orderId) + '/pay-link', { method: 'POST' });
+      if (data.sent) {
+        A.toast('Pay link sent to ' + (data.to || to) + '.', 'success');
+        btn.textContent = 'Link sent';
+      } else {
+        /* Nothing to send it to. The link is still the useful part, so put it
+           somewhere copyable instead of reporting a failure. */
+        window.prompt(data.reason || 'Send this link to the buyer yourself:', data.payUrl);
+        btn.disabled = false;
+        btn.textContent = label;
+      }
+    } catch (e) {
+      if (e.data && e.data.payUrl) {
+        window.prompt('The email did not go out. Copy this link and send it to the buyer yourself:', e.data.payUrl);
+      }
+      A.toast(e.message, 'error');
+      btn.disabled = false;
+      btn.textContent = label;
+    }
+  }
+
   async function cancelOrder(orderId, btn) {
     var o = (state.orders || []).find(function (x) { return x.orderId === orderId; });
     /* A short-paid order is the one case where cancelling leaves money behind:
@@ -1553,6 +1690,8 @@
       else if (t.classList.contains('act-rate-del')) deleteRate(t.getAttribute('data-id'), t.getAttribute('data-name'), t);
       else if (t.classList.contains('act-slip')) packingSlip(t.getAttribute('data-id'));
       else if (t.classList.contains('act-cancel')) cancelOrder(t.getAttribute('data-id'), t);
+      else if (t.classList.contains('act-paylink')) sendPayLink(t.getAttribute('data-id'), t.getAttribute('data-due'), t);
+      else if (t.classList.contains('act-collect')) collectBalance(t.getAttribute('data-id'), t.getAttribute('data-got'), t.getAttribute('data-total'), t);
       else if (t.classList.contains('act-del-user')) deleteUser(t.getAttribute('data-id'), t.getAttribute('data-name'), t);
       else if (t.classList.contains('act-due')) dueNow(t.getAttribute('data-id'), t);
     });

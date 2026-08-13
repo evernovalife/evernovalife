@@ -81,6 +81,10 @@ The server also serves the static site, so open **http://localhost:4242/checkout
 | POST   | `/api/crypto/checkout` | Price the cart + open a BTCPay crypto invoice    |
 | POST   | `/api/crypto/webhook`  | BTCPay → us: invoice state changes (signed)      |
 | POST   | `/api/zelle/checkout`  | Price the cart + open an unpaid Zelle order      |
+| GET    | `/api/orders/:id/balance` | What a short-paid order still owes (signed `?t=` link, no sign-in) |
+| POST   | `/api/orders/:id/balance/invoice` | Open a fresh crypto invoice for that difference |
+| POST   | `/api/admin/orders/:id/pay-link` | Admin: re-email the buyer their pay-the-rest link |
+| POST   | `/api/admin/orders/:id/collect-balance` | Admin: record what really arrived and re-open the order for the rest |
 | GET    | `/api/admin/orders`    | Admin: all orders (`?status=awaiting_payment`)   |
 | POST   | `/api/admin/orders/:id/paid`   | Admin: confirm a manual payment landed   |
 | POST   | `/api/admin/orders/:id/cancel` | Admin: cancel an order that was never paid |
@@ -156,22 +160,63 @@ verifies the signature and acts on the state:
 
 That last row is the one that bites. **An expired invoice is not the same as an
 unpaid one:** BTCPay expires an invoice that was underpaid or paid too late, and
-those coins are already in your wallet. Such an order is parked at `underpaid`
-and waits for a human — "Mark paid" in `admin.html` releases it (the buyer sent
-the rest, or you're accepting the shortfall), "Cancel" gives back the stock and
-the loyalty points, and the refund itself is a send from your wallet.
+those coins are already in your wallet. Such an order is parked at `underpaid`,
+where it can never ship, and the buyer is handed a way to finish it.
 
-**Two BTCPay store settings decide how often that happens** (Store Settings →
-Checkout):
+### Paying off a short payment
 
-- *Invoice expires if the full amount has not been paid after N minutes* — the
-  default 15 is tight for on-chain Bitcoin. A buyer withdrawing from an exchange
-  can easily take longer than that before the transaction is even broadcast.
-  30–60 is kinder.
-- *Payment tolerance* — 0% means a wallet or exchange that deducts its network
-  fee from the amount sent leaves the order unpaid. 1–2% absorbs that.
+A buyer who sends too little used to be stuck: the invoice they underpaid is
+expired, BTCPay will not reopen it, and the only route to finishing the order
+was an email thread with a human. So the shortfall now comes with its own way
+out.
 
-And one store *wallet* setting: the checkout is labelled **Bitcoin / Lightning**
+Every short-paid order carries a permanent link — `pay.html?order=…&t=…` — and
+the buyer is emailed it automatically the moment the shortfall is detected. The
+link **mints a fresh BTCPay invoice for exactly the outstanding amount each
+time it is opened**, which is the point: a checkout link is only payable inside
+its own window, so any link that sits in an inbox is dead by the time someone
+taps it. This page isn't; it's the thing that stays valid.
+
+- The token is an HMAC of the order reference under `JWT_SECRET` — nothing is
+  stored, so orders raised long before this existed get a working link too. It
+  unlocks exactly one order, and only to read the balance and invoice it.
+- Payments are recorded **per invoice** on the order (`payments`), and
+  `paidAmount` is their sum. An order paid across two invoices reaches its
+  total instead of the second payment overwriting the first.
+- When the top-up settles, the order marks itself `paid` and moves into
+  **To ship** with no admin involvement. If the top-up is *itself* short, the
+  amounts add up and the buyer gets a fresh link for what's left.
+- The buyer's account page shows the same button on the order row.
+
+Two admin actions cover what automation can't reach, both in `admin.html`:
+
+- **Orders → Email pay link** — re-sends that email. For the buyer who deleted
+  it.
+- **BTCPay → Collect the rest** — for an order **already marked paid** against
+  a partial payment. That case has no disagreement left for anything automatic
+  to notice: the store says paid, BTCPay says PaidPartial, and the goods would
+  ship for part of the price. You type what actually arrived (BTCPay's figure
+  is pre-filled), the order re-opens at the difference, and the buyer is
+  emailed the link. It refuses an order that has already shipped.
+
+One case is deliberately left to a human: when BTCPay flags a partial payment
+but won't say how much (no invoice id on the event), the balance is unknowable.
+No link is offered and no amount is billed — charging the full total there
+would take the buyer's money twice. The order says so, and the alert asks you
+to settle it by hand.
+
+**The shortfall is also made rarer at the source.** Every invoice this server
+raises now carries its own checkout settings, so they can't be lost to a store
+setting nobody remembered to change (all overridable in `server/.env`):
+
+| | default | why |
+|---|---|---|
+| `BTCPAY_EXPIRY_MINUTES` | 60 | BTCPay's own default is 15, which is not enough time to open a wallet or move coin off an exchange — and an invoice that dies mid-payment banks whatever arrived as a partial |
+| `BTCPAY_MONITORING_MINUTES` | 1440 | a late payment is still *seen* after the window closes, instead of landing in the wallet attached to nothing |
+| `BTCPAY_PAYMENT_TOLERANCE` | 1% | wallet-fee dust settles instead of parking a real order. For dust only — a real shortfall still parks |
+| `BTCPAY_SPEED_POLICY` | `MediumSpeed` | 1 confirmation before settled |
+
+And one store *wallet* setting that only you can fix: the checkout is labelled **Bitcoin / Lightning**
 throughout the site, so a Lightning node has to actually be connected in BTCPay
 (Store → Lightning). With on-chain as the only method, every buyer is subject to
 mempool timing inside that expiry window — check an invoice's `paymentMethods`:
@@ -198,9 +243,9 @@ a rate the checkout doesn't charge.
 
 **Full payment or nothing.** A short payment never becomes a sale on its own,
 and `/api/admin/orders/:id/shipped` refuses an `underpaid` order outright. The
-two ways out are: cancel and refund the coins from your wallet (the normal one),
-or raise a fresh BTCPay invoice for the difference with the order reference in
-its description and only mark the order paid once that clears.
+buyer collects themselves through the pay link above; if they'd rather have
+their coins back, "Cancel & refund" releases the stock and the held points, and
+the refund itself is a send from your wallet.
 
 **Shipping.** A paid order lands in **admin.html → To ship**: one card per
 parcel with the address, the items and a printable packing slip (no prices on

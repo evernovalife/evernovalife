@@ -247,7 +247,14 @@ app.put('/api/cart', auth.requireAuth, (req, res) => {
    ORDERS — the signed-in user's order history.
    ============================================================ */
 app.get('/api/orders', auth.requireAuth, (req, res) => {
-  res.json({ success: true, orders: store.listOrders(req.user.id) });
+  /* A short-paid order carries its own way out: what's still owed, and the
+     link that raises an invoice for it. Attached here rather than stored, so
+     it is always current and orders raised before the feature existed get one
+     too. Everything else is returned untouched. */
+  const orders = store.listOrders(req.user.id).map(o => canPayBalance(o)
+    ? { ...o, amountDue: amountDue(o), payUrl: payLinkFor(o.orderId) }
+    : o);
+  res.json({ success: true, orders });
 });
 
 /* ============================================================
@@ -1059,8 +1066,23 @@ app.post('/api/crypto/webhook', async (req, res) => {
    delivery. Each carries its own .catch so nothing becomes an unhandled
    rejection. */
 async function handleInvoiceEvent(evt, orderId) {
+  /* Which invoice is this? The one raised at checkout, or a top-up raised
+     afterwards to collect a shortfall. They mean different things for an order
+     that is already parked as underpaid, so the kind rides along in the
+     metadata rather than being guessed at. */
+  const isBalance = String((evt.metadata && evt.metadata.kind) || 'order') === 'balance';
+
   if (evt.type === 'InvoiceSettled') {
-    const upd = markOrderPaid(orderId, { invoiceId: evt.invoiceId || '' });
+    /* A settled invoice means its OWN amount arrived in full — for a top-up
+       that is exactly the shortfall, so either way the order is now covered.
+       Book it against the invoice it came in on before flipping the status, so
+       the order's payment history still adds up to what was taken. */
+    settleInvoicePayment(orderId, evt, isBalance);
+    const upd = markOrderPaid(orderId, isBalance
+      // Don't overwrite the reference of the invoice this order was opened on —
+      // reconciling a two-payment order needs both.
+      ? { balanceInvoiceId: evt.invoiceId || '', paidInFullBy: 'balance invoice' }
+      : { invoiceId: evt.invoiceId || '' });
     if (!upd || upd.previousStatus === 'paid') return;   // repeat delivery — don't email twice
     const order = upd.order;
     sendPaymentConfirmedEmail(order).catch(e => console.error('[paid email] failed:', e.message));
@@ -1070,7 +1092,31 @@ async function handleInvoiceEvent(evt, orderId) {
 
   if (evt.type !== 'InvoiceExpired' && evt.type !== 'InvoiceInvalid') return;
 
-  const existing = orderId ? store.listAllOrders().find(o => o.orderId === orderId) : null;
+  const existing = findOrder(orderId);
+
+  /* A top-up invoice dying is not the same event as the original one dying.
+     The order is already `underpaid`, so the "already decided" guard below
+     would throw away whatever landed against this second invoice — the very
+     bug this feature exists to fix, one level down. Add it to the running
+     total instead, and settle the order if it now covers the bill. */
+  if (isBalance && existing) {
+    const { amount, known } = await invoicePaidAmount(evt);
+    if (!known || amount <= 0) return;                   // nothing new arrived
+    recordInvoicePayment(orderId, evt.invoiceId, amount);
+    const after = findOrder(orderId) || existing;
+    if (amountDue(after) <= DUST) {
+      const upd = markOrderPaid(orderId, { paidInFullBy: 'balance invoice' });
+      if (upd && upd.previousStatus !== 'paid') {
+        sendPaymentConfirmedEmail(upd.order).catch(e => console.error('[paid email] failed:', e.message));
+        notifyAdminOfPaidOrder(upd.order).catch(e => console.error('[paid admin-notify] failed:', e.message));
+      }
+      return;
+    }
+    // Still short. Same treatment as the first time — including a fresh link.
+    reportShortfall({ orderId, order: after, paid: paidSoFar(after), invoiceId: evt.invoiceId });
+    return;
+  }
+
   if (existing && ['paid', 'underpaid', 'cancelled'].includes(String(existing.status).toLowerCase())) {
     return;    // already decided — a redelivery must not undo it
   }
@@ -1084,20 +1130,25 @@ async function handleInvoiceEvent(evt, orderId) {
   if (paid > 0 || !known) {
     /* Money arrived but not enough (or not in time). Hold everything exactly as
        it is — the stock stays reserved and the loyalty points stay held — and
-       put it in front of a human. Admin either marks it paid (buyer sent the
-       rest / owner accepts the shortfall) or cancels it, which is what releases
-       the stock and refunds the points. */
+       give the buyer a way to finish. They get a permanent link that raises a
+       fresh invoice for the difference; the owner is told either way, because
+       the buyer may prefer a refund. */
+    if (known) recordInvoicePayment(orderId, evt.invoiceId, paid);
     store.updateOrderStatus(orderId, 'underpaid', {
-      ...(known ? { paidAmount: paid } : {}),
       underpaidAt: new Date().toISOString(),
-      invoiceId: evt.invoiceId || (existing && existing.invoiceId) || ''
+      invoiceId: evt.invoiceId || (existing && existing.invoiceId) || '',
+      /* "Some money arrived, we can't see how much" is the one case where the
+         balance cannot be worked out — and billing the buyer the full total
+         again would charge them twice for what they already sent. Flag it so
+         the self-serve top-up stays shut and a human picks it up. */
+      paidAmountUnknown: !known
     });
-    const order = existing ? { ...existing, ...(known ? { paidAmount: paid } : {}) } : null;
-    const amount = known ? paid : null;
-    notifyAdminOfUnderpaidOrder({ orderId, order, paid: amount, invoiceId: evt.invoiceId })
-      .catch(e => console.error('[underpaid admin-notify] failed:', e.message));
-    sendUnderpaidEmail({ order, orderId, paid: amount })
-      .catch(e => console.error('[underpaid email] failed:', e.message));
+    reportShortfall({
+      orderId,
+      order: findOrder(orderId) || existing,
+      paid: known ? paid : null,
+      invoiceId: evt.invoiceId
+    });
     return;
   }
 
@@ -1161,6 +1212,327 @@ function markOrderPaid(orderId, patch) {
   }
   return upd;
 }
+
+/* ============================================================
+   PAYING OFF A SHORT PAYMENT
+   Crypto is the one method where "paid" is not a yes/no. Coins land in
+   whatever amount the sender chose, and a buyer who sends too little has no
+   way back in: the invoice they underpaid is expired, and BTCPay will not
+   reopen it. Their money is in the wallet, their order is frozen, and the
+   only route to finishing it used to be an email exchange with a human.
+
+   The way out is a fresh invoice for the difference, reached through a link
+   that does not go stale. /pay.html?order=…&t=… is permanent — it mints a NEW
+   BTCPay invoice each time it is opened, because a checkout link is only
+   payable inside its own window and any link that sits in an inbox will be
+   opened after that window closed.
+
+   Payments are recorded per invoice and summed, so an order paid across two
+   invoices actually reaches its total instead of the second payment
+   overwriting the first.
+   ============================================================ */
+
+/* Below this, a difference is rounding noise from a currency conversion, not
+   money anyone should be asked for. */
+const DUST = 0.01;
+
+function round2(n) { return Math.round((Number(n) || 0) * 100) / 100; }
+
+/* One order by reference, across every account (including guests). The webhook
+   and the pay link both know only the orderId. */
+function findOrder(orderId) {
+  if (!orderId) return null;
+  try { return store.listAllOrders().find(o => o.orderId === orderId) || null; }
+  catch (e) { return null; }
+}
+
+/* Everything received against this order, whichever invoice it arrived on.
+   Falls back to the flat paidAmount so orders written before the ledger
+   existed — including the ones currently stuck — still read correctly. */
+function paidSoFar(order) {
+  if (!order) return 0;
+  const ledger = order.payments && typeof order.payments === 'object' ? order.payments : null;
+  if (!ledger) return round2(order.paidAmount);
+  return round2(Object.keys(ledger).reduce((sum, k) => sum + (Number(ledger[k]) || 0), 0));
+}
+
+function amountDue(order) {
+  if (!order) return 0;
+  return Math.max(0, round2(Number(order.total || 0) - paidSoFar(order)));
+}
+
+/* Book a payment against the invoice it arrived on. Keyed by invoice, so a
+   redelivery of the same event restates the same number rather than adding it
+   twice, and a top-up adds to the first partial rather than replacing it. */
+function recordInvoicePayment(orderId, invoiceId, amount) {
+  const existing = findOrder(orderId);
+  if (!existing) return null;
+  const payments = { ...(existing.payments || {}) };
+  /* An order that predates the ledger carries a flat paidAmount with no
+     invoice against it. Seed it as its own line so the sum below doesn't
+     silently forget money that is already in the wallet. */
+  if (!existing.payments && Number(existing.paidAmount) > 0) {
+    payments[existing.invoiceId || 'original'] = round2(existing.paidAmount);
+  }
+  payments[invoiceId || 'unknown'] = round2(amount);
+  const total = round2(Object.keys(payments).reduce((s, k) => s + (Number(payments[k]) || 0), 0));
+  // A readable figure answers the question the flag was raised over.
+  return store.updateOrderStatus(orderId, null, { payments, paidAmount: total, paidAmountUnknown: false });
+}
+
+/* The permanent, un-expiring link a buyer uses to settle what they owe. The
+   token is an HMAC of the order reference, so this works for orders that were
+   raised long before the feature existed — no stored token, nothing to
+   backfill. */
+function payLinkFor(orderId) {
+  return `${SITE()}/pay.html?order=${encodeURIComponent(orderId)}&t=${auth.refToken('pay', orderId)}`;
+}
+
+/* Only a short-paid crypto order can be topped up. A pending order still has
+   its original invoice live (raising a second one bills the same goods twice),
+   and a cancelled or paid one owes nothing.
+
+   An order whose received amount could not be read is excluded on purpose: the
+   balance is unknowable, and the only figure available to bill would be the
+   full total — charging a second time for money already sent. */
+function canPayBalance(order) {
+  return Boolean(order) &&
+    String(order.status).toLowerCase() === 'underpaid' &&
+    !order.paidAmountUnknown &&
+    amountDue(order) > DUST;
+}
+
+/* What the webhook does once it knows an order came up short: tell the owner
+   there is money in the wallet against goods that aren't going out, and give
+   the buyer a way to finish instead of an inbox to wait in. Fired and
+   forgotten — a slow SMTP handshake must not hold the webhook open. */
+function reportShortfall({ orderId, order, paid, invoiceId }) {
+  const payUrl = payLinkFor(orderId);
+  // With no readable amount there is no honest "still due" figure to print.
+  const due = paid == null ? null : (order ? amountDue(order) : null);
+  const payable = canPayBalance(order);
+  notifyAdminOfUnderpaidOrder({ orderId, order, paid, due, invoiceId, payUrl, payable })
+    .catch(e => console.error('[underpaid admin-notify] failed:', e.message));
+  sendUnderpaidEmail({ order, orderId, paid, due, payUrl, payable })
+    .catch(e => console.error('[underpaid email] failed:', e.message));
+}
+
+/* Book what a settled invoice was raised for. Keyed by invoice id, so the
+   partial already recorded against that same invoice is restated as its full
+   amount rather than added to. */
+function settleInvoicePayment(orderId, evt, isBalance) {
+  const order = findOrder(orderId);
+  if (!order || String(order.status).toLowerCase() === 'paid') return;
+  const amount = isBalance
+    ? (Number(order.balanceInvoiceAmount) || amountDue(order))
+    : round2(order.total);
+  if (amount > 0) recordInvoicePayment(orderId, evt.invoiceId, amount);
+}
+
+/* A checkout link the buyer can actually pay right now.
+
+   Reused for a couple of minutes so a refresh, a double-tap or the second of
+   two devices lands on the same invoice instead of littering BTCPay with
+   abandoned ones — but never longer, because the reused link has to still be
+   inside its own payment window. */
+const BALANCE_REUSE_MS = 3 * 60 * 1000;
+
+async function openBalanceInvoice(order) {
+  const due = amountDue(order);
+  if (due <= DUST) {
+    const e = new Error('There is nothing left to pay on that order.');
+    e.status = 409;
+    throw e;
+  }
+
+  const mintedAt = order.balanceInvoiceAt ? Date.parse(order.balanceInvoiceAt) : 0;
+  const fresh = mintedAt && (Date.now() - mintedAt) < BALANCE_REUSE_MS;
+  if (fresh && order.balanceCheckoutLink && round2(order.balanceInvoiceAmount) === due) {
+    return { checkoutLink: order.balanceCheckoutLink, invoiceId: order.balanceInvoiceId, due, reused: true };
+  }
+
+  const invoice = await btcpay.createInvoice({
+    order,
+    amount: due,
+    kind: 'balance',
+    note: `Balance of order ${order.orderId}`,
+    email: order.email,
+    shipping: order.shippingAddress,
+    orderId: order.orderId,
+    redirectUrl: `${SITE()}/pay.html?order=${encodeURIComponent(order.orderId)}` +
+      `&t=${auth.refToken('pay', order.orderId)}&sent=1`
+  });
+
+  store.updateOrderStatus(order.orderId, null, {
+    balanceInvoiceId: invoice.id,
+    balanceCheckoutLink: invoice.checkoutLink,
+    balanceInvoiceAmount: due,
+    balanceInvoiceAt: new Date().toISOString()
+  });
+
+  return { checkoutLink: invoice.checkoutLink, invoiceId: invoice.id, due, reused: false };
+}
+
+/* The two endpoints behind pay.html. Deliberately unauthenticated: the buyer
+   may be a guest, and will be reading this off a phone hours after checkout.
+   The signed token in the URL is the credential, and it only ever unlocks ONE
+   order — reading what is owed on it, and raising an invoice for that amount.
+   Neither can move money, change an address or reveal an account. */
+function orderFromPayToken(req) {
+  const orderId = String(req.params.orderId || '');
+  const t = String((req.query && req.query.t) || (req.body && req.body.t) || '');
+  if (!auth.verifyRefToken('pay', orderId, t)) return null;
+  return findOrder(orderId);
+}
+
+app.get('/api/orders/:orderId/balance', (req, res) => {
+  const order = orderFromPayToken(req);
+  if (!order) return res.status(404).json({ error: 'That payment link is not valid.' });
+  res.json({
+    success: true,
+    orderId: order.orderId,
+    status: order.status,
+    total: round2(order.total),
+    paid: paidSoFar(order),
+    due: amountDue(order),
+    payable: canPayBalance(order),
+    currency: btcpay.CURRENCY,
+    items: (order.items || []).map(i => ({ name: i.name, quantity: i.quantity })),
+    // How long the invoice they are about to open will stay payable, so the
+    // page can say it out loud instead of letting it run out unannounced.
+    windowMinutes: btcpay.CHECKOUT.expirationMinutes
+  });
+});
+
+app.post('/api/orders/:orderId/balance/invoice', async (req, res) => {
+  const order = orderFromPayToken(req);
+  if (!order) return res.status(404).json({ error: 'That payment link is not valid.' });
+  if (!btcpay.CONFIGURED) return res.status(500).json({ error: 'Crypto payments are not set up on this server.' });
+  if (!canPayBalance(order)) {
+    const status = String(order.status).toLowerCase();
+    return res.status(409).json({
+      error: status === 'paid' || status === 'shipped' || status === 'delivered'
+        ? 'That order is already paid in full — nothing more is owed.'
+        : status === 'cancelled'
+          ? 'That order was cancelled. Get in touch and we will sort out a refund or a new order.'
+          : 'There is nothing to pay on that order right now.',
+      status: order.status
+    });
+  }
+  try {
+    const out = await openBalanceInvoice(order);
+    res.json({ success: true, ...out });
+  } catch (e) {
+    console.error('[balance invoice] failed for', order.orderId + ':', e.message);
+    res.status(e.status === 409 ? 409 : 502).json({ error: e.message });
+  }
+});
+
+/* ---- ADMIN: send the buyer their pay-the-rest link ----
+   The same link the underpaid email already carries, re-sent on demand: for
+   the orders that went short before this existed, and for the buyer who
+   deleted the first email. */
+app.post('/api/admin/orders/:orderId/pay-link', requireAdmin, async (req, res) => {
+  const order = findOrder(req.params.orderId);
+  if (!order) return res.status(404).json({ error: 'No order with that reference.' });
+  if (!canPayBalance(order)) {
+    return res.status(400).json({
+      error: `That order is "${order.status}" with $${amountDue(order).toFixed(2)} outstanding — there is no balance to collect.`
+    });
+  }
+  const payUrl = payLinkFor(order.orderId);
+  const due = amountDue(order);
+  /* No inbox to send to — but the link itself is the useful part, so hand it
+     back rather than failing. The admin can paste it wherever the buyer
+     actually is. */
+  if (!mailer.CONFIGURED || !order.email) {
+    return res.json({
+      success: true, sent: false, payUrl, due,
+      reason: mailer.CONFIGURED
+        ? 'That order has no email address on it — send this link to the buyer yourself.'
+        : 'Email is not set up on this server — send this link to the buyer yourself.'
+    });
+  }
+  try {
+    await sendBalanceLinkEmail({ order, due, payUrl });
+    res.json({ success: true, sent: true, to: order.email, payUrl, due });
+  } catch (e) {
+    console.error('[pay-link email] failed:', e.message);
+    res.status(502).json({ error: 'Could not send the email: ' + e.message, payUrl, due });
+  }
+});
+
+/* ---- ADMIN: this order is short, whatever the store says ----
+   The webhook path parks a shortfall on its own, but it can only do that for
+   orders it saw go short. Two kinds slip past it:
+
+     · orders released by hand before the shortfall was noticed — the store
+       says "paid", BTCPay says "partially paid", and there is no disagreement
+       anywhere for the automation to act on
+     · orders from before any of this existed, where the money in the wallet
+       was never written down at all
+
+   So this takes the amount the owner can actually see in BTCPay, records it as
+   the truth, re-opens the order at what is still owed, and emails the buyer
+   the link. It reverses a `paid` an admin should not have given — deliberately
+   loud, because the alternative is a customer who paid $36 of $96 and gets
+   $96 of goods. */
+app.post('/api/admin/orders/:orderId/collect-balance', requireAdmin, async (req, res) => {
+  const order = findOrder(req.params.orderId);
+  if (!order) return res.status(404).json({ error: 'No order with that reference.' });
+
+  const status = String(order.status).toLowerCase();
+  if (status === 'shipped' || status === 'delivered') {
+    return res.status(400).json({
+      error: 'That order has already shipped. Chase the balance directly — re-opening it would put a ' +
+             'parcel that is already gone back into the packing queue.'
+    });
+  }
+  if (status === 'cancelled') {
+    return res.status(400).json({ error: 'That order was cancelled. Its stock and points are already released — place a new one instead.' });
+  }
+
+  const received = Number(req.body && req.body.received);
+  if (!Number.isFinite(received) || received < 0) {
+    return res.status(400).json({ error: 'Enter how much has actually been received against this order (0 or more).' });
+  }
+  const total = round2(order.total);
+  if (received >= total - DUST) {
+    return res.status(400).json({ error: `That covers the full $${total.toFixed(2)} — there is no balance to collect.` });
+  }
+
+  /* Replaces the ledger rather than adding to it: the caller is stating what
+     has arrived in total, having read it off BTCPay, and the whole reason this
+     endpoint exists is that whatever is recorded here is wrong. */
+  store.updateOrderStatus(order.orderId, 'underpaid', {
+    payments: { 'admin-corrected': round2(received) },
+    paidAmount: round2(received),
+    paidAmountUnknown: false,
+    underpaidAt: order.underpaidAt || new Date().toISOString(),
+    balanceCorrectedBy: (req.user && req.user.email) || 'admin key',
+    balanceCorrectedAt: new Date().toISOString()
+  });
+
+  const updated = findOrder(order.orderId);
+  const due = amountDue(updated);
+  const payUrl = payLinkFor(order.orderId);
+
+  if (!mailer.CONFIGURED || !updated.email) {
+    return res.json({
+      success: true, sent: false, payUrl, due, status: updated.status,
+      reason: mailer.CONFIGURED
+        ? 'That order has no email address on it — send this link to the buyer yourself.'
+        : 'Email is not set up on this server — send this link to the buyer yourself.'
+    });
+  }
+  try {
+    await sendBalanceLinkEmail({ order: updated, due, payUrl });
+    res.json({ success: true, sent: true, to: updated.email, payUrl, due, status: updated.status });
+  } catch (e) {
+    console.error('[collect-balance email] failed:', e.message);
+    res.status(502).json({ error: 'The order was re-opened, but the email did not go out: ' + e.message, payUrl, due });
+  }
+});
 
 /* ============================================================
    ZELLE CHECKOUT — manual bank transfer
@@ -1249,7 +1621,11 @@ app.get('/api/admin/orders', requireAdmin, (req, res) => {
         ...o,
         guest,
         userEmail: guest ? (o.email || '(guest)') : (owner ? owner.email : '(deleted account)'),
-        userName: owner ? `${owner.firstName} ${owner.lastName}`.trim() : ''
+        userName: owner ? `${owner.firstName} ${owner.lastName}`.trim() : '',
+        // What is still owed, and whether it can be collected without a human
+        // — the two things the underpaid rows are actually worked from.
+        amountDue: amountDue(o),
+        canCollect: canPayBalance(o)
       };
     });
   res.json({ success: true, count: orders.length, orders });
@@ -1726,13 +2102,17 @@ async function notifyAdminOfPaidOrder(order) {
    This is the case that used to be written off silently, so the alert is loud:
    the store is holding both the buyer's money and the stock until a human
    decides which way it goes. */
-async function notifyAdminOfUnderpaidOrder({ orderId, order, paid, invoiceId }) {
+async function notifyAdminOfUnderpaidOrder({ orderId, order, paid, due, invoiceId, payUrl, payable }) {
   const to = process.env.ADMIN_EMAIL || '';
   if (!mailer.CONFIGURED || !to) return;
   const total = order ? Number(order.total || 0).toFixed(2) : '?';
   const got = paid == null ? 'an unknown amount' : '$' + Number(paid).toFixed(2);
-  const short = (paid != null && order) ? '$' + (Number(order.total || 0) - Number(paid)).toFixed(2) : 'unknown';
+  const short = due == null ? 'unknown' : '$' + Number(due).toFixed(2);
   const link = btcpay.BASE_URL && invoiceId ? `${btcpay.BASE_URL}/i/${invoiceId}` : '';
+  /* The difference between this alert and the old one: the buyer has already
+     been handed a way to finish. Say so, or the owner starts an email thread
+     that crosses with the payment. */
+  const selfServe = payable && payUrl;
   return mailer.sendMail({
     to,
     subject: `ACTION NEEDED — underpaid crypto order ${orderId} (${got} of $${total})`,
@@ -1741,12 +2121,16 @@ async function notifyAdminOfUnderpaidOrder({ orderId, order, paid, invoiceId }) 
       `Order:     ${orderId}\nInvoiced:  $${total}\nReceived:  ${got}\nStill due: ${short}\n` +
       `Buyer:     ${(order && order.email) || '(no email)'}\nItems:     ${itemLines(order)}\n` +
       (link ? `Invoice:   ${link}\n` : '') + `\n` +
-      `Nothing ships on a short payment. The stock and any loyalty points stay held until you decide. ` +
-      `In ${SITE()}/admin.html:\n` +
-      `  · "Cancel & refund" — the normal outcome. Releases the stock and the points; send the ` +
-      `${got} back from your wallet.\n` +
-      `  · Collect the difference first: raise an invoice in BTCPay for ${short} with ${orderId} in the ` +
-      `description and send the buyer the link. Only once that clears should you mark the order paid.\n`,
+      (selfServe
+        ? `The buyer has been emailed a link to pay the remaining ${short}. It raises a fresh invoice ` +
+          `whenever they open it, so it can't go stale:\n  ${payUrl}\n\n` +
+          `If that clears, this order marks itself paid and lands in "To ship" — you don't have to do ` +
+          `anything. Nothing ships until then.\n\n`
+        : `We could not read how much arrived, so there is no balance to bill. Check the invoice in ` +
+          `BTCPay and settle it by hand.\n\n`) +
+      `The stock and any loyalty points stay held meanwhile. In ${SITE()}/admin.html you can:\n` +
+      `  · re-send the pay link ("Email pay link" on the order), or\n` +
+      `  · "Cancel & refund" — releases the stock and the points; send the ${got} back from your wallet.\n`,
     html: orderEmailHtml({
       heading: 'Underpaid crypto order — action needed',
       intro: `A crypto invoice expired with money against it. The payment is in your wallet, the order is <strong>not paid</strong>, and nothing has shipped.`,
@@ -1758,9 +2142,11 @@ async function notifyAdminOfUnderpaidOrder({ orderId, order, paid, invoiceId }) 
         <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Buyer</td><td>${escapeHtmlSrv((order && order.email) || '(no email)')}</td></tr>
         <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Items</td><td>${escapeHtmlSrv(itemLines(order))}</td></tr>
       </table>`,
-      extraHtml: `<p style="font-size:14px"><strong>Nothing ships on a short payment.</strong> The stock and any loyalty points stay held until you decide:<br>
-        · <strong>Cancel &amp; refund</strong> — the normal outcome. Releases the stock and the points; send the ${escapeHtmlSrv(got)} back from your wallet.<br>
-        · <strong>Collect the difference first:</strong> raise an invoice in BTCPay for ${escapeHtmlSrv(short)} with ${escapeHtmlSrv(orderId)} in the description, send the buyer the link, and only mark this order paid once that clears.</p>
+      extraHtml: (selfServe
+        ? `<p style="font-size:14px">The buyer has been emailed a link to pay the remaining <strong>${escapeHtmlSrv(short)}</strong>. It raises a fresh invoice every time it's opened, so it can't go stale. If that payment clears, this order marks itself paid and moves to <strong>To ship</strong> on its own.</p>
+           <p style="font-size:13px;word-break:break-all;color:#6b7280">${escapeHtmlSrv(payUrl)}</p>`
+        : `<p style="font-size:14px">We could not read how much arrived, so there is no balance to bill automatically. Open the invoice in BTCPay and settle this one by hand.</p>`) +
+        `<p style="font-size:14px"><strong>Nothing ships on a short payment.</strong> The stock and any loyalty points stay held until it clears or you cancel — <strong>Cancel &amp; refund</strong> releases both, and you send the ${escapeHtmlSrv(got)} back from your wallet.</p>
         <p><a href="${SITE()}/admin.html" style="display:inline-block;background:#6d28d9;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600">Open admin</a>
         ${link ? ` &nbsp; <a href="${escapeHtmlSrv(link)}" style="color:#6d28d9">See the invoice</a>` : ''}</p>`
     })
@@ -1769,28 +2155,95 @@ async function notifyAdminOfUnderpaidOrder({ orderId, order, paid, invoiceId }) 
 
 /* …and the buyer's side of the same event. They paid something and heard
    nothing, which from where they're sitting looks exactly like being robbed. */
-async function sendUnderpaidEmail({ order, orderId, paid }) {
+async function sendUnderpaidEmail({ order, orderId, paid, due, payUrl, payable }) {
   const email = order && order.email;
   if (!mailer.CONFIGURED || !email) return;
   const total = Number(order.total || 0).toFixed(2);
   const got = paid == null ? 'part of the amount' : '$' + Number(paid).toFixed(2);
-  const short = paid == null ? '' : ' (about $' + (Number(order.total || 0) - Number(paid)).toFixed(2) + ' short)';
+  const owed = due == null ? null : Number(due).toFixed(2);
+
+  /* Without a readable amount there is no button to press — asking someone to
+     pay a figure we can't work out is how you charge them twice. */
+  if (!payable || !payUrl || owed == null) {
+    return mailer.sendMail({
+      to: email,
+      subject: `We received ${got} for order ${orderId} — it's short of the total`,
+      text: `Thanks for paying — but the payment we received for order ${orderId} was ${got}, and the ` +
+        `invoice was for $${total}.\n\nWe only ship an order once it's paid in full, so this one is on ` +
+        `hold — nothing has shipped, and your money is safe with us. Reply to this email and we'll ` +
+        `either send you an invoice for the difference or refund what you sent. Your choice, and ` +
+        `there's no rush either way.\n\n— The Ever Nova Life team`,
+      html: orderEmailHtml({
+        heading: 'Your payment came in short',
+        intro: `Thanks for paying. The payment we received for order <strong>${escapeHtmlSrv(orderId)}</strong> was <strong>${escapeHtmlSrv(got)}</strong>, and the invoice was for <strong>$${escapeHtmlSrv(total)}</strong>.`,
+        extraHtml: `<p style="font-size:14px">We only ship an order once it's paid in full, so this one is on hold. <strong>Nothing has shipped and your money is safe with us.</strong> Reply to this email and we'll either send you an invoice for the difference or refund what you sent — your choice, and there's no rush either way.</p>`
+      })
+    });
+  }
+
   return mailer.sendMail({
     to: email,
-    subject: `We received ${got} for order ${orderId} — it's short of the total`,
-    text: `Thanks for paying — but the payment we received for order ${orderId} was ${got}, ` +
-      `and the invoice was for $${total}${short}. That usually happens when a wallet or exchange ` +
-      `takes its network fee out of the amount sent, or when the invoice expired mid-payment.\n\n` +
-      `We only ship an order once it is paid in full, so this one is on hold — nothing has shipped, ` +
-      `and your money is safe with us. Reply to this email and we'll either send you a fresh invoice ` +
-      `for the difference so the order can go out, or refund what you sent. Your choice, and there's ` +
-      `no rush either way.\n\n` +
+    subject: `$${owed} left to pay on order ${orderId}`,
+    text: `Thanks for paying. We received ${got} against order ${orderId}, and the total was $${total} — ` +
+      `so there's $${owed} still to go. That usually happens when a wallet or exchange takes its ` +
+      `network fee out of the amount you sent, or when the payment window closed part-way through.\n\n` +
+      `Your ${got} is safe with us and still counted against this order. Nothing has shipped yet, ` +
+      `because we only send an order out once it's paid in full.\n\n` +
+      `Pay the remaining $${owed} here:\n  ${payUrl}\n\n` +
+      `That link doesn't expire — it opens a fresh crypto invoice for exactly the amount outstanding ` +
+      `each time you use it, so take as long as you need. The moment it clears, your order goes ` +
+      `straight into our packing queue.\n\n` +
+      `Would rather have the ${got} back instead? Reply to this email and we'll refund it, no ` +
+      `questions asked.\n\n— The Ever Nova Life team`,
+    html: orderEmailHtml({
+      heading: `$${escapeHtmlSrv(owed)} left to pay`,
+      intro: `Thanks for paying. We received <strong>${escapeHtmlSrv(got)}</strong> against order <strong>${escapeHtmlSrv(orderId)}</strong>, and the total was <strong>$${escapeHtmlSrv(total)}</strong> — so there's <strong>$${escapeHtmlSrv(owed)}</strong> still to go.`,
+      rowsHtml: `<table style="border-collapse:collapse;margin:14px 0;font-size:15px">
+        <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Order total</td><td>$${escapeHtmlSrv(total)}</td></tr>
+        <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Received</td><td>${escapeHtmlSrv(got)}</td></tr>
+        <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Still to pay</td><td><strong>$${escapeHtmlSrv(owed)}</strong></td></tr>
+      </table>`,
+      extraHtml: `<p style="font-size:14px">This usually happens when a wallet or exchange takes its network fee out of the amount you sent, or when the payment window closed part-way through. <strong>Your ${escapeHtmlSrv(got)} is safe with us and still counted against this order.</strong> Nothing has shipped yet — we only send an order out once it's paid in full.</p>
+        <p><a href="${escapeHtmlSrv(payUrl)}" style="display:inline-block;background:#6d28d9;color:#fff;padding:14px 26px;border-radius:8px;text-decoration:none;font-weight:600">Pay the remaining $${escapeHtmlSrv(owed)}</a></p>
+        <p style="font-size:14px;color:#6b7280">That link doesn't expire. It opens a fresh crypto invoice for exactly the amount outstanding each time you use it, so take as long as you need — the moment it clears, your order goes into our packing queue.</p>
+        <p style="font-size:14px">Would rather have the ${escapeHtmlSrv(got)} back instead? Reply to this email and we'll refund it, no questions asked.</p>`
+    })
+  });
+}
+
+/* The same link, sent on its own — from the admin "Email pay link" button. For
+   the orders that went short before any of this existed, and for the buyer who
+   deleted the first email. */
+async function sendBalanceLinkEmail({ order, due, payUrl }) {
+  if (!mailer.CONFIGURED || !order || !order.email) {
+    throw new Error('Email is not configured on this server, so the link cannot be sent.');
+  }
+  const owed = Number(due).toFixed(2);
+  const total = Number(order.total || 0).toFixed(2);
+  const got = '$' + paidSoFar(order).toFixed(2);
+  return mailer.sendMail({
+    to: order.email,
+    subject: `$${owed} left to pay on order ${order.orderId}`,
+    text: `Here's the link to finish paying for order ${order.orderId}.\n\n` +
+      `Order total: $${total}\nAlready received: ${got}\nStill to pay: $${owed}\n\n` +
+      `  ${payUrl}\n\n` +
+      `The link doesn't expire — it opens a fresh crypto invoice for the outstanding amount each ` +
+      `time you use it. As soon as it clears we pack your order and send you tracking.\n\n` +
+      `Items: ${itemLines(order)}\n\n` +
+      `If you'd rather we refunded the ${got} you've already sent, just reply and say so.\n\n` +
       `— The Ever Nova Life team`,
     html: orderEmailHtml({
-      heading: 'Your payment came in short',
-      intro: `Thanks for paying. The payment we received for order <strong>${escapeHtmlSrv(orderId)}</strong> was <strong>${escapeHtmlSrv(got)}</strong>, and the invoice was for <strong>$${escapeHtmlSrv(total)}</strong>${escapeHtmlSrv(short)}.`,
-      extraHtml: `<p style="font-size:14px">That usually happens when a wallet or exchange takes its network fee out of the amount sent, or when the invoice expired part-way through the payment.</p>
-        <p style="font-size:14px">We only ship an order once it is paid in full, so this one is on hold. <strong>Nothing has shipped and your money is safe with us.</strong> Reply to this email and we'll either send you a fresh invoice for the difference so the order can go out, or refund what you sent — your choice, and there's no rush either way.</p>`
+      heading: `$${escapeHtmlSrv(owed)} left to pay`,
+      intro: `Here's the link to finish paying for order <strong>${escapeHtmlSrv(order.orderId)}</strong>.`,
+      rowsHtml: `<table style="border-collapse:collapse;margin:14px 0;font-size:15px">
+        <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Order total</td><td>$${escapeHtmlSrv(total)}</td></tr>
+        <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Already received</td><td>${escapeHtmlSrv(got)}</td></tr>
+        <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Still to pay</td><td><strong>$${escapeHtmlSrv(owed)}</strong></td></tr>
+        <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Items</td><td>${escapeHtmlSrv(itemLines(order))}</td></tr>
+      </table>`,
+      extraHtml: `<p><a href="${escapeHtmlSrv(payUrl)}" style="display:inline-block;background:#6d28d9;color:#fff;padding:14px 26px;border-radius:8px;text-decoration:none;font-weight:600">Pay the remaining $${escapeHtmlSrv(owed)}</a></p>
+        <p style="font-size:14px;color:#6b7280">The link doesn't expire — it opens a fresh crypto invoice for the outstanding amount each time you use it. As soon as it clears we pack your order and send you tracking.</p>
+        <p style="font-size:14px">If you'd rather we refunded the ${escapeHtmlSrv(got)} you've already sent, just reply and say so.</p>`
     })
   });
 }

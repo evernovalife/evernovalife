@@ -292,6 +292,30 @@ function verifyToken(token) {
   }
 }
 
+/* ---- signed references for links that arrive by email ----
+   Some links have to work with nobody signed in: "pay the rest of order X"
+   lands in an inbox, gets opened on a phone hours later, and may belong to a
+   guest who has no account to sign into. A session token can't carry that, so
+   the unguessable URL is the credential.
+
+   HMAC of scope + value under the server's own secret. No storage and no
+   expiry table, which means a token minted today is still the token for an
+   order raised last week — the stuck orders that already exist get a working
+   link without a migration. The scope prefix stops a token for one purpose
+   being replayed as another. */
+function refToken(scope, value) {
+  return crypto.createHmac('sha256', SECRET)
+    .update(String(scope) + ':' + String(value))
+    .digest('hex')
+    .slice(0, 32);
+}
+
+function verifyRefToken(scope, value, token) {
+  const a = Buffer.from(String(token || ''));
+  const b = Buffer.from(refToken(scope, value));
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 /* Express middleware: require a valid "Authorization: Bearer <token>"
    header, then attach the (public) user to req.user. */
 function requireAuth(req, res, next) {
@@ -322,5 +346,7 @@ module.exports = {
   getReferralStats,
   claimReferralReward,
   verifyToken,
+  refToken,
+  verifyRefToken,
   requireAuth
 };
