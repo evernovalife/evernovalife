@@ -1397,6 +1397,21 @@ body.coa-lightbox-open { overflow: hidden; }
 .loyalty-redeem-row input { width: 18px; height: 18px; accent-color: var(--accent-purple); cursor: pointer; }
 
 /* ============================================================
+   WEB ORDER AUTHORIZATION (checkout)
+   The consent the buyer gives immediately before paying. Styled to
+   read as a distinct block rather than fine print — it is the
+   record we keep of what they agreed to.
+   ============================================================ */
+.web-auth-box {
+  border: 1px solid var(--glass-border-strong); border-radius: var(--radius-sm);
+  background: rgba(212,175,55,0.07); padding: 0.9rem 1rem; margin: 0 0 1.25rem;
+}
+.web-auth-check { align-items: flex-start; font-size: 0.85rem; line-height: 1.55; color: #e5e7eb; cursor: pointer; }
+.web-auth-check input { margin-top: 3px; flex: 0 0 auto; cursor: pointer; }
+.web-auth-check a { color: var(--accent-purple); text-decoration: underline; }
+.web-auth-box.invalid, .web-auth-check.invalid { border-color: var(--accent-coral); }
+
+/* ============================================================
    AUTO-SHIP (recurring orders)
    ============================================================ */
 /* checkout: the opt-in panel */

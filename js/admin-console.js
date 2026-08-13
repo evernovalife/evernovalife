@@ -1016,7 +1016,15 @@
           /* No pay-link button when the balance is unknowable (BTCPay flagged a
              partial payment but wouldn't say how much) — there is no honest
              amount to bill, and billing the total would charge them twice. */
-          ? (o.canCollect === false ? '' :
+          /* Reconcile comes first because it fixes the number every other
+             button here works from. An order billed twice has money spread
+             across two invoices and a stored total that only counts one of
+             them — emailing a pay link before fixing that asks the buyer for
+             coins already in the wallet. */
+          ? (o.method === 'crypto'
+              ? '<button class="btn btn-ghost btn-sm act-reconcile" data-id="' + esc(o.orderId) + '">Reconcile</button> '
+              : '') +
+            (o.canCollect === false ? '' :
               '<button class="btn btn-primary btn-sm act-paylink" data-id="' + esc(o.orderId) +
               '" data-due="' + esc(money(dueOn(o))) + '">Email pay link</button> ') +
             '<button class="btn btn-ghost btn-sm act-cancel" data-id="' + esc(o.orderId) + '">Cancel &amp; refund</button> ' +
@@ -1248,7 +1256,11 @@
                  it is not offered — collecting the rest is. This is the one
                  place that knows what BTCPay actually received, which is
                  exactly what an order wrongly marked paid is missing. */
-              : '<button class="btn btn-primary btn-sm act-collect" data-id="' + esc(i.orderId) +
+              /* Reconcile first: this panel is where a second invoice for the
+                 same order becomes visible, and that is exactly the case where
+                 THIS row's paid amount is only part of what the buyer sent. */
+              : '<button class="btn btn-primary btn-sm act-reconcile" data-id="' + esc(i.orderId) + '">Reconcile</button> ' +
+                '<button class="btn btn-ghost btn-sm act-collect" data-id="' + esc(i.orderId) +
                 '" data-got="' + esc(Number(i.paidAmount) || 0) +
                 '" data-total="' + esc(Number(i.amount) || 0) + '">Collect the rest</button>')
           : (i.status === 'Settled' && !i.orderId
@@ -1601,6 +1613,70 @@
     }
   }
 
+  /* Rebuild an order's payment ledger from BTCPay.
+     Always previews first. The whole point is that the stored figure is wrong,
+     so showing the corrected one BEFORE writing it is what makes this safe to
+     click on an order you are not sure about. */
+  async function reconcileOrder(orderId, btn) {
+    btn.disabled = true;
+    var label = btn.textContent;
+    btn.textContent = 'Reading…';
+    var path = '/api/admin/orders/' + encodeURIComponent(orderId) + '/reconcile';
+
+    function restore() { btn.disabled = false; btn.textContent = label; }
+
+    function lines(d) {
+      return (d.invoices || []).map(function (i) {
+        return '  ' + i.invoiceId.slice(0, 12) + '…  billed ' + money(i.billed) +
+          '  paid ' + (i.paid === null ? '??' : money(i.paid)) +
+          (i.status ? '  (' + i.status + ')' : '');
+      }).join('\n');
+    }
+
+    var preview;
+    try {
+      preview = await A.api(path, { method: 'POST', body: { dryRun: true } });
+    } catch (e) {
+      /* 409 means some invoice would not report an amount. That is the one
+         error worth showing in full: the numbers are still useful, they are
+         just a floor, and the owner is the one who can go read the rest. */
+      if (e.data && e.data.invoices) {
+        window.alert('Cannot reconcile ' + orderId + ' safely.\n\n' + e.message + '\n\n' + lines(e.data));
+      } else {
+        A.toast(e.message, 'error');
+      }
+      restore();
+      return;
+    }
+
+    var willBe = preview.frozen
+      ? 'status left at "' + preview.before.status + '" (already shipped)'
+      : preview.nextStatus
+        ? 'status becomes "' + preview.nextStatus + '"'
+        : 'status unchanged';
+
+    var ok = window.confirm(
+      'Reconcile ' + orderId + ' against BTCPay?\n\n' +
+      'Invoices found:\n' + (lines(preview) || '  none') + '\n\n' +
+      'Order total:      ' + money(preview.total) + '\n' +
+      'Recorded now:     ' + money(preview.before.paidAmount) + '  (' + money(preview.before.due) + ' due)\n' +
+      'Actually paid:    ' + money(preview.paid) + '  (' + money(preview.due) + ' due)\n\n' +
+      'This replaces the stored figure with BTCPay\'s and ' + willBe + '.'
+    );
+    if (!ok) { restore(); return; }
+
+    btn.textContent = 'Saving…';
+    try {
+      var data = await A.api(path, { method: 'POST', body: {} });
+      A.toast('Reconciled — ' + money(data.paid) + ' paid, ' + money(data.due) + ' due.', 'success');
+      if (data.notes && data.notes.length) window.alert(data.notes.join('\n\n'));
+      loadAll();
+    } catch (e) {
+      A.toast(e.message, 'error');
+      restore();
+    }
+  }
+
   async function cancelOrder(orderId, btn) {
     var o = (state.orders || []).find(function (x) { return x.orderId === orderId; });
     /* A short-paid order is the one case where cancelling leaves money behind:
@@ -1692,6 +1768,7 @@
       else if (t.classList.contains('act-cancel')) cancelOrder(t.getAttribute('data-id'), t);
       else if (t.classList.contains('act-paylink')) sendPayLink(t.getAttribute('data-id'), t.getAttribute('data-due'), t);
       else if (t.classList.contains('act-collect')) collectBalance(t.getAttribute('data-id'), t.getAttribute('data-got'), t.getAttribute('data-total'), t);
+      else if (t.classList.contains('act-reconcile')) reconcileOrder(t.getAttribute('data-id'), t);
       else if (t.classList.contains('act-del-user')) deleteUser(t.getAttribute('data-id'), t.getAttribute('data-name'), t);
       else if (t.classList.contains('act-due')) dueNow(t.getAttribute('data-id'), t);
     });

@@ -101,6 +101,15 @@ async function adminSignIn() {
   return reg.body;
 }
 
+/* Every order now needs the web order authorization the checkout page collects
+   (Terms §12). Tests place real orders, so they carry a real one. */
+const WEB_AUTH = {
+  accepted: true,
+  version: '2026-08-14',
+  acceptedAt: new Date().toISOString(),
+  text: 'I authorize this order.'
+};
+
 const US_SHIPPING = {
   firstName: 'Jane', lastName: 'Doe', address: '123 Science Park Dr',
   city: 'Boston', state: 'MA', postalCode: '02115', country: 'US',
@@ -110,7 +119,7 @@ const US_SHIPPING = {
 function order({ token, id, quantity = 1 }) {
   return api('/api/zelle/checkout', {
     method: 'POST', token,
-    body: { items: [{ id, quantity }], shipping: US_SHIPPING, email: 'buyer@example.com' }
+    body: { items: [{ id, quantity }], shipping: US_SHIPPING, email: 'buyer@example.com', webAuthorization: WEB_AUTH }
   });
 }
 

@@ -7,8 +7,8 @@ Status legend: **NEEDED** = no source found · **VERIFY** = a claim is on the si
 ---
 
 ## Company / legal
-- **Phone number** — NEEDED. Contact page and footer currently list no phone. Confirm whether one should be published, or state "email only".
-- **Legal entity name & registered address** — VERIFY. Footer/About show "Ever Nova Life" and a Boca Raton, FL operating location. Confirm the exact legal name and full address that should appear publicly.
+- **Customer service phone number** — NEEDED (BLOCKING, 2026-08-14). The payment reviewer requires a published customer-service phone number. The plumbing is in place: set `window.ENL_SUPPORT_PHONE` (and optionally `window.ENL_SUPPORT_PHONE_HOURS`) at the top of `js/config.js` and the Contact + About phone blocks reveal themselves. Until it is set, no phone is shown anywhere. Also add `"telephone"` to the Organization JSON-LD in `index.html` once known.
+- **Legal entity name & registered address** — RESOLVED 2026-08-14. The published street address was a shipping store's, so it was removed site-wide (contact.html, about.html, index.html JSON-LD) per the payment reviewer. The site now states "United States" only. Confirm the exact legal entity name if it differs from "Ever Nova Life"; do NOT republish a street address unless it is a real place of business.
 - **Business hours / support response window** — VERIFY. Copy claims replies "within 24 hours". Confirm the real committed response time.
 
 ## Shipping & fulfillment (shipping.html, index.html)

@@ -92,6 +92,7 @@ The server also serves the static site, so open **http://localhost:4242/checkout
 | GET    | `/api/shipping`        | Delivery methods offered at checkout (admins also see disabled ones) |
 | POST   | `/api/shipping`        | Admin: add or edit a delivery method |
 | DELETE | `/api/shipping/:id`    | Admin: remove a delivery method |
+| POST   | `/api/admin/orders/:orderId/reconcile` | Rebuild an order's payment ledger from BTCPay |
 | POST   | `/api/auth/register`   | Create an account (bcrypt) → returns a JWT       |
 | POST   | `/api/auth/login`      | Verify email + password → returns a JWT          |
 | GET    | `/api/auth/me`         | Current user (needs `Authorization: Bearer …`)   |
@@ -188,10 +189,11 @@ taps it. This page isn't; it's the thing that stays valid.
   amounts add up and the buyer gets a fresh link for what's left.
 - The buyer's account page shows the same button on the order row.
 
-Two admin actions cover what automation can't reach, both in `admin.html`:
+Three admin actions cover what automation can't reach, all in `admin.html`:
 
 - **Orders → Email pay link** — re-sends that email. For the buyer who deleted
   it.
+- **Reconcile** — rebuilds the order's ledger from BTCPay. See below.
 - **BTCPay → Collect the rest** — for an order **already marked paid** against
   a partial payment. That case has no disagreement left for anything automatic
   to notice: the store says paid, BTCPay says PaidPartial, and the goods would
@@ -204,6 +206,45 @@ but won't say how much (no invoice id on the event), the balance is unknowable.
 No link is offered and no amount is billed — charging the full total there
 would take the buyer's money twice. The order says so, and the alert asks you
 to settle it by hand.
+
+### Reconcile — when one order was billed twice
+
+`payments` keyed by invoice only helps if every invoice got recorded. Orders
+raised before that ledger existed have a flat `paidAmount` holding whichever
+webhook landed last, and if a shortfall was never written down, the *next*
+invoice for that order was raised for the **full total** rather than the
+difference. The result is two live invoices each demanding everything, part
+paid on each, and a store that believes the buyer sent less than they did — so
+the balance link asks them for coins already in the wallet.
+
+**Orders → Reconcile** (also on the BTCPay panel, which is where the duplicate
+becomes visible) asks the payment processor instead of trusting the stored
+figure:
+
+    POST /api/admin/orders/:orderId/reconcile
+    { dryRun?: true, invoiceIds?: [...], force?: true }
+
+It finds every invoice tagged with the order — the ids the order remembers,
+plus a sweep of the last 100 in BTCPay — reads what actually settled on each
+from the per-method detail (crypto received × the locked rate, the same two
+numbers the invoice page shows), and **replaces** `payments` with one line per
+invoice. The stored total becomes their sum, and the status follows: full
+means `paid` (points credited on the first transition only), short means
+`underpaid`, nothing received leaves it alone.
+
+- The admin console always previews first — you approve the corrected numbers
+  before they're written.
+- Reaching further back than the sweep window: pass `invoiceIds` explicitly.
+- An invoice carrying a **different** order's reference is refused outright,
+  not skipped. Crediting one buyer's coins to another buyer's order is worse
+  than the bug being fixed.
+- If any invoice's paid amount can't be read, the commit is **blocked** (409)
+  rather than booking a total that is only a floor — understating it is what
+  re-bills a paying customer. `force: true` books what could be read.
+- A `shipped` or `delivered` order has its ledger corrected but its status left
+  alone; a parcel already gone doesn't go back in the packing queue.
+- Re-opening a cancelled order as `underpaid` does **not** re-reserve its stock
+  or points — it isn't owed goods until the balance lands.
 
 **The shortfall is also made rarer at the source.** Every invoice this server
 raises now carries its own checkout settings, so they can't be lost to a store

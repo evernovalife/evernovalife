@@ -143,6 +143,15 @@ async function admin() {
   return _admin;
 }
 
+/* Every order now needs the web order authorization the checkout page collects
+   (Terms §12). Tests place real orders, so they carry a real one. */
+const WEB_AUTH = {
+  accepted: true,
+  version: '2026-08-14',
+  acceptedAt: new Date().toISOString(),
+  text: 'I authorize this order.'
+};
+
 const SHIPPING = {
   name: 'Jane Doe', address: '123 Science Park Dr',
   city: 'Boston', state: 'MA', postalCode: '02115', countryCode: 'US',
@@ -175,6 +184,7 @@ async function openOrder(token, extra = {}) {
       items: [{ id: productId, quantity: 1 }],
       shipping: SHIPPING,
       email: 'buyer@example.com',
+      webAuthorization: WEB_AUTH,
       ...extra
     }
   });
@@ -198,6 +208,52 @@ test('the BTCPay invoice is opened for the server-priced total', async () => {
   assert.equal(sent.payload.metadata.orderId, res.body.orderId, 'our order id rides on the invoice');
 });
 
+/* ============================================================
+   Web order authorization (Terms §12)
+   The tick-box above the pay buttons is the buyer's signature for the
+   transaction. A form can be bypassed, so the requirement is enforced here —
+   and what they agreed to is kept with the order, because that record is the
+   whole answer to "I never authorized this".
+   ============================================================ */
+test('an order cannot be opened without the web order authorization', async () => {
+  const b = await buyer();
+  const before = invoices.length;
+
+  for (const bad of [undefined, null, {}, { accepted: false }, { accepted: 'yes' }, 'true']) {
+    const res = await api('/api/crypto/checkout', {
+      method: 'POST', token: b.token,
+      body: { items: [{ id: productId, quantity: 1 }], shipping: SHIPPING, webAuthorization: bad }
+    });
+    assert.equal(res.status, 400, `rejected: ${JSON.stringify(bad)}`);
+    assert.match(res.body.error, /authoriz/i, 'and says why');
+  }
+  assert.equal(invoices.length, before, 'no invoice was opened for an unauthorized order');
+});
+
+test('the authorization is stored with the order, with the wording that was shown', async () => {
+  const b = await buyer();
+  const res = await openOrder(b.token);
+  const mine = store.listOrders(b.user.id).find(o => o.orderId === res.body.orderId);
+
+  const wa = mine.webAuthorization;
+  assert.ok(wa, 'the order carries an authorization record');
+  assert.equal(wa.accepted, true);
+  assert.equal(wa.version, WEB_AUTH.version, 'the version of the wording is kept');
+  assert.equal(wa.text, WEB_AUTH.text, 'so is the wording itself');
+  assert.ok(!isNaN(new Date(wa.acceptedAt).getTime()), 'agreed at a real time');
+  assert.ok(!isNaN(new Date(wa.recordedAt).getTime()), 'and our own arrival stamp');
+});
+
+/* A timestamp is the buyer's word; ours is the one we can stand behind. A
+   nonsense acceptedAt must not put a junk date in the audit trail. */
+test('a bogus acceptance timestamp is replaced, not stored', async () => {
+  const b = await buyer();
+  const res = await openOrder(b.token, { webAuthorization: { ...WEB_AUTH, acceptedAt: 'whenever' } });
+  assert.equal(res.status, 201);
+  const mine = store.listOrders(b.user.id).find(o => o.orderId === res.body.orderId);
+  assert.ok(!isNaN(new Date(mine.webAuthorization.acceptedAt).getTime()), 'a real date was stored instead');
+});
+
 /* Every message after checkout — receipt, expiry notice, "you paid short" — is
    addressed from the stored order, so a blank email there is a buyer who can
    never be contacted again about their own order. */
@@ -205,7 +261,7 @@ test('the order always carries an address to write to, even with no email at che
   const b = await buyer();
   const res = await api('/api/crypto/checkout', {
     method: 'POST', token: b.token,
-    body: { items: [{ id: productId, quantity: 1 }], shipping: SHIPPING }   // no email field
+    body: { items: [{ id: productId, quantity: 1 }], shipping: SHIPPING, webAuthorization: WEB_AUTH }   // no email field
   });
   assert.equal(res.status, 201);
   const mine = store.listOrders(b.user.id).find(o => o.orderId === res.body.orderId);

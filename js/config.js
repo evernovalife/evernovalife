@@ -18,6 +18,21 @@
    server that isn't the Node server) auto-points at
    http://localhost:4242 so nothing breaks while you develop.
    ============================================================ */
+/* ------------------------------------------------------------
+   CUSTOMER SERVICE PHONE
+   Shown on Contact (and anywhere else marked data-support-phone).
+   Leave BOTH empty and nothing is displayed at all — a contact page
+   with a dead or made-up number is worse than one without.
+
+     window.ENL_SUPPORT_PHONE       = '+1 (555) 123-4567';
+     window.ENL_SUPPORT_PHONE_HOURS = 'Mon–Fri, 9am–5pm ET';
+
+   The dial link is derived from the number automatically, so write it
+   however you want it to READ.
+   ------------------------------------------------------------ */
+window.ENL_SUPPORT_PHONE = '';
+window.ENL_SUPPORT_PHONE_HOURS = '';
+
 (function () {
   var PROD_API_BASE = 'https://evernova-api.onrender.com';   // ← your Render backend
 

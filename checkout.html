@@ -26,9 +26,9 @@
   <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" media="print" onload="this.media='all'">
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"></noscript>
-  <link rel="stylesheet" href="css/styles.css?v=59">
+  <link rel="stylesheet" href="css/styles.css?v=61">
   <!-- 21+ age gate: runs before anything paints -->
-  <script src="js/age-gate.js?v=59"></script>
+  <script src="js/age-gate.js?v=61"></script>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Cpath d='M20.00 1.00 L21.91 15.38 L27.78 12.22 L24.62 18.09 L39.00 20.00 L24.62 21.91 L27.78 27.78 L21.91 24.62 L20.00 39.00 L18.09 24.62 L12.22 27.78 L15.38 21.91 L1.00 20.00 L15.38 18.09 L12.22 12.22 L18.09 15.38 Z' fill='%23a855f7'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -177,6 +177,20 @@
               </p>
             </div>
 
+            <!-- WEB ORDER AUTHORIZATION — the buyer's electronic signature for
+                 this transaction. It sits directly above the payment buttons on
+                 purpose: it must be the last thing agreed to before the order is
+                 placed. The exact wording below, its version and the moment it
+                 was ticked are stored with the order (see terms.html §12), so
+                 keep #webAuthText's text and WEB_AUTH_VERSION in main.js in
+                 step whenever this copy changes. -->
+            <div class="web-auth-box">
+              <label class="form-check web-auth-check" for="webAuthCheck">
+                <input type="checkbox" id="webAuthCheck" required>
+                <span id="webAuthText">I authorize this order. I am the owner of, or am authorized to use, the payment method or account used to pay for it, and I authorize Ever Nova Life to bill the order total shown in the summary — products, shipping and tax — to that payment method or account. The details I have entered are accurate, and I have read and agree to the <a href="terms.html#web-authorization" target="_blank" rel="noopener">Terms of Service</a>, <a href="returns.html" target="_blank" rel="noopener">Returns policy</a> and <a href="privacy.html" target="_blank" rel="noopener">Privacy policy</a>. This authorization has the same legal effect as my signature on a paper order form.</span>
+              </label>
+            </div>
+
             <!-- Each method is independent: the server decides which are
                  available (/api/health) and the page hides any that can't apply
                  to this order. -->
@@ -267,9 +281,9 @@
     </div>
   </footer>
 
-  <script src="js/config.js?v=59"></script>
-  <script src="js/products-data.js?v=59"></script>
-  <script src="js/cart.js?v=59"></script>
-  <script src="js/main.js?v=59"></script>
+  <script src="js/config.js?v=61"></script>
+  <script src="js/products-data.js?v=61"></script>
+  <script src="js/cart.js?v=61"></script>
+  <script src="js/main.js?v=61"></script>
 </body>
 </html>

@@ -47,6 +47,7 @@ process.env.BTCPAY_STORE_ID = '';
 
 const loyalty = require('../loyalty.js');
 const app = require('../server.js');
+const store = require('../store.js');
 
 let server, base, productId, unitPrice;
 
@@ -96,6 +97,15 @@ async function adminSignIn() {
   return reg;
 }
 
+/* Every order now needs the web order authorization the checkout page collects
+   (Terms §12). Tests place real orders, so they carry a real one. */
+const WEB_AUTH = {
+  accepted: true,
+  version: '2026-08-14',
+  acceptedAt: new Date().toISOString(),
+  text: 'I authorize this order.'
+};
+
 const US_SHIPPING = {
   firstName: 'Jane', lastName: 'Doe', address: '123 Science Park Dr',
   city: 'Boston', state: 'MA', postalCode: '02115', country: 'US',
@@ -112,9 +122,30 @@ async function aBuyer() {
 function zelleOrder({ token, quantity = 1, shipping = US_SHIPPING, email = 'buyer@example.com' } = {}) {
   return api('/api/zelle/checkout', {
     method: 'POST', token,
-    body: { items: [{ id: productId, quantity }], shipping, email }
+    body: { items: [{ id: productId, quantity }], shipping, email, webAuthorization: WEB_AUTH }
   });
 }
+
+/* The web order authorization (Terms §12) is a condition of the sale on every
+   payment method, not just the crypto one. */
+test('a Zelle order cannot be placed without the web order authorization', async () => {
+  const buyer = await aBuyer();
+  const { status, body } = await api('/api/zelle/checkout', {
+    method: 'POST', token: buyer.token,
+    body: { items: [{ id: productId, quantity: 1 }], shipping: US_SHIPPING, email: 'buyer@example.com' }
+  });
+  assert.equal(status, 400, 'refused');
+  assert.match(body.error, /authoriz/i);
+});
+
+test('a placed Zelle order keeps the authorization it was given', async () => {
+  const buyer = await aBuyer();
+  const { status, body } = await zelleOrder({ token: buyer.token });
+  assert.equal(status, 201);
+  const mine = store.listOrders(buyer.user.id).find(o => o.orderId === body.orderId);
+  assert.equal(mine.webAuthorization.accepted, true);
+  assert.equal(mine.webAuthorization.text, WEB_AUTH.text);
+});
 
 /* ============================================================
    1) The price is the server's, and the order opens unpaid
@@ -127,6 +158,7 @@ test('the server prices the order — a total sent by the browser is ignored', a
       items: [{ id: productId, quantity: 2 }],
       shipping: US_SHIPPING,
       email: 'buyer@example.com',
+      webAuthorization: WEB_AUTH,
       total: 0.01, amount: 0.01           // hostile input
     }
   });

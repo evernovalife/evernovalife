@@ -181,6 +181,82 @@ function getInvoicePaymentMethods(id) {
   return apiGet(`/api/v1/stores/${STORE_ID}/invoices/${encodeURIComponent(id)}/payment-methods`);
 }
 
+/* ---- How much FIAT actually landed on one invoice ----
+   The invoice object carries `paidAmount`, but it is not always populated and
+   it is the one number a reconciliation cannot afford to guess at: too low and
+   the buyer gets billed for money they already sent. So the authoritative read
+   is the per-method detail, where BTCPay states the crypto received and the
+   rate it was locked at — the same two figures the invoice page shows as
+   "Paid" and "Rate". Fiat = paid x rate, summed over every method (an invoice
+   can take on-chain AND Lightning).
+
+   Field names have drifted across BTCPay versions, so each value is read from
+   the first name that is present rather than assuming one shape.
+
+   `known` is false when a method took money at a rate we cannot read. The
+   caller must NOT treat that as zero — an unreadable payment is the exact
+   case that re-bills a paying customer. */
+function firstNum(obj, names) {
+  for (const n of names) {
+    const v = Number(obj && obj[n]);
+    if (Number.isFinite(v) && obj[n] !== null && obj[n] !== '') return v;
+  }
+  return null;
+}
+
+async function getInvoicePaidFiat(id) {
+  const [inv, methods] = await Promise.all([
+    getInvoice(id),
+    getInvoicePaymentMethods(id).catch(() => null)   // detail is preferred, not required
+  ]);
+  const meta = (inv && inv.metadata) || {};
+  const out = {
+    invoiceId: inv && inv.id ? inv.id : id,
+    status: inv ? inv.status : '',
+    additionalStatus: (inv && inv.additionalStatus) || '',
+    currency: (inv && inv.currency) || CURRENCY,
+    invoiceAmount: Number(inv && inv.amount) || 0,
+    orderId: meta.orderId || '',
+    kind: meta.kind || '',
+    createdTime: inv ? inv.createdTime : null,
+    methods: []
+  };
+
+  if (Array.isArray(methods) && methods.length) {
+    let sum = 0;
+    let known = true;
+    for (const m of methods) {
+      const rate = firstNum(m, ['rate']);
+      const paidCrypto = firstNum(m, ['totalPaid', 'paymentMethodPaid', 'paid']);
+      // A method nobody sent to contributes nothing and is not a gap in the read.
+      if (paidCrypto === null || paidCrypto === 0) continue;
+      if (rate === null) { known = false; continue; }
+      sum += paidCrypto * rate;
+      out.methods.push({
+        method: m.paymentMethodId || m.paymentMethod || m.cryptoCode || '',
+        rate,
+        paidCrypto,
+        due: firstNum(m, ['due']),
+        amount: firstNum(m, ['amount']),
+        paidFiat: Math.round(paidCrypto * rate * 100) / 100
+      });
+    }
+    out.paid = Math.round(sum * 100) / 100;
+    out.known = known;
+    out.source = 'payment-methods';
+    return out;
+  }
+
+  /* No per-method detail (older BTCPay, or the key lacks the permission).
+     `paidAmount` is already in the invoice currency. Absent entirely means we
+     genuinely do not know, which is different from zero. */
+  const flat = firstNum(inv, ['paidAmount']);
+  out.paid = flat === null ? 0 : Math.round(flat * 100) / 100;
+  out.known = flat !== null;
+  out.source = 'invoice.paidAmount';
+  return out;
+}
+
 /* ---- webhooks: is the pipe that confirms payments actually connected? ----
    Everything downstream of a payment (order marked paid, buyer emailed, owner
    told to ship) depends on BTCPay calling us back. If that webhook is missing,
@@ -230,6 +306,7 @@ module.exports = {
   listInvoices,
   getInvoice,
   getInvoicePaymentMethods,
+  getInvoicePaidFiat,
   listWebhooks,
   listWebhookDeliveries,
   CONFIGURED,

@@ -219,6 +219,37 @@ function assertResearchDetails(shipping) {
   }
 }
 
+/* ---- Web order authorization, required on every order.
+   The buyer ticks an authorization box directly above the payment buttons
+   (checkout.html; the wording is Section 12 of the Terms). We keep what they
+   were shown, which version of it, when they agreed, and where from — that
+   record is the answer to a "I never authorized this" dispute, so it is built
+   HERE rather than trusted from the browser for the parts we can observe
+   ourselves. Checked server-side so an order cannot be placed around the form. */
+const WEB_AUTH_VERSION = '2026-08-14';
+const WEB_AUTH_MAX_TEXT = 4000;
+
+function buildWebAuthorization(raw, req) {
+  const a = raw && typeof raw === 'object' ? raw : null;
+  if (!a || a.accepted !== true) {
+    throw new Error('Please tick the order authorization box before placing your order.');
+  }
+  /* Trust the browser's timestamp only if it is a real date; otherwise the
+     record is stamped with when we received it. Either way we also keep our
+     own arrival time, which no client can move. */
+  const claimed = a.acceptedAt ? new Date(a.acceptedAt) : null;
+  const now = new Date();
+  return {
+    accepted: true,
+    version: String(a.version || WEB_AUTH_VERSION).slice(0, 40),
+    acceptedAt: (claimed && !isNaN(claimed.getTime()) ? claimed : now).toISOString(),
+    recordedAt: now.toISOString(),
+    text: String(a.text || '').slice(0, WEB_AUTH_MAX_TEXT),
+    ip: String((req && (req.headers['x-forwarded-for'] || '').split(',')[0].trim()) || (req && req.ip) || '').slice(0, 64),
+    userAgent: String((req && req.headers['user-agent']) || '').slice(0, 300)
+  };
+}
+
 function assertUsShipping(shipping) {
   const raw = String((shipping && (shipping.countryCode || shipping.country)) || '')
     .trim().toUpperCase();
@@ -861,7 +892,7 @@ async function sendReferralRewardEmail(referrerId, points) {
    `order.shipping` is the shipping COST (from pricing.js); the delivery
    address arrives separately as `shipping`, stored as shippingAddress so
    the two never collide. */
-function buildOrderRecord({ orderId, order, method, status, email, shipping, transactionId, invoiceId, pointsEarned, pointsRedeemed, subscriptionId, stockReserved }) {
+function buildOrderRecord({ orderId, order, method, status, email, shipping, transactionId, invoiceId, pointsEarned, pointsRedeemed, subscriptionId, stockReserved, webAuthorization }) {
   return {
     orderId,
     createdAt: new Date().toISOString(),
@@ -878,6 +909,8 @@ function buildOrderRecord({ orderId, order, method, status, email, shipping, tra
     total: order.total,
     email: email || '',
     shippingAddress: shipping || null,
+    // what the buyer authorized, and when — the audit trail for this sale
+    ...(webAuthorization ? { webAuthorization } : {}),
     ...(pointsEarned ? { pointsEarned } : {}),
     ...(pointsRedeemed ? { pointsRedeemed } : {}),
     ...(transactionId ? { transactionId } : {}),
@@ -904,6 +937,7 @@ app.post('/api/crypto/checkout', auth.requireAuth, async (req, res) => {
     const body = req.body || {};
     assertResearchDetails(body.shipping);
     assertUsShipping(body.shipping);                            // U.S. addresses only
+    const webAuthorization = buildWebAuthorization(body.webAuthorization, req);
     // Loyalty redemption is folded into the invoice amount, so the buyer pays
     // the discounted total. The points are HELD (debited now) and returned if
     // the invoice expires unpaid — see refundReservedPoints below. Holding
@@ -985,6 +1019,7 @@ app.post('/api/crypto/checkout', auth.requireAuth, async (req, res) => {
         invoiceId: invoice.id,
         pointsRedeemed,
         stockReserved,
+        webAuthorization,
         subscriptionId: subscription ? subscription.id : ''
       }));
       store.clearCart(req.user.id);
@@ -1534,6 +1569,194 @@ app.post('/api/admin/orders/:orderId/collect-balance', requireAdmin, async (req,
   }
 });
 
+/* ---- ADMIN: rebuild an order's payment ledger from BTCPay ----
+   `collect-balance` takes the owner's word for what arrived. This takes
+   BTCPay's, which is better when an order was billed more than once.
+
+   The failure it repairs: an order goes short, the shortfall is never written
+   down, and the SECOND invoice is therefore raised for the full total instead
+   of the difference. Now two invoices exist, each asking for everything, and
+   the buyer has paid part of each. No single invoice tells the truth and the
+   order's flat `paidAmount` is whichever one landed last.
+
+   So: find every invoice tagged with this order, read what actually settled on
+   each, and write them into `payments` keyed by invoice id — the shape
+   `paidSoFar` already sums. Two partials then add up to what the buyer really
+   sent, and the balance link bills the real remainder.
+
+   Refuses to commit a partial read. If any invoice's paid amount cannot be
+   determined, the total would be understated and the buyer would be asked for
+   money already in the wallet — the one outcome worth failing over. Pass
+   { force: true } to book only what could be read.
+
+   POST body (all optional):
+     dryRun     true  — report the numbers, change nothing. Do this first.
+     invoiceIds [ids] — reconcile exactly these instead of sweeping BTCPay.
+                        Needed for invoices older than the sweep window.
+     force      true  — commit even though an invoice could not be read.  */
+app.post('/api/admin/orders/:orderId/reconcile', requireAdmin, async (req, res) => {
+  if (!btcpay.CONFIGURED) {
+    return res.status(400).json({ error: 'BTCPay is not configured on this server — there is nothing to reconcile against.' });
+  }
+  const order = findOrder(req.params.orderId);
+  if (!order) return res.status(404).json({ error: 'No order with that reference.' });
+
+  const body = req.body || {};
+  const dryRun = Boolean(body.dryRun);
+  const force = Boolean(body.force);
+
+  /* Which invoices belong to this order. An explicit list wins: `listInvoices`
+     only reaches back so far, and the orders worth reconciling are the old
+     ones. Otherwise seed from the ids the order itself remembers, then sweep
+     BTCPay for anything else carrying this reference — that sweep is the part
+     that finds the duplicate nobody recorded. */
+  const wanted = new Set();
+  let swept = 0;
+  let sweepError = null;
+  if (Array.isArray(body.invoiceIds) && body.invoiceIds.length) {
+    body.invoiceIds.map(id => String(id || '').trim()).filter(Boolean).forEach(id => wanted.add(id));
+  } else {
+    [order.invoiceId, order.balanceInvoiceId].filter(Boolean).forEach(id => wanted.add(String(id)));
+    try {
+      const list = await btcpay.listInvoices({ take: 100 });
+      swept = list.length;
+      list.forEach(inv => {
+        if (inv && inv.id && ((inv.metadata || {}).orderId === order.orderId)) wanted.add(inv.id);
+      });
+    } catch (e) {
+      sweepError = e.message;
+    }
+  }
+  if (!wanted.size) {
+    return res.status(400).json({
+      error: sweepError
+        ? 'Could not list invoices from BTCPay: ' + sweepError
+        : 'No BTCPay invoice could be found for that order. Pass the invoice ids explicitly if they are older than the last 100.',
+      swept
+    });
+  }
+
+  const reads = await Promise.all([...wanted].map(async id => {
+    try { return await btcpay.getInvoicePaidFiat(id); }
+    catch (e) { return { invoiceId: id, error: e.message, known: false, paid: 0 }; }
+  }));
+
+  /* An invoice stamped with someone else's order must never be booked here.
+     Crediting one buyer's coins to another buyer's order is worse than the bug
+     this endpoint fixes, so it stops rather than skipping quietly. */
+  const foreign = reads.filter(r => r.orderId && r.orderId !== order.orderId);
+  if (foreign.length) {
+    return res.status(400).json({
+      error: 'Some of those invoices belong to a different order — refusing to credit them here.',
+      foreign: foreign.map(r => ({ invoiceId: r.invoiceId, orderId: r.orderId }))
+    });
+  }
+  /* Different currency, different number. Adding EUR into a USD total would
+     silently overstate what was paid and ship goods that were not paid for. */
+  const mixed = reads.filter(r => !r.error && r.currency && r.currency !== btcpay.CURRENCY);
+  if (mixed.length) {
+    return res.status(400).json({
+      error: `Those invoices are not all in ${btcpay.CURRENCY} — convert them by hand and use "Collect the rest" instead.`,
+      mixed: mixed.map(r => ({ invoiceId: r.invoiceId, currency: r.currency }))
+    });
+  }
+
+  const unreadable = reads.filter(r => r.error || !r.known);
+  const usable = reads.filter(r => !r.error && r.known);
+
+  const ledger = {};
+  usable.forEach(r => { if (r.paid > 0) ledger[r.invoiceId] = round2(r.paid); });
+
+  const paid = round2(Object.keys(ledger).reduce((s, k) => s + ledger[k], 0));
+  const total = round2(order.total);
+  const due = Math.max(0, round2(total - paid));
+  const before = { status: order.status, paidAmount: round2(order.paidAmount), due: amountDue(order) };
+
+  /* What the commit WOULD do, worked out once and returned on the dry run so
+     the preview and the write can never describe different things. */
+  const status = String(order.status).toLowerCase();
+  const frozen = status === 'shipped' || status === 'delivered';
+  const nextStatus = frozen ? null
+    : paid >= total - DUST ? 'paid'
+    : paid > 0 ? 'underpaid'
+    : null;                                   // nothing arrived — leave it where it is
+
+  const report = {
+    orderId: order.orderId,
+    total,
+    before,
+    invoices: reads.map(r => ({
+      invoiceId: r.invoiceId,
+      status: r.status || '',
+      billed: r.invoiceAmount || 0,
+      paid: r.error || !r.known ? null : round2(r.paid),
+      kind: r.kind || '',
+      source: r.source || '',
+      methods: r.methods || [],
+      error: r.error || (r.known ? null : 'BTCPay did not report a readable amount for this invoice.')
+    })),
+    paid,
+    due,
+    nextStatus,
+    frozen,
+    swept,
+    sweepError,
+    unreadable: unreadable.length
+  };
+
+  if (unreadable.length && !force) {
+    return res.status(409).json({
+      error: `${unreadable.length} of ${reads.length} invoices could not be read, so $${paid.toFixed(2)} is a floor, not a total. ` +
+             'Committing it could bill the buyer for money already in the wallet. Read those invoices in BTCPay, then either ' +
+             'retry with force, or use "Collect the rest" with the figure you can see.',
+      ...report
+    });
+  }
+
+  if (dryRun) return res.json({ success: true, dryRun: true, ...report });
+
+  /* The ledger is REPLACED, not merged: it is being restated from the payment
+     processor, which is the authority on what arrived. Merging would preserve
+     exactly the wrong numbers this exists to correct. */
+  store.updateOrderStatus(order.orderId, null, {
+    payments: ledger,
+    paidAmount: paid,
+    paidAmountUnknown: false,
+    reconciledBy: (req.user && req.user.email) || 'admin key',
+    reconciledAt: new Date().toISOString(),
+    reconciledFrom: Object.keys(ledger)
+  });
+
+  const notes = [];
+  if (frozen) {
+    notes.push(`The ledger was corrected but the status was left at "${order.status}" — that parcel has already gone out.`);
+  } else if (nextStatus === 'paid') {
+    // markOrderPaid only credits points/referrals on the FIRST move to paid,
+    // so a re-run cannot pay the buyer twice.
+    markOrderPaid(order.orderId, { paidInFullBy: 'reconciled from BTCPay' });
+  } else if (nextStatus === 'underpaid') {
+    store.updateOrderStatus(order.orderId, 'underpaid', {
+      underpaidAt: order.underpaidAt || new Date().toISOString()
+    });
+    /* Stock and points released when the order died are NOT re-reserved here:
+       an underpaid order is not owed goods yet, and silently re-reserving would
+       hide stock from buyers who can actually pay for it. They are retaken when
+       the balance settles. */
+    if (status === 'cancelled') notes.push('The order was re-opened as underpaid; its stock and points stay released until the balance is paid.');
+  } else if (paid === 0) {
+    notes.push('BTCPay shows nothing received against this order, so its status was left alone.');
+  }
+
+  const updated = findOrder(order.orderId);
+  res.json({
+    success: true,
+    ...report,
+    after: { status: updated.status, paidAmount: round2(updated.paidAmount), due: amountDue(updated) },
+    payUrl: canPayBalance(updated) ? payLinkFor(order.orderId) : null,
+    notes
+  });
+});
+
 /* ============================================================
    ZELLE CHECKOUT — manual bank transfer
    Zelle has no API, no redirect and no webhook (see zelle.js), so
@@ -1555,6 +1778,7 @@ app.post('/api/zelle/checkout', auth.requireAuth, async (req, res) => {
     const body = req.body || {};
     assertResearchDetails(body.shipping);
     assertUsShipping(body.shipping);                            // U.S. addresses only
+    const webAuthorization = buildWebAuthorization(body.webAuthorization, req);
     // No points discount here: the money arrives by hand, so there's no charge
     // to reduce, and reserving points against an order that may never be paid
     // would strand them. The UI hides Zelle while points are being redeemed.
@@ -1577,7 +1801,7 @@ app.post('/api/zelle/checkout', auth.requireAuth, async (req, res) => {
     const buyerEmail = body.email || (req.user && req.user.email) || '';
     const record = buildOrderRecord({
       orderId, order, method: 'zelle', status: 'awaiting_payment',
-      email: buyerEmail, shipping: body.shipping, stockReserved
+      email: buyerEmail, shipping: body.shipping, stockReserved, webAuthorization
     });
     record.expiresAt = instructions.expiresAt;
 
@@ -2386,6 +2610,19 @@ async function runOneSubscription(sub) {
         shipping: claimed.shippingAddress,
         invoiceId: invoice.id,
         stockReserved,
+        /* A repeat shipment has no checkout screen, so nobody ticks a box for
+           it. Say so plainly rather than copying an "accepted" flag nobody
+           gave: the authorization for this shipment is the customer choosing
+           to pay its invoice (Terms §6 — nothing is ever charged
+           automatically). The enrolling order holds the signed authorization. */
+        webAuthorization: {
+          accepted: false,
+          source: 'autoship',
+          subscriptionId: claimed.id,
+          enrollingOrderId: claimed.firstOrderId || '',
+          recordedAt: new Date().toISOString(),
+          text: 'Scheduled auto-ship shipment. Not charged automatically — this shipment is authorized by the customer paying its invoice.'
+        },
         subscriptionId: claimed.id
       }));
     } catch (e) {

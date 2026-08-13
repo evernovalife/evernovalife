@@ -2205,6 +2205,9 @@ function updateAltPayVisibility() {
   const zelle = document.getElementById('zellePaySection');
   const divider = document.querySelector('#altPaySection .alt-pay-divider');
   const none = document.getElementById('noPayMethods');
+  /* The authorization box belongs to the pay buttons — it authorizes THIS
+     purchase — so it appears and disappears with them. */
+  const auth = document.querySelector('.web-auth-box');
 
   // Nothing to pay for yet. This is re-checked on every call rather than
   // decided once at init: a signed-in buyer's cart arrives from their ACCOUNT
@@ -2213,6 +2216,7 @@ function updateAltPayVisibility() {
   // reading leaves them looking at their items with no way to pay.
   if (cart.items.length === 0) {
     if (wrap) wrap.style.display = 'none';
+    if (auth) auth.style.display = 'none';
     return;
   }
 
@@ -2226,6 +2230,8 @@ function updateAltPayVisibility() {
   if (divider) divider.style.display = (showCrypto && showZelle) ? '' : 'none';
   if (none) none.style.display = (showCrypto || showZelle) ? 'none' : '';
   if (wrap) wrap.style.display = '';
+  // Only ask for the authorization when there is in fact a way to pay.
+  if (auth) auth.style.display = (showCrypto || showZelle) ? '' : 'none';
   updatePayButtonAmount();
 }
 
@@ -2387,7 +2393,8 @@ async function submitCryptoOrder(form, btn) {
         shippingMethod: enlShipChoice(),           // the service; the server sets its price
         email: checkout.email,
         pointsToRedeem: enlRedeem().points || 0,   // server clamps to the real balance
-        autoship: autoshipSelection()
+        autoship: autoshipSelection(),
+        webAuthorization: webAuthorizationRecord()  // signature for this transaction
       })
     });
     const body = await res.json().catch(() => ({}));
@@ -2492,7 +2499,8 @@ async function submitZelleOrder(form, btn) {
         items: cart.items.map(i => ({ id: i.id, quantity: i.quantity })),
         shipping: checkout,
         shippingMethod: enlShipChoice(),           // the service; the server sets its price
-        email: checkout.email
+        email: checkout.email,
+        webAuthorization: webAuthorizationRecord()  // signature for this transaction
       })
     });
     const body = await res.json().catch(() => ({}));
@@ -2576,8 +2584,21 @@ function initCheckoutPage() {
     inp.addEventListener('input', () => setFieldError(inp.closest('.form-field'), ''));
     inp.addEventListener('change', () => setFieldError(inp.closest('.form-field'), ''));
   });
-  const consent = form.querySelector('.form-check input[required]');
-  if (consent) consent.addEventListener('change', () => { const r = consent.closest('.form-check'); if (r) r.classList.toggle('invalid', !consent.checked); });
+  /* Every required tick-box, not just the first — the research-use consent and
+     the web order authorization are both mandatory, and only checking one of
+     them let an unauthorized order through. */
+  form.querySelectorAll('.form-check input[type="checkbox"][required]').forEach(box => {
+    box.addEventListener('change', () => {
+      const row = box.closest('.form-check');
+      if (row) row.classList.toggle('invalid', !box.checked);
+    });
+  });
+
+  /* The authorization text carries links (Terms, Returns, Privacy) inside its
+     <label>. Without this, opening one of them also toggles the box — so a
+     buyer reading the terms silently un-authorizes their own order. */
+  const authBox = form.querySelector('.web-auth-box');
+  if (authBox) authBox.querySelectorAll('a').forEach(a => a.addEventListener('click', e => e.stopPropagation()));
 
   const cryptoBtn = document.getElementById('cryptoPayBtn');
   const zelleBtn = document.getElementById('zellePayBtn');
@@ -2883,15 +2904,73 @@ function validateCheckout(form) {
     setFieldError(field, msg);
     if (msg && !firstInvalid) firstInvalid = input;
   });
-  // consent checkbox (.form-check)
-  const consent = form.querySelector('.form-check input[required]');
-  const consentRow = consent ? consent.closest('.form-check') : null;
-  if (consent && !consent.checked) {
-    if (consentRow) consentRow.classList.add('invalid');
-    if (!firstInvalid) firstInvalid = consent;
-  } else if (consentRow) { consentRow.classList.remove('invalid'); }
+  /* Required tick-boxes (.form-check): the research-use confirmation AND the
+     web order authorization. Both are conditions of the sale, so both are
+     checked — an order may not be placed with either one untouched. */
+  form.querySelectorAll('.form-check input[type="checkbox"][required]').forEach(box => {
+    const row = box.closest('.form-check');
+    if (!box.checked) {
+      if (row) row.classList.add('invalid');
+      if (!firstInvalid) firstInvalid = box;
+    } else if (row) { row.classList.remove('invalid'); }
+  });
   if (firstInvalid) firstInvalid.focus();
   return !firstInvalid;
+}
+
+/* ============================================================
+   WEB ORDER AUTHORIZATION
+   The buyer's electronic signature, captured at the moment they
+   place the order: the exact wording they were shown, the version
+   of that wording, and when they agreed. Stored with the order so
+   a disputed transaction can be answered with what was actually on
+   screen. Bump WEB_AUTH_VERSION whenever the copy in
+   checkout.html #webAuthText changes.
+   ============================================================ */
+const WEB_AUTH_VERSION = '2026-08-14';
+
+function webAuthorizationRecord() {
+  const box = document.getElementById('webAuthCheck');
+  if (!box || !box.checked) return null;      // validateCheckout already blocked this
+  const el = document.getElementById('webAuthText');
+  return {
+    accepted: true,
+    version: WEB_AUTH_VERSION,
+    acceptedAt: new Date().toISOString(),
+    text: (el ? el.textContent : '').replace(/\s+/g, ' ').trim()
+  };
+}
+
+/* ============================================================
+   CUSTOMER SERVICE PHONE
+   The number lives in js/config.js so it can be changed in one
+   place. Any element marked `data-support-phone` stays hidden
+   until a real number is configured — we would rather show no
+   phone number than a placeholder someone actually dials.
+   ============================================================ */
+function initSupportPhone() {
+  const raw = String(window.ENL_SUPPORT_PHONE || '').trim();
+  const hours = String(window.ENL_SUPPORT_PHONE_HOURS || '').trim();
+  if (!raw) return;                       // nothing configured → leave it hidden
+
+  /* tel: wants digits (and a leading +) only; the visible text keeps whatever
+     formatting the owner wrote. A bare 10-digit US number gets +1. */
+  let dial = raw.replace(/[^\d+]/g, '');
+  if (!dial.startsWith('+')) dial = (dial.length === 10 ? '+1' : '+') + dial;
+
+  document.querySelectorAll('[data-support-phone-link]').forEach(a => {
+    a.setAttribute('href', 'tel:' + dial);
+    a.textContent = raw;
+  });
+  document.querySelectorAll('[data-support-phone-hours]').forEach(el => {
+    el.textContent = hours ? ' — ' + hours : '';
+  });
+  document.querySelectorAll('[data-support-phone]').forEach(el => {
+    /* The containers are laid out differently per page (flex row on Contact,
+       inline inside a table cell on About), so restore the stylesheet's own
+       display rather than forcing one. */
+    el.style.display = '';
+  });
 }
 
 /* ============================================================
@@ -2962,6 +3041,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initVialTilt();
   initProductQuickView();   // clicking a product opens it in place, not a new page
   initBreadcrumbSchema();
+  initSupportPhone();       // reveals the phone blocks only when one is configured
 
   switch (currentPage) {
     case 'products.html': initProductsPage(); break;
