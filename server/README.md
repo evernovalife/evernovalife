@@ -256,6 +256,17 @@ setting nobody remembered to change (all overridable in `server/.env`):
 | `BTCPAY_MONITORING_MINUTES` | 1440 | a late payment is still *seen* after the window closes, instead of landing in the wallet attached to nothing |
 | `BTCPAY_PAYMENT_TOLERANCE` | 1% | wallet-fee dust settles instead of parking a real order. For dust only — a real shortfall still parks |
 | `BTCPAY_SPEED_POLICY` | `MediumSpeed` | 1 confirmation before settled |
+| `BTCPAY_DEFAULT_METHOD` | `BTC-LN` | which tab opens first. Lightning, because it's the rail that can't be underpaid — but the buyer can still switch |
+| `BTCPAY_PAYMENT_METHODS` | *(empty)* | pins which rails are offered at all. Empty = both |
+
+**Going Lightning-only.** Setting `BTCPAY_PAYMENT_METHODS=BTC-LN` makes partial
+payment *structurally* impossible: a Lightning invoice is for a fixed amount and
+the payer has no field to type a smaller one in. It is also the one change here
+that can lose you sales — every buyer whose wallet or exchange can't send over
+Lightning is turned away, and a few-hundred-dollar payment is much harder to
+route than a small one. The store's own short-paying customer sends on-chain, so
+this setting would have blocked him from buying at all rather than making him
+pay in full. Left empty on purpose.
 
 And one store *wallet* setting that only you can fix: the checkout is labelled **Bitcoin / Lightning**
 throughout the site, so a Lightning node has to actually be connected in BTCPay

@@ -703,6 +703,18 @@ test('a shipped order is never re-opened, and a full payment is not "short"', as
    dust tolerance are set on every invoice we raise, so they can't be lost
    to someone forgetting a store setting.
    ============================================================ */
+/* Lightning opens first because it is the rail that cannot be underpaid — but
+   on-chain stays offered, because it is the only rail some buyers have. Pinning
+   the list to Lightning alone is an env-var decision, not the default. */
+test('Lightning is the tab that opens, and on-chain is still offered', async () => {
+  const b = await buyer();
+  await openOrder(b.token);
+  const checkout = invoices[invoices.length - 1].payload.checkout;
+  assert.equal(checkout.defaultPaymentMethod, 'BTC-LN', 'the rail that cannot go short opens first');
+  assert.equal(checkout.paymentMethods, undefined,
+    'no list is pinned, so the store keeps offering on-chain as well');
+});
+
 test('invoices are raised with a real payment window and a dust tolerance', async () => {
   const b = await buyer();
   await openOrder(b.token);

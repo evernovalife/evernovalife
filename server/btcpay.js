@@ -49,6 +49,25 @@ function envNum(name, fallback, min, max) {
   if (!Number.isFinite(n)) return fallback;
   return Math.min(max, Math.max(min, n));
 }
+/* ---- which rails an invoice offers, and which one opens first ----
+   BTCPAY_PAYMENT_METHODS pins the list. Left empty, the invoice offers whatever
+   the store has enabled — both rails — and that is the right default: on-chain
+   is the only way some buyers can pay at all, and an exchange withdrawal is how
+   most of this store's customers actually send money.
+
+   Setting it to `BTC-LN` makes partial payment structurally impossible, because
+   a Lightning invoice is for a fixed amount and cannot be paid short. It also
+   turns away every buyer whose wallet or exchange can't send over Lightning, and
+   caps what can be paid at all — routing a few hundred dollars over Lightning is
+   much harder than routing ten. A deliberate trade, never a default.
+
+   BTCPAY_DEFAULT_METHOD only decides which tab is selected when the checkout
+   page opens. Lightning first, because the rail that can't go wrong should be
+   the one most people take without thinking about it. */
+const PAYMENT_METHODS = (process.env.BTCPAY_PAYMENT_METHODS || '')
+  .split(',').map(s => s.trim()).filter(Boolean);
+const DEFAULT_METHOD = (process.env.BTCPAY_DEFAULT_METHOD || 'BTC-LN').trim();
+
 const EXPIRY_MINUTES = envNum('BTCPAY_EXPIRY_MINUTES', 60, 10, 1440);
 const MONITORING_MINUTES = envNum('BTCPAY_MONITORING_MINUTES', 1440, 0, 20160);
 const PAYMENT_TOLERANCE = envNum('BTCPAY_PAYMENT_TOLERANCE', 1, 0, 5);
@@ -96,6 +115,8 @@ async function createInvoice({ order, email, shipping, orderId, redirectUrl, amo
       shipping: shipping || null
     },
     checkout: {
+      ...(PAYMENT_METHODS.length ? { paymentMethods: PAYMENT_METHODS } : {}),
+      ...(DEFAULT_METHOD ? { defaultPaymentMethod: DEFAULT_METHOD } : {}),
       expirationMinutes: EXPIRY_MINUTES,
       monitoringMinutes: MONITORING_MINUTES,
       paymentTolerance: PAYMENT_TOLERANCE,
@@ -317,6 +338,8 @@ module.exports = {
   // Surfaced so the admin panel can show the window a buyer actually gets,
   // rather than the one somebody assumes is configured.
   CHECKOUT: {
+    paymentMethods: PAYMENT_METHODS,
+    defaultPaymentMethod: DEFAULT_METHOD,
     expirationMinutes: EXPIRY_MINUTES,
     monitoringMinutes: MONITORING_MINUTES,
     paymentTolerance: PAYMENT_TOLERANCE,
