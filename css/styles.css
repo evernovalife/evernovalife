@@ -1411,6 +1411,14 @@ body.coa-lightbox-open { overflow: hidden; }
 .web-auth-check a { color: var(--accent-purple); text-decoration: underline; }
 .web-auth-box.invalid, .web-auth-check.invalid { border-color: var(--accent-coral); }
 
+/* Buyer declarations — age, non-consumption, qualified professional, terms.
+   Multi-line legal copy, so the box aligns to the top of the tick rather than
+   centring a paragraph against a 16px square. */
+.declaration-box { display: flex; flex-direction: column; gap: 0.7rem; margin: 0 0 1.25rem; }
+.declaration-box .form-check { align-items: flex-start; line-height: 1.55; cursor: pointer; }
+.declaration-box .form-check input { margin-top: 3px; flex: 0 0 auto; cursor: pointer; }
+.declaration-box .form-check a { color: var(--accent-purple); text-decoration: underline; }
+
 /* ============================================================
    AUTO-SHIP (recurring orders)
    ============================================================ */

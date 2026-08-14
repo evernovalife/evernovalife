@@ -110,6 +110,19 @@ const WEB_AUTH = {
   text: 'I authorize this order.'
 };
 
+/* Every order also carries the buyer declarations the checkout collects:
+   Terms acceptance, and the age / non-consumption / qualified-professional
+   statement. Both are conditions of sale and refused server-side when absent. */
+const DECLARATIONS = {
+  version: '2026-08-14',
+  acceptedAt: new Date().toISOString(),
+  items: [
+    { id: 'terms', accepted: true, text: 'I accept the Terms and Conditions.' },
+    { id: 'age-and-use', accepted: true, text: 'I am at least 21 (twenty-one) years of age...' }
+  ]
+};
+
+
 const US_SHIPPING = {
   firstName: 'Jane', lastName: 'Doe', address: '123 Science Park Dr',
   city: 'Boston', state: 'MA', postalCode: '02115', country: 'US',
@@ -119,7 +132,7 @@ const US_SHIPPING = {
 function order({ token, id, quantity = 1 }) {
   return api('/api/zelle/checkout', {
     method: 'POST', token,
-    body: { items: [{ id, quantity }], shipping: US_SHIPPING, email: 'buyer@example.com', webAuthorization: WEB_AUTH }
+    body: { items: [{ id, quantity }], shipping: US_SHIPPING, email: 'buyer@example.com', webAuthorization: WEB_AUTH, declarations: DECLARATIONS }
   });
 }
 

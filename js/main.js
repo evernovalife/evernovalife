@@ -2394,7 +2394,8 @@ async function submitCryptoOrder(form, btn) {
         email: checkout.email,
         pointsToRedeem: enlRedeem().points || 0,   // server clamps to the real balance
         autoship: autoshipSelection(),
-        webAuthorization: webAuthorizationRecord()  // signature for this transaction
+        webAuthorization: webAuthorizationRecord(), // signature for this transaction
+        declarations: declarationsRecord()          // terms + age/use conditions of sale
       })
     });
     const body = await res.json().catch(() => ({}));
@@ -2500,7 +2501,8 @@ async function submitZelleOrder(form, btn) {
         shipping: checkout,
         shippingMethod: enlShipChoice(),           // the service; the server sets its price
         email: checkout.email,
-        webAuthorization: webAuthorizationRecord()  // signature for this transaction
+        webAuthorization: webAuthorizationRecord(), // signature for this transaction
+        declarations: declarationsRecord()          // terms + age/use conditions of sale
       })
     });
     const body = await res.json().catch(() => ({}));
@@ -2939,6 +2941,39 @@ function webAuthorizationRecord() {
     acceptedAt: new Date().toISOString(),
     text: (el ? el.textContent : '').replace(/\s+/g, ' ').trim()
   };
+}
+
+/* ============================================================
+   BUYER DECLARATIONS
+   The conditions of sale for this product category: acceptance of
+   the Terms, and the age / non-consumption / qualified-professional
+   statement. Captured the same way as the authorization above —
+   the exact wording shown, its version, and when it was ticked —
+   because an unstored tick-box is not evidence of anything.
+   Bump DECLARATIONS_VERSION whenever the copy in checkout.html
+   #termsText or #ageUseText changes.
+   ============================================================ */
+const DECLARATIONS_VERSION = '2026-08-14';
+
+const DECLARATION_FIELDS = [
+  { id: 'terms', box: 'termsCheck', text: 'termsText' },
+  { id: 'age-and-use', box: 'ageUseCheck', text: 'ageUseText' }
+];
+
+function declarationsRecord() {
+  const at = new Date().toISOString();
+  const items = DECLARATION_FIELDS.map(f => {
+    const box = document.getElementById(f.box);
+    if (!box || !box.checked) return null;    // validateCheckout already blocked this
+    const el = document.getElementById(f.text);
+    return {
+      id: f.id,
+      accepted: true,
+      text: (el ? el.textContent : '').replace(/\s+/g, ' ').trim()
+    };
+  });
+  if (items.some(i => !i)) return null;
+  return { version: DECLARATIONS_VERSION, acceptedAt: at, items };
 }
 
 /* ============================================================

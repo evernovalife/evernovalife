@@ -250,6 +250,47 @@ function buildWebAuthorization(raw, req) {
   };
 }
 
+/* ---- Buyer declarations, required on every order.
+   The conditions of sale for this product category: acceptance of the Terms,
+   and the age / non-consumption / qualified-professional statement. Same
+   reasoning as the authorization above — the tick only means something if what
+   was ticked is kept, so the wording, its version and the arrival time are
+   stored with the order.
+
+   Checked here, not only in the browser, because a form check is a courtesy to
+   honest buyers and nothing at all to anyone posting straight at the API. */
+const DECLARATIONS_VERSION = '2026-08-14';
+const DECLARATIONS_REQUIRED = ['terms', 'age-and-use'];
+const DECLARATION_MAX_TEXT = 2000;
+
+function buildDeclarations(raw, req) {
+  const d = raw && typeof raw === 'object' ? raw : null;
+  const items = d && Array.isArray(d.items) ? d.items : [];
+  const accepted = new Set(items.filter(i => i && i.accepted === true).map(i => String(i.id)));
+  const missing = DECLARATIONS_REQUIRED.filter(id => !accepted.has(id));
+  if (missing.length) {
+    throw new Error(missing.includes('age-and-use')
+      ? 'Please confirm you are 21 or over and that these products will not be consumed, before placing your order.'
+      : 'Please accept the Terms and Conditions before placing your order.');
+  }
+  const claimed = d.acceptedAt ? new Date(d.acceptedAt) : null;
+  const now = new Date();
+  return {
+    version: String(d.version || DECLARATIONS_VERSION).slice(0, 40),
+    acceptedAt: (claimed && !isNaN(claimed.getTime()) ? claimed : now).toISOString(),
+    recordedAt: now.toISOString(),
+    items: items
+      .filter(i => i && i.accepted === true && DECLARATIONS_REQUIRED.includes(String(i.id)))
+      .map(i => ({
+        id: String(i.id).slice(0, 40),
+        accepted: true,
+        text: String(i.text || '').slice(0, DECLARATION_MAX_TEXT)
+      })),
+    ip: String((req && (req.headers['x-forwarded-for'] || '').split(',')[0].trim()) || (req && req.ip) || '').slice(0, 64),
+    userAgent: String((req && req.headers['user-agent']) || '').slice(0, 300)
+  };
+}
+
 function assertUsShipping(shipping) {
   const raw = String((shipping && (shipping.countryCode || shipping.country)) || '')
     .trim().toUpperCase();
@@ -892,7 +933,7 @@ async function sendReferralRewardEmail(referrerId, points) {
    `order.shipping` is the shipping COST (from pricing.js); the delivery
    address arrives separately as `shipping`, stored as shippingAddress so
    the two never collide. */
-function buildOrderRecord({ orderId, order, method, status, email, shipping, transactionId, invoiceId, pointsEarned, pointsRedeemed, subscriptionId, stockReserved, webAuthorization }) {
+function buildOrderRecord({ orderId, order, method, status, email, shipping, transactionId, invoiceId, pointsEarned, pointsRedeemed, subscriptionId, stockReserved, webAuthorization, declarations }) {
   return {
     orderId,
     createdAt: new Date().toISOString(),
@@ -911,6 +952,9 @@ function buildOrderRecord({ orderId, order, method, status, email, shipping, tra
     shippingAddress: shipping || null,
     // what the buyer authorized, and when — the audit trail for this sale
     ...(webAuthorization ? { webAuthorization } : {}),
+    // …and the conditions of sale they declared to meet (age, non-consumption,
+    // qualified professional, Terms). Same audit trail, different question.
+    ...(declarations ? { declarations } : {}),
     ...(pointsEarned ? { pointsEarned } : {}),
     ...(pointsRedeemed ? { pointsRedeemed } : {}),
     ...(transactionId ? { transactionId } : {}),
@@ -938,6 +982,7 @@ app.post('/api/crypto/checkout', auth.requireAuth, async (req, res) => {
     assertResearchDetails(body.shipping);
     assertUsShipping(body.shipping);                            // U.S. addresses only
     const webAuthorization = buildWebAuthorization(body.webAuthorization, req);
+    const declarations = buildDeclarations(body.declarations, req);
     // Loyalty redemption is folded into the invoice amount, so the buyer pays
     // the discounted total. The points are HELD (debited now) and returned if
     // the invoice expires unpaid — see refundReservedPoints below. Holding
@@ -1020,6 +1065,7 @@ app.post('/api/crypto/checkout', auth.requireAuth, async (req, res) => {
         pointsRedeemed,
         stockReserved,
         webAuthorization,
+        declarations,
         subscriptionId: subscription ? subscription.id : ''
       }));
       store.clearCart(req.user.id);
@@ -1779,6 +1825,7 @@ app.post('/api/zelle/checkout', auth.requireAuth, async (req, res) => {
     assertResearchDetails(body.shipping);
     assertUsShipping(body.shipping);                            // U.S. addresses only
     const webAuthorization = buildWebAuthorization(body.webAuthorization, req);
+    const declarations = buildDeclarations(body.declarations, req);
     // No points discount here: the money arrives by hand, so there's no charge
     // to reduce, and reserving points against an order that may never be paid
     // would strand them. The UI hides Zelle while points are being redeemed.
@@ -1801,7 +1848,7 @@ app.post('/api/zelle/checkout', auth.requireAuth, async (req, res) => {
     const buyerEmail = body.email || (req.user && req.user.email) || '';
     const record = buildOrderRecord({
       orderId, order, method: 'zelle', status: 'awaiting_payment',
-      email: buyerEmail, shipping: body.shipping, stockReserved, webAuthorization
+      email: buyerEmail, shipping: body.shipping, stockReserved, webAuthorization, declarations
     });
     record.expiresAt = instructions.expiresAt;
 
@@ -2622,6 +2669,15 @@ async function runOneSubscription(sub) {
           enrollingOrderId: claimed.firstOrderId || '',
           recordedAt: new Date().toISOString(),
           text: 'Scheduled auto-ship shipment. Not charged automatically — this shipment is authorized by the customer paying its invoice.'
+        },
+        /* Same for the conditions of sale: they were declared on the enrolling
+           order and carry forward. Pointing at that order is honest; copying
+           its "accepted" onto a screen nobody saw is not. */
+        declarations: {
+          source: 'autoship',
+          enrollingOrderId: claimed.firstOrderId || '',
+          recordedAt: new Date().toISOString(),
+          text: 'Declared on the enrolling order for this auto-ship plan.'
         },
         subscriptionId: claimed.id
       }));

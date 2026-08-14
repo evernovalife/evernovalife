@@ -30,7 +30,7 @@
    The dial link is derived from the number automatically, so write it
    however you want it to READ.
    ------------------------------------------------------------ */
-window.ENL_SUPPORT_PHONE = '';
+window.ENL_SUPPORT_PHONE = '(561) 954-9253';
 window.ENL_SUPPORT_PHONE_HOURS = '';
 
 (function () {

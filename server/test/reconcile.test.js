@@ -183,6 +183,19 @@ const WEB_AUTH = {
   text: 'I authorize this order.'
 };
 
+/* Every order also carries the buyer declarations the checkout collects:
+   Terms acceptance, and the age / non-consumption / qualified-professional
+   statement. Both are conditions of sale and refused server-side when absent. */
+const DECLARATIONS = {
+  version: '2026-08-14',
+  acceptedAt: new Date().toISOString(),
+  items: [
+    { id: 'terms', accepted: true, text: 'I accept the Terms and Conditions.' },
+    { id: 'age-and-use', accepted: true, text: 'I am at least 21 (twenty-one) years of age...' }
+  ]
+};
+
+
 const SHIPPING = {
   name: 'Jane Doe', address: '123 Science Park Dr',
   city: 'Boston', state: 'MA', postalCode: '02115', countryCode: 'US',
@@ -230,7 +243,7 @@ async function doubleBilledOrder({ fracA = 0.4, fracB = 0.45, readableB = true }
   const b = await buyer();
   const res = await api('/api/crypto/checkout', {
     method: 'POST', token: b.token,
-    body: { items: [{ id: productId, quantity: 1 }], shipping: SHIPPING, email: 'buyer@example.com', webAuthorization: WEB_AUTH }
+    body: { items: [{ id: productId, quantity: 1 }], shipping: SHIPPING, email: 'buyer@example.com', webAuthorization: WEB_AUTH, declarations: DECLARATIONS }
   });
   assert.ok(res.status === 200 || res.status === 201, 'checkout opened');
   const orderId = res.body.orderId;

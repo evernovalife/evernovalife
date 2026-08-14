@@ -152,6 +152,19 @@ const WEB_AUTH = {
   text: 'I authorize this order.'
 };
 
+/* Every order also carries the buyer declarations the checkout collects:
+   Terms acceptance, and the age / non-consumption / qualified-professional
+   statement. Both are conditions of sale and refused server-side when absent. */
+const DECLARATIONS = {
+  version: '2026-08-14',
+  acceptedAt: new Date().toISOString(),
+  items: [
+    { id: 'terms', accepted: true, text: 'I accept the Terms and Conditions.' },
+    { id: 'age-and-use', accepted: true, text: 'I am at least 21 (twenty-one) years of age...' }
+  ]
+};
+
+
 const SHIPPING = {
   name: 'Jane Doe', address: '123 Science Park Dr',
   city: 'Boston', state: 'MA', postalCode: '02115', countryCode: 'US',
@@ -184,7 +197,7 @@ async function openOrder(token, extra = {}) {
       items: [{ id: productId, quantity: 1 }],
       shipping: SHIPPING,
       email: 'buyer@example.com',
-      webAuthorization: WEB_AUTH,
+      webAuthorization: WEB_AUTH, declarations: DECLARATIONS,
       ...extra
     }
   });
@@ -244,11 +257,78 @@ test('the authorization is stored with the order, with the wording that was show
   assert.ok(!isNaN(new Date(wa.recordedAt).getTime()), 'and our own arrival stamp');
 });
 
+/* ============================================================
+   Conditions of sale — age, non-consumption, qualified professional
+   For this product category the declarations are the sale's licence to
+   exist, so they are enforced where they cannot be skipped: an order
+   posted straight at the API without them is refused, exactly like one
+   from a form nobody ticked.
+   ============================================================ */
+test('an order without the buyer declarations is refused', async () => {
+  const b = await buyer();
+  const before = invoices.length;
+
+  const bodies = [
+    undefined,                                                     // sent nothing
+    {},                                                            // sent an empty object
+    { version: '2026-08-14', items: [] },                          // ticked nothing
+    { items: [{ id: 'terms', accepted: true, text: 'x' }] },       // terms only
+    { items: [{ id: 'age-and-use', accepted: true, text: 'x' }] }, // age only
+    { items: [{ id: 'terms', accepted: false }, { id: 'age-and-use', accepted: false }] }
+  ];
+  for (const bad of bodies) {
+    const res = await api('/api/crypto/checkout', {
+      method: 'POST', token: b.token,
+      body: {
+        items: [{ id: productId, quantity: 1 }], shipping: SHIPPING,
+        webAuthorization: WEB_AUTH, declarations: bad
+      }
+    });
+    assert.equal(res.status, 400, `rejected: ${JSON.stringify(bad)}`);
+    assert.match(res.body.error, /21 or over|Terms and Conditions/i, 'and names what is missing');
+  }
+  assert.equal(invoices.length, before, 'no invoice was opened for an undeclared order');
+});
+
+test('the declarations are stored with the order, with the wording that was shown', async () => {
+  const b = await buyer();
+  const res = await openOrder(b.token);
+  const mine = store.listOrders(b.user.id).find(o => o.orderId === res.body.orderId);
+
+  const d = mine.declarations;
+  assert.ok(d, 'the order carries a declarations record');
+  assert.equal(d.version, DECLARATIONS.version);
+  assert.deepEqual(d.items.map(i => i.id).sort(), ['age-and-use', 'terms']);
+  assert.equal(d.items.find(i => i.id === 'age-and-use').text,
+    DECLARATIONS.items.find(i => i.id === 'age-and-use').text,
+    'the exact statement they were shown is kept, not a summary of it');
+  assert.ok(!isNaN(new Date(d.recordedAt).getTime()), 'stamped with our own arrival time');
+});
+
+/* Anything the buyer did not tick has no business in the record — an audit
+   trail that quietly grows extra agreements is worse than none. */
+test('declarations the buyer did not make are not recorded', async () => {
+  const b = await buyer();
+  const res = await openOrder(b.token, {
+    declarations: {
+      ...DECLARATIONS,
+      items: [
+        ...DECLARATIONS.items,
+        { id: 'waives-all-rights', accepted: true, text: 'invented by the client' }
+      ]
+    }
+  });
+  assert.equal(res.status, 201);
+  const mine = store.listOrders(b.user.id).find(o => o.orderId === res.body.orderId);
+  assert.deepEqual(mine.declarations.items.map(i => i.id).sort(), ['age-and-use', 'terms'],
+    'a declaration the checkout never showed is dropped, not stored');
+});
+
 /* A timestamp is the buyer's word; ours is the one we can stand behind. A
    nonsense acceptedAt must not put a junk date in the audit trail. */
 test('a bogus acceptance timestamp is replaced, not stored', async () => {
   const b = await buyer();
-  const res = await openOrder(b.token, { webAuthorization: { ...WEB_AUTH, acceptedAt: 'whenever' } });
+  const res = await openOrder(b.token, { webAuthorization: { ...WEB_AUTH, acceptedAt: 'whenever' }, declarations: DECLARATIONS });
   assert.equal(res.status, 201);
   const mine = store.listOrders(b.user.id).find(o => o.orderId === res.body.orderId);
   assert.ok(!isNaN(new Date(mine.webAuthorization.acceptedAt).getTime()), 'a real date was stored instead');
@@ -261,7 +341,7 @@ test('the order always carries an address to write to, even with no email at che
   const b = await buyer();
   const res = await api('/api/crypto/checkout', {
     method: 'POST', token: b.token,
-    body: { items: [{ id: productId, quantity: 1 }], shipping: SHIPPING, webAuthorization: WEB_AUTH }   // no email field
+    body: { items: [{ id: productId, quantity: 1 }], shipping: SHIPPING, webAuthorization: WEB_AUTH, declarations: DECLARATIONS }   // no email field
   });
   assert.equal(res.status, 201);
   const mine = store.listOrders(b.user.id).find(o => o.orderId === res.body.orderId);
