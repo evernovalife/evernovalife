@@ -631,8 +631,10 @@ test('only an admin can email a pay link, and only for a collectable balance', a
   assert.ok(sent.body.payUrl.includes(res.body.orderId), 'the link names the order it settles');
   assert.equal(sent.body.due, sent.body.due);
 
-  // …and refuses an order with nothing outstanding.
-  const clean = await openOrder(b.token);
+  // …and refuses an order with nothing outstanding. Deliberately a SECOND
+  // order for a buyer who already has one open, so it says so — the duplicate
+  // guard would otherwise (rightly) refuse to raise it.
+  const clean = await openOrder(b.token, { allowDuplicate: true });
   const refused = await api('/api/admin/orders/' + clean.body.orderId + '/pay-link', {
     method: 'POST', token: boss.token
   });
@@ -881,4 +883,64 @@ test('run-due rejects a caller with no cron key and no admin account', async () 
   const b = await buyer();
   const asCustomer = await api('/api/subscriptions/run-due', { method: 'POST', token: b.token });
   assert.equal(asCustomer.status, 401, 'an ordinary customer cannot fire it either');
+});
+
+/* ============================================================
+   5) One purchase, one order
+   The failure this pins down happened for real on 12–13 Aug 2026: a buyer
+   short-paid an invoice, then started a fresh checkout for the same cart
+   instead of paying the balance. Two live orders for one purchase, part of
+   the money on each, and the same customer showing in Unpaid and in Paid at
+   the same time. Nothing in the checkout stopped it.
+   ============================================================ */
+test('a second identical order is refused while the first is still unpaid', async () => {
+  const b = await buyer();
+  const first = await openOrder(b.token);
+  assert.equal(first.status, 201);
+
+  const again = await openOrder(b.token);
+  assert.equal(again.status, 409, 'the same cart cannot be opened twice');
+  assert.equal(again.body.duplicateOf, first.body.orderId, 'it names the order they already have');
+  assert.ok(again.body.canPlaceAnyway, 'and offers the deliberate override');
+  assert.match(again.body.error, /already have an order/i);
+});
+
+test('a short-paid order is pointed at its balance link, not billed again', async () => {
+  const b = await buyer();
+  const first = await openOrder(b.token);
+  const invoiceId = first.body.invoiceId;
+
+  // Money arrives, but not all of it → the order parks as underpaid.
+  paidAmounts.set(invoiceId, '10.00');
+  const raw = JSON.stringify({ type: 'InvoiceExpired', invoiceId, metadata: { orderId: first.body.orderId } });
+  await webhook(raw);
+
+  const again = await openOrder(b.token);
+  assert.equal(again.status, 409);
+  assert.equal(again.body.duplicateOf, first.body.orderId);
+  assert.ok(again.body.due > 0, 'it says what is still owed');
+  assert.match(again.body.payUrl, /pay\.html\?order=/, 'and where to pay it');
+});
+
+test('a buyer who really means it can still place a second order', async () => {
+  const b = await buyer();
+  const first = await openOrder(b.token);
+  const second = await openOrder(b.token, { allowDuplicate: true });
+  assert.equal(second.status, 201, 'the override goes through');
+  assert.notEqual(second.body.orderId, first.body.orderId, 'and it is a separate order');
+});
+
+test('a different cart, or a settled first order, is never a duplicate', async () => {
+  const b = await buyer();
+  const first = await openOrder(b.token);
+
+  // Different quantity = different purchase.
+  const other = await openOrder(b.token, { items: [{ id: productId, quantity: 2 }] });
+  assert.equal(other.status, 201, 'a different cart is not a duplicate');
+
+  // Once the first is out of the way, the same cart is buyable again.
+  const boss = await admin();
+  await api(`/api/admin/orders/${first.body.orderId}/cancel`, { method: 'POST', token: boss.token });
+  const afterCancel = await openOrder(b.token);
+  assert.equal(afterCancel.status, 201, 'a cancelled order blocks nothing');
 });

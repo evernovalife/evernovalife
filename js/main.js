@@ -2371,6 +2371,28 @@ function showCryptoConfirmation(ref) {
     </div>`;
 }
 
+/* The server refuses a second, identical order while the first is still
+   unpaid (409 + duplicateOf), because two live orders for one cart is how a
+   payment ends up split across both. Offer the obvious thing first — go and
+   finish the order they already have — and only then the deliberate override.
+
+   Returns 'retry' to place it anyway, 'abort' otherwise. May navigate away. */
+async function handleDuplicateOrder(body) {
+  const due = Number(body.due) || 0;
+  const finish = body.payUrl
+    ? `\n\nPress OK to go and pay the ${formatPrice(due)} still owed on ${body.duplicateOf}.`
+    : `\n\nThe payment details for ${body.duplicateOf} are in your email.`;
+  const goFinish = window.confirm((body.error || 'You already have this order open.') + finish);
+  if (goFinish) {
+    if (body.payUrl) window.location.href = body.payUrl;
+    return 'abort';
+  }
+  return window.confirm(
+    `Place a SECOND, separate order for the same items?\n\n` +
+    `You would owe both ${body.duplicateOf} and this new one — two payments, two parcels.`
+  ) ? 'retry' : 'abort';
+}
+
 /* validate the form, open a BTCPay invoice on our server, then send the
    buyer to the hosted crypto checkout. Prices come from the server — the
    browser sends what it WANTS applied (points, a repeat interval) and the
@@ -2384,21 +2406,34 @@ async function submitCryptoOrder(form, btn) {
   btn.textContent = 'Opening secure crypto checkout…';
   try {
     const checkout = collectCheckout(form);
-    const res = await fetch(API_BASE + '/api/crypto/checkout', {
+    const payload = {
+      items: cart.items.map(i => ({ id: i.id, quantity: i.quantity })),
+      shipping: checkout,
+      shippingMethod: enlShipChoice(),           // the service; the server sets its price
+      email: checkout.email,
+      pointsToRedeem: enlRedeem().points || 0,   // server clamps to the real balance
+      autoship: autoshipSelection(),
+      webAuthorization: webAuthorizationRecord(), // signature for this transaction
+      declarations: declarationsRecord()          // terms + age/use conditions of sale
+    };
+    const post = () => fetch(API_BASE + '/api/crypto/checkout', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeader() },
-      body: JSON.stringify({
-        items: cart.items.map(i => ({ id: i.id, quantity: i.quantity })),
-        shipping: checkout,
-        shippingMethod: enlShipChoice(),           // the service; the server sets its price
-        email: checkout.email,
-        pointsToRedeem: enlRedeem().points || 0,   // server clamps to the real balance
-        autoship: autoshipSelection(),
-        webAuthorization: webAuthorizationRecord(), // signature for this transaction
-        declarations: declarationsRecord()          // terms + age/use conditions of sale
-      })
+      body: JSON.stringify(payload)
     });
-    const body = await res.json().catch(() => ({}));
+    let res = await post();
+    let body = await res.json().catch(() => ({}));
+    if (res.status === 409 && body.duplicateOf) {
+      if (await handleDuplicateOrder(body) !== 'retry') {
+        checkoutSetMsg(body.error, 'error');
+        btn.disabled = false;
+        btn.innerHTML = original;
+        return;
+      }
+      payload.allowDuplicate = true;
+      res = await post();
+      body = await res.json().catch(() => ({}));
+    }
     if (!res.ok || !body.checkoutLink) throw new Error(body.error || 'Could not start crypto checkout.');
     // Remember the order so we can show a proper confirmation on redirect back.
     // The subscription rides along because the confirmation is rendered after a
@@ -2493,19 +2528,34 @@ async function submitZelleOrder(form, btn) {
   btn.textContent = 'Placing your order…';
   try {
     const checkout = collectCheckout(form);
-    const res = await fetch(API_BASE + '/api/zelle/checkout', {
+    const payload = {
+      items: cart.items.map(i => ({ id: i.id, quantity: i.quantity })),
+      shipping: checkout,
+      shippingMethod: enlShipChoice(),           // the service; the server sets its price
+      email: checkout.email,
+      webAuthorization: webAuthorizationRecord(), // signature for this transaction
+      declarations: declarationsRecord()          // terms + age/use conditions of sale
+    };
+    const post = () => fetch(API_BASE + '/api/zelle/checkout', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeader() },
-      body: JSON.stringify({
-        items: cart.items.map(i => ({ id: i.id, quantity: i.quantity })),
-        shipping: checkout,
-        shippingMethod: enlShipChoice(),           // the service; the server sets its price
-        email: checkout.email,
-        webAuthorization: webAuthorizationRecord(), // signature for this transaction
-        declarations: declarationsRecord()          // terms + age/use conditions of sale
-      })
+      body: JSON.stringify(payload)
     });
-    const body = await res.json().catch(() => ({}));
+    let res = await post();
+    let body = await res.json().catch(() => ({}));
+    /* Two identical open Zelle references are two ways to credit the wrong one
+       — the transfer is matched to an order by eye, off the memo. */
+    if (res.status === 409 && body.duplicateOf) {
+      if (await handleDuplicateOrder(body) !== 'retry') {
+        checkoutSetMsg(body.error, 'error');
+        btn.disabled = false;
+        btn.innerHTML = original;
+        return;
+      }
+      payload.allowDuplicate = true;
+      res = await post();
+      body = await res.json().catch(() => ({}));
+    }
     if (!res.ok || !body.success) throw new Error(body.error || 'Could not place your Zelle order.');
     showZelleInstructions(body);
   } catch (err) {

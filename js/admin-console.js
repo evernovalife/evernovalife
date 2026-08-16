@@ -1050,8 +1050,10 @@
     if (!LBL) { A.toast('The label renderer did not load — check js/admin-labels.js.', 'error'); return; }
     var list = (orders || []).filter(Boolean);
     if (!list.length) { A.toast('No orders to label.', 'error'); return; }
-    var d = design || state.design;
-    if (!d) { A.toast('No label design loaded yet — press Refresh.', 'error'); return; }
+    /* The saved design if the backend has one, otherwise the built-in default —
+       including the return address. A backend that predates the designer must
+       still print a correct label rather than refusing to. */
+    var d = design || state.design || LBL.DEFAULT;
 
     var noAddress = list.filter(function (o) {
       var a = o.shippingAddress || {};
@@ -1329,6 +1331,15 @@
           : '<button class="btn btn-primary btn-sm act-paid" data-id="' + esc(o.orderId) +
             '" data-total="' + esc(money(o.total)) + '">Mark paid</button> ' +
             '<button class="btn btn-ghost btn-sm act-cancel" data-id="' + esc(o.orderId) + '">Cancel</button>';
+      }
+      /* A settled order's label is already made — it is this row plus the saved
+         design — so it can be printed from here without a detour through To
+         ship. Deliberately NOT offered on an unpaid order: a labelled parcel is
+         a parcel that gets posted, and the money has not landed yet. */
+      if (opts.actions && [PAID, 'shipped', 'delivered'].indexOf(o.status) !== -1 && !isTestOrder(o)) {
+        actions += (actions ? ' ' : '') +
+          '<button class="btn btn-ghost btn-sm act-label" data-id="' + esc(o.orderId) + '">' +
+          A.icon('tag', 'ic') + ' Shipping label</button>';
       }
       return '<tr>' +
         '<td><span class="ref">' + esc(o.orderId) + '</span>' +

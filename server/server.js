@@ -957,6 +957,71 @@ async function sendReferralRewardEmail(referrerId, points) {
   return mailer.sendMail({ to: referrer.email, subject, text, html });
 }
 
+/* ============================================================
+   ONE PURCHASE, ONE ORDER
+   A buyer who has already opened an order and not finished paying it has one
+   job: finish that one. Nothing stopped them starting a second identical
+   checkout instead, and that is how a single purchase became two competing
+   orders — two invoices for the same goods, stock held twice, points held
+   twice, and part of the money on each. The owner then sees the same customer
+   in Unpaid and in Paid at once and cannot tell which is real. (That is
+   exactly what happened on 12–13 Aug 2026.)
+
+   So an identical open order inside the window is refused, and the buyer is
+   pointed at the one they already have. `allowDuplicate: true` overrides it —
+   somebody genuinely ordering the same thing twice in a day is rare, but it is
+   their money and their decision, so it is a speed bump rather than a wall.
+   ============================================================ */
+const DUPLICATE_WINDOW_MS = 12 * 60 * 60 * 1000;
+const OPEN_STATUSES = ['pending', 'awaiting_payment', 'underpaid'];
+
+/* What makes two orders "the same purchase": the same items in the same
+   quantities for the same money. Not the timestamp, not the reference. */
+function orderSignature(items, total) {
+  const lines = (items || [])
+    .map(i => `${i.id}x${Number(i.quantity) || 0}`)
+    .sort()
+    .join('|');
+  return `${lines}@${round2(total).toFixed(2)}`;
+}
+
+function findOpenTwin({ userId, email, order, now }) {
+  const wanted = orderSignature(order.items, order.total);
+  const at = now || Date.now();
+  let list;
+  try { list = store.listOrders(userId) || []; } catch (e) { return null; }
+  return list.find(o => {
+    if (!o || OPEN_STATUSES.indexOf(String(o.status).toLowerCase()) === -1) return false;
+    // Every guest order shares one bucket, so there the email is the buyer.
+    if (userId === store.GUEST_KEY &&
+        String(o.email || '').toLowerCase() !== String(email || '').toLowerCase()) return false;
+    const age = at - new Date(o.createdAt).getTime();
+    if (!(age >= 0 && age < DUPLICATE_WINDOW_MS)) return false;
+    return orderSignature(o.items, o.total) === wanted;
+  }) || null;
+}
+
+/* The 409 body a blocked duplicate gets: what already exists, what it still
+   owes, and where to pay it. */
+function duplicateOrderResponse(twin) {
+  const due = amountDue(twin);
+  const short = String(twin.status).toLowerCase() === 'underpaid';
+  return {
+    error: short
+      ? `You already have an order for these items (${twin.orderId}) with $${due.toFixed(2)} still to pay. ` +
+        `Pay the balance on that one instead — a second order would bill you for the whole cart again.`
+      : `You already have an order for these items (${twin.orderId}) waiting to be paid. ` +
+        `Finish that one — the payment details are in your email — rather than starting a second.`,
+    duplicateOf: twin.orderId,
+    orderStatus: twin.status,
+    due,
+    payUrl: canPayBalance(twin) ? payLinkFor(twin.orderId) : '',
+    // The browser may offer to place it anyway; the server does not decide for
+    // a buyer who really does want two.
+    canPlaceAnyway: true
+  };
+}
+
 /* Shape a stored order record from a priced order + payment details.
    `order.shipping` is the shipping COST (from pricing.js); the delivery
    address arrives separately as `shipping`, stored as shippingAddress so
@@ -1019,6 +1084,15 @@ app.post('/api/crypto/checkout', auth.requireAuth, async (req, res) => {
     const discount = plannedDiscount(req.user, body.pointsToRedeem);
     // The browser names the service; shipping.js sets what it costs.
     const order = buildOrder(body.items, { discount, shippingMethod: body.shippingMethod });
+
+    /* Before anything is reserved or invoiced: is this the same purchase they
+       already have open? Two live invoices for one cart is how the money ends
+       up split across two orders that each look half-paid. */
+    if (!body.allowDuplicate) {
+      const twin = findOpenTwin({ userId: req.user.id, email: body.email || req.user.email, order });
+      if (twin) return res.status(409).json(duplicateOrderResponse(twin));
+    }
+
     const orderId = newOrderId();
 
     /* Resolve the buyer's email ONCE and store that, rather than whatever the
@@ -1860,6 +1934,18 @@ app.post('/api/zelle/checkout', auth.requireAuth, async (req, res) => {
     const order = buildOrder(body.items, { shippingMethod: body.shippingMethod });
     zelle.assertPayable({ order, shipping: body.shipping });     // US-only + send-limit guards
 
+    /* Same rule as crypto, and it bites harder here: a Zelle order is confirmed
+       by eye against a bank memo, so two identical open references are two ways
+       to credit the wrong one. */
+    const zelleEmail = body.email || (req.user && req.user.email) || '';
+    if (!body.allowDuplicate) {
+      const twin = findOpenTwin({
+        userId: req.user ? req.user.id : store.GUEST_KEY,
+        email: zelleEmail, order
+      });
+      if (twin) return res.status(409).json(duplicateOrderResponse(twin));
+    }
+
     const orderId = newOrderId();
     /* Held the same way as a crypto invoice. A Zelle order can sit unpaid for
        days, which is exactly why the units come off the shelf now — otherwise
@@ -1873,7 +1959,7 @@ app.post('/api/zelle/checkout', auth.requireAuth, async (req, res) => {
     // nothing, and the owner has no idea what to ship or where.
     // Same rule as crypto: store a resolved address, not a possibly-empty form
     // field, so the order can still be written to after today.
-    const buyerEmail = body.email || (req.user && req.user.email) || '';
+    const buyerEmail = zelleEmail;
     const record = buildOrderRecord({
       orderId, order, method: 'zelle', status: 'awaiting_payment',
       email: buyerEmail, shipping: body.shipping, stockReserved, webAuthorization, declarations

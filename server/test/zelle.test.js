@@ -369,3 +369,30 @@ test('/api/health reports zelle availability', async () => {
 /* Keep the loyalty module referenced — the points assertions above depend on
    its config being loaded from the same process as the server. */
 assert.ok(typeof loyalty.earnForAmount === 'function');
+
+/* ============================================================
+   7) One purchase, one order
+   A Zelle payment is matched to an order by eye, off the memo the buyer types
+   into their bank. Two identical open references are therefore two ways to
+   credit the wrong one — and if the buyer sends a single transfer, one of the
+   two orders is guaranteed to look unpaid forever.
+   ============================================================ */
+test('the same cart cannot be left open twice, unless the buyer insists', async () => {
+  const buyer = await aBuyer();
+  const first = await zelleOrder({ token: buyer.token });
+  assert.equal(first.status, 201);
+
+  const again = await zelleOrder({ token: buyer.token });
+  assert.equal(again.status, 409, 'a second identical open order is refused');
+  assert.equal(again.body.duplicateOf, first.body.orderId, 'it names the reference already waiting');
+
+  const insisted = await api('/api/zelle/checkout', {
+    method: 'POST', token: buyer.token,
+    body: {
+      items: [{ id: productId, quantity: 1 }], shipping: US_SHIPPING, email: 'buyer@example.com',
+      webAuthorization: WEB_AUTH, declarations: DECLARATIONS, allowDuplicate: true
+    }
+  });
+  assert.equal(insisted.status, 201, 'the deliberate override still goes through');
+  assert.notEqual(insisted.body.orderId, first.body.orderId);
+});
