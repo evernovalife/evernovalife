@@ -25,6 +25,7 @@ const loyalty = require('./loyalty.js');
 const subscriptions = require('./subscriptions.js');
 const productStore = require('./products.js');
 const shippingRates = require('./shipping.js');
+const labelDesign = require('./label-design.js');
 const mailer = require('./email.js');
 
 const app = express();
@@ -546,6 +547,33 @@ app.delete('/api/shipping/:id', requireAdmin, (req, res) => {
   } catch (err) {
     res.status(err.status || 400).json({ error: err.message });
   }
+});
+
+/* ============================================================
+   SHIPPING-LABEL DESIGN
+   The parcel label's layout: stock size, return address, which
+   blocks print. The buyer's half of the label is never stored
+   here — it is read off the order at print time, so a label
+   cannot go out with a stale address on it.
+
+   Admin-only in BOTH directions, unlike the rate table: this
+   holds the store's own street address, which the site
+   deliberately does not publish anywhere public.
+   ============================================================ */
+app.get('/api/admin/label-design', requireAdmin, (req, res) => {
+  res.json({ success: true, design: labelDesign.get(), sizes: labelDesign.SIZES });
+});
+
+app.put('/api/admin/label-design', requireAdmin, (req, res) => {
+  try {
+    res.json({ success: true, design: labelDesign.save(req.body || {}) });
+  } catch (err) {
+    res.status(err.status || 400).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/label-design/reset', requireAdmin, (req, res) => {
+  res.json({ success: true, design: labelDesign.reset() });
 });
 
 app.put('/api/products/:id', requireAdmin, (req, res) => {
@@ -2354,6 +2382,10 @@ async function notifyAdminOfPaidOrder(order) {
       `Order:  ${order.orderId}\nTotal:  $${total}\nMethod: ${order.method || '—'}\n` +
       `Buyer:  ${order.email || '(no email)'}\nItems:  ${itemLines(order)}\n\n` +
       `Ship to:\n${addressText(addr)}\n\n` +
+      /* The label for this parcel is already made — it is this order plus the
+         saved design — so the email points at the button rather than leaving
+         the address to be copied out by hand. */
+      `Print its shipping label: ${SITE()}/admin.html#ship\n` +
       `Full details: ${SITE()}/admin.html → Orders\n`,
     html: orderEmailHtml({
       heading: 'Paid — ready to ship',
@@ -2364,7 +2396,8 @@ async function notifyAdminOfPaidOrder(order) {
         <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Buyer</td><td>${escapeHtmlSrv(order.email || '(no email)')}</td></tr>
         <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Items</td><td>${escapeHtmlSrv(itemLines(order))}</td></tr>
       </table>`,
-      extraHtml: `<p style="font-size:14px;white-space:pre-line;background:#f9fafb;padding:12px;border-radius:8px">${escapeHtmlSrv(addressText(addr))}</p>`
+      extraHtml: `<p style="font-size:14px;white-space:pre-line;background:#f9fafb;padding:12px;border-radius:8px">${escapeHtmlSrv(addressText(addr))}</p>
+        <p style="font-size:14px"><a href="${SITE()}/admin.html#ship">Print this parcel's shipping label</a> — the address above is already on it.</p>`
     })
   });
 }

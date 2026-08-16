@@ -57,6 +57,8 @@
     hooks: null,          // BTCPay webhook wiring, loaded alongside btcpay
     health: null,         // /api/health — which services the backend actually has
     rates: null,          // shipping methods (what checkout charges for delivery)
+    design: null,         // the shipping-label design (admin-only read)
+    previewId: '',        // which order the label designer is previewing
     range: 30,            // days; 0 = all time
     view: 'dashboard',
     loading: false
@@ -80,7 +82,8 @@
       A.api('/api/admin/subscriptions'),
       A.api('/api/products'),
       A.api('/api/health'),
-      A.api('/api/shipping')
+      A.api('/api/shipping'),
+      A.api('/api/admin/label-design')
     ]);
     state.loading = false;
 
@@ -102,6 +105,7 @@
     state.products = results[3].status === 'fulfilled' ? (results[3].value.products || []) : (state.products || []);
     state.health = results[4].status === 'fulfilled' ? results[4].value : (state.health || null);
     state.rates = results[5].status === 'fulfilled' ? (results[5].value.methods || []) : (state.rates || null);
+    state.design = results[6].status === 'fulfilled' ? (results[6].value.design || null) : (state.design || null);
 
     results.forEach(function (r, i) {
       if (r.status === 'rejected' && r.reason.status !== 0) {
@@ -110,8 +114,11 @@
         // Shipping rates: a 404 just means the backend predates them, and the
         // view says so in place. Anything else is worth a word.
         if (i === 5 && r.reason.status === 404) return;
-        A.toast(['Orders', 'Users', 'Auto-ship plans', 'Products', 'Health', 'Shipping rates'][i] +
-          ': ' + r.reason.message, 'error');
+        // Same for the label design — an older backend simply has no designer,
+        // and the view explains that rather than shouting about it.
+        if (i === 6 && r.reason.status === 404) return;
+        A.toast(['Orders', 'Users', 'Auto-ship plans', 'Products', 'Health', 'Shipping rates',
+          'Label design'][i] + ': ' + r.reason.message, 'error');
       }
     });
 
@@ -322,6 +329,7 @@
     orders: ['Orders', 'Every order, and the ones waiting on money'],
     ship: ['To ship', 'Paid orders waiting to go out, with everything you need to pack them'],
     rates: ['Shipping rates', 'What checkout charges for delivery — edit it here, it applies immediately'],
+    labeldesign: ['Label designer', 'Design the parcel label once — every order fills in its own name and address'],
     btcpay: ['BTCPay', 'What the payment server says, next to what we recorded'],
     autoship: ['Auto-Ship', 'Repeating orders and their next invoice'],
     customers: ['Customers', 'Everyone with an account']
@@ -348,6 +356,7 @@
     if (state.view === 'orders') renderOrders();
     else if (state.view === 'ship') renderShip();
     else if (state.view === 'rates') renderRates();
+    else if (state.view === 'labeldesign') renderLabelDesign();
     else if (state.view === 'btcpay') renderBtcpay();
     else if (state.view === 'autoship') renderAutoship();
     else if (state.view === 'customers') renderCustomers();
@@ -783,6 +792,279 @@
   }
 
   /* ============================================================
+     LABEL DESIGNER
+     The parcel label is designed ONCE, here, and then every paid order prints
+     itself: the name, the delivery address, the reference, the service bought
+     and the contents all come off the order record. Nothing on a label is ever
+     retyped, which is the only way the label on the box and the order in the
+     books can be guaranteed to agree.
+
+     The preview is an iframe running the same document the printer gets — a
+     preview built from different code is a preview that lies about the thing
+     you are about to print onto physical stock.
+     ============================================================ */
+
+  var LBL = window.AdminLabels;
+
+  function renderLabelDesign() {
+    if (!LBL) {
+      body.innerHTML = '<div class="adm-card"><p class="adm-note" style="margin:0">' +
+        'The label renderer did not load — check that <code>js/admin-labels.js</code> is uploaded.</p></div>';
+      return;
+    }
+    if (!state.design) {
+      body.innerHTML = '<div class="adm-card">' +
+        '<div class="adm-card-head"><h3>The label designer is not available</h3></div>' +
+        '<p class="adm-note" style="margin:0">This backend has no label design store yet — deploy the current ' +
+        '<code>server/</code> to Render. The rest of the console works without it; only saving a design needs it.</p>' +
+        '</div>';
+      return;
+    }
+
+    var d = LBL.withDefaults(state.design);
+    var queue = toShip(state.orders || []);
+    var missing = LBL.returnAddressMissing(d);
+
+    body.innerHTML =
+      (missing
+        ? '<p class="adm-note" style="color:var(--accent-coral)"><strong>No return address yet.</strong> ' +
+          'Carriers need one to return an undeliverable parcel — fill in <em>Return address</em> below. ' +
+          'It is stored on the server for the label only and is never shown anywhere on the public site.</p>'
+        : '') +
+
+      '<div class="lbl-designer">' +
+
+        '<div class="adm-card lbl-form">' +
+          '<div class="adm-card-head"><h3>Label</h3><span class="hint">applies to every label you print</span></div>' +
+
+          '<h4 class="ship-h">Stock &amp; layout</h4>' +
+          '<div class="lbl-grid">' +
+            field('ld-size', 'Label size',
+              '<select id="ld-size">' +
+                Object.keys(LBL.SIZES).map(function (k) {
+                  return '<option value="' + esc(k) + '"' + (d.size === k ? ' selected' : '') + '>' +
+                    esc(LBL.SIZES[k].label) + '</option>';
+                }).join('') +
+              '</select>') +
+            field('ld-w', 'Width (mm)', '<input id="ld-w" type="number" min="40" max="305" step="0.1" value="' +
+              esc(d.widthMm) + '"' + (d.size === 'custom' ? '' : ' disabled') + '>') +
+            field('ld-h', 'Height (mm)', '<input id="ld-h" type="number" min="40" max="305" step="0.1" value="' +
+              esc(d.heightMm) + '"' + (d.size === 'custom' ? '' : ' disabled') + '>') +
+            field('ld-pad', 'Inner margin (mm)', '<input id="ld-pad" type="number" min="0" max="20" step="0.5" value="' +
+              esc(d.paddingMm) + '">') +
+            field('ld-scale', 'Text size', '<input id="ld-scale" type="range" min="0.7" max="1.6" step="0.05" value="' +
+              esc(d.fontScale) + '">') +
+          '</div>' +
+
+          '<h4 class="ship-h">What prints on it</h4>' +
+          '<div class="lbl-checks">' +
+            check('ld-border', 'Outline box', d.border) +
+            check('ld-showLogo', 'Store name &amp; mark', d.showLogo) +
+            check('ld-showFrom', 'Return address', d.showFrom) +
+            check('ld-showService', 'Delivery service bought', d.showService) +
+            check('ld-showBarcode', 'Barcode', d.showBarcode) +
+            check('ld-showItems', 'Contents list', d.showItems) +
+            check('ld-showDate', 'Order date', d.showDate) +
+            check('ld-showEmail', 'Customer email', d.showEmail) +
+            check('ld-showResearchNote', 'Research-use line', d.showResearchNote) +
+          '</div>' +
+          '<p class="adm-note">The customer\'s email is off by default — a parcel passes through a lot of hands, ' +
+            'and the courier does not need it.</p>' +
+
+          '<div class="lbl-grid">' +
+            field('ld-barsrc', 'Barcode holds',
+              '<select id="ld-barsrc">' +
+                '<option value="orderId"' + (d.barcodeSource === 'orderId' ? ' selected' : '') + '>The order reference</option>' +
+                '<option value="tracking"' + (d.barcodeSource === 'tracking' ? ' selected' : '') + '>The tracking number (falls back to the reference)</option>' +
+              '</select>') +
+            field('ld-handling', 'Handling stamp <span class="muted">optional</span>',
+              '<input id="ld-handling" type="text" maxlength="60" value="' + esc(d.handling) +
+                '" placeholder="FRAGILE — DO NOT FREEZE">') +
+          '</div>' +
+
+          '<h4 class="ship-h">Return address</h4>' +
+          '<div class="lbl-grid">' +
+            field('ld-from-name', 'Name', '<input id="ld-from-name" type="text" value="' + esc(d.from.name) + '">') +
+            field('ld-from-line1', 'Street', '<input id="ld-from-line1" type="text" value="' + esc(d.from.line1) +
+              '" placeholder="1200 Example Rd, Suite 4">') +
+            field('ld-from-line2', 'Street 2 <span class="muted">optional</span>',
+              '<input id="ld-from-line2" type="text" value="' + esc(d.from.line2) + '">') +
+            field('ld-from-city', 'City', '<input id="ld-from-city" type="text" value="' + esc(d.from.city) + '">') +
+            field('ld-from-state', 'State', '<input id="ld-from-state" type="text" value="' + esc(d.from.state) + '">') +
+            field('ld-from-postalCode', 'ZIP', '<input id="ld-from-postalCode" type="text" value="' + esc(d.from.postalCode) + '">') +
+            field('ld-from-country', 'Country', '<input id="ld-from-country" type="text" value="' + esc(d.from.country) + '">') +
+            field('ld-from-phone', 'Phone <span class="muted">optional</span>',
+              '<input id="ld-from-phone" type="text" value="' + esc(d.from.phone) + '">') +
+          '</div>' +
+
+          '<h4 class="ship-h">Small print</h4>' +
+          '<div class="lbl-grid one">' +
+            field('ld-note', 'Research-use line',
+              '<input id="ld-note" type="text" maxlength="200" value="' + esc(d.researchNote) + '">') +
+            field('ld-footer', 'Extra footer line <span class="muted">optional</span>',
+              '<input id="ld-footer" type="text" maxlength="120" value="' + esc(d.footer) +
+                '" placeholder="Questions? support@evernovalife.com">') +
+          '</div>' +
+
+          '<div class="lbl-actions">' +
+            '<button class="btn btn-primary act-label-save" type="button">Save design</button>' +
+            '<button class="btn btn-ghost act-label-test" type="button">' + A.icon('print', 'ic') + ' Print a test</button>' +
+            '<button class="btn btn-ghost act-label-reset" type="button">Reset to default</button>' +
+          '</div>' +
+          '<p class="adm-note" style="margin:.55rem 0 0">Saving changes every label printed from now on. Labels ' +
+            'already printed and stuck on boxes are, of course, unaffected.</p>' +
+        '</div>' +
+
+        '<div class="adm-card lbl-preview">' +
+          '<div class="adm-card-head"><h3>Preview</h3>' +
+            '<span class="hint">actual size ' + esc(d.widthMm) + ' × ' + esc(d.heightMm) + ' mm</span></div>' +
+          '<div class="form-field">' +
+            '<label for="ld-preview-order">Fill it with</label>' +
+            '<select id="ld-preview-order">' +
+              '<option value="">A sample order (nothing real)</option>' +
+              queue.slice(0, 25).map(function (o) {
+                return '<option value="' + esc(o.orderId) + '"' + (state.previewId === o.orderId ? ' selected' : '') + '>' +
+                  esc(o.orderId) + ' — ' + esc(((o.shippingAddress || {}).name) || o.email || 'no name') + '</option>';
+              }).join('') +
+            '</select>' +
+          '</div>' +
+          '<div class="lbl-stage" id="ldStage">' +
+            '<iframe id="ldPreview" title="Label preview" sandbox="allow-same-origin"></iframe>' +
+          '</div>' +
+          '<p class="adm-note" style="margin:.7rem 0 0">This is a packing label, not postage — it carries no ' +
+            'carrier barcode and buys nothing. Print it, stick it on the box, then buy the postage label from ' +
+            'USPS/UPS/FedEx as usual and put that one alongside it.</p>' +
+        '</div>' +
+
+      '</div>';
+
+    updateLabelPreview();
+  }
+
+  function field(id, label, control) {
+    return '<div class="form-field"><label for="' + esc(id) + '">' + label + '</label>' + control + '</div>';
+  }
+
+  function check(id, label, on) {
+    return '<label class="form-check"><input id="' + esc(id) + '" type="checkbox"' + (on ? ' checked' : '') + '> ' +
+      label + '</label>';
+  }
+
+  /* Read the designer back into a design object. The form is the truth while
+     the view is open — that is what makes the preview live. */
+  function readLabelForm() {
+    var v = function (id) { var el = document.getElementById(id); return el ? el.value : ''; };
+    var c = function (id) { var el = document.getElementById(id); return !!(el && el.checked); };
+    var size = v('ld-size') || '4x6';
+    var preset = LBL.SIZES[size] || LBL.SIZES['4x6'];
+    return {
+      size: size,
+      widthMm: size === 'custom' ? Number(v('ld-w')) || preset.widthMm : preset.widthMm,
+      heightMm: size === 'custom' ? Number(v('ld-h')) || preset.heightMm : preset.heightMm,
+      paddingMm: Number(v('ld-pad')),
+      fontScale: Number(v('ld-scale')) || 1,
+      border: c('ld-border'),
+      showLogo: c('ld-showLogo'),
+      showFrom: c('ld-showFrom'),
+      showService: c('ld-showService'),
+      showBarcode: c('ld-showBarcode'),
+      showItems: c('ld-showItems'),
+      showDate: c('ld-showDate'),
+      showEmail: c('ld-showEmail'),
+      showResearchNote: c('ld-showResearchNote'),
+      barcodeSource: v('ld-barsrc') || 'orderId',
+      handling: v('ld-handling'),
+      researchNote: v('ld-note'),
+      footer: v('ld-footer'),
+      from: {
+        name: v('ld-from-name'), line1: v('ld-from-line1'), line2: v('ld-from-line2'),
+        city: v('ld-from-city'), state: v('ld-from-state'), postalCode: v('ld-from-postalCode'),
+        country: v('ld-from-country'), phone: v('ld-from-phone')
+      }
+    };
+  }
+
+  /* Which order the preview is filled with: a real one from the queue if the
+     owner picked it, otherwise the obviously-fake sample. */
+  function previewOrder() {
+    var id = state.previewId;
+    var o = id && (state.orders || []).find(function (x) { return x.orderId === id; });
+    return o || LBL.sampleOrder();
+  }
+
+  function updateLabelPreview() {
+    var frame = document.getElementById('ldPreview');
+    var stage = document.getElementById('ldStage');
+    if (!frame || !stage) return;
+    var d = LBL.withDefaults(readLabelForm());
+
+    var wPx = d.widthMm * LBL.MM_PX;
+    var hPx = d.heightMm * LBL.MM_PX;
+    // Fit the label to the column without ever blowing it up past life size.
+    var scale = Math.min(1, (stage.clientWidth || 340) / wPx);
+    frame.style.width = wPx + 'px';
+    frame.style.height = hPx + 'px';
+    frame.style.transform = 'scale(' + scale.toFixed(4) + ')';
+    stage.style.height = Math.ceil(hPx * scale) + 'px';
+
+    frame.srcdoc = LBL.documentHtml([previewOrder()], d, {
+      title: 'Label preview',
+      // The label fills the frame exactly; the frame supplies the white.
+      extraCss: 'body{display:block}'
+    });
+  }
+
+  async function saveLabelDesign(btn) {
+    var payload = readLabelForm();
+    btn.disabled = true;
+    var was = btn.textContent;
+    btn.textContent = 'Saving…';
+    try {
+      var data = await A.api('/api/admin/label-design', { method: 'PUT', body: payload });
+      state.design = data.design || payload;
+      A.toast('Label design saved — every label printed from now on uses it.', 'success');
+      render();
+    } catch (e) {
+      A.toast(e.message, 'error');
+      btn.disabled = false;
+      btn.textContent = was;
+    }
+  }
+
+  async function resetLabelDesign(btn) {
+    if (!window.confirm('Reset the label back to the default design?\n\n' +
+        'This clears the return address you entered as well.')) return;
+    btn.disabled = true;
+    try {
+      var data = await A.api('/api/admin/label-design/reset', { method: 'POST' });
+      state.design = data.design;
+      A.toast('Label reset to the default design.', 'success');
+      render();
+    } catch (e) { A.toast(e.message, 'error'); btn.disabled = false; }
+  }
+
+  /* Print labels for one order, or for the whole queue. The design used is
+     whatever is SAVED, except in the designer itself, where the point is to see
+     the edit you are holding. */
+  function printOrderLabels(orders, design) {
+    if (!LBL) { A.toast('The label renderer did not load — check js/admin-labels.js.', 'error'); return; }
+    var list = (orders || []).filter(Boolean);
+    if (!list.length) { A.toast('No orders to label.', 'error'); return; }
+    var d = design || state.design;
+    if (!d) { A.toast('No label design loaded yet — press Refresh.', 'error'); return; }
+
+    var noAddress = list.filter(function (o) {
+      var a = o.shippingAddress || {};
+      return !(a.address && a.city);
+    });
+    if (noAddress.length && !window.confirm(noAddress.length + ' of these orders have no delivery address stored ' +
+        '(guest checkouts from before the address was required). Print anyway with that block blank?')) return;
+
+    var res = LBL.printLabels(list, d);
+    if (!res.ok) A.toast(res.error, 'error');
+  }
+
+  /* ============================================================
      TO SHIP
      The end of the sale, and the only step with no automation behind it. A paid
      order is a promise with a deadline, so this view is built to be worked
@@ -805,6 +1087,18 @@
         }, 0)), 'across the queue') +
         kpi('Shipped', num(shipped.length), 'all time') +
       '</div>' +
+      /* Every parcel in the queue already has a label waiting — it is built
+         from the order, so there is nothing to fill in. One dialog for the
+         whole queue, because a print dialog per parcel is how packing turns
+         into an afternoon. */
+      (queue.length
+        ? '<div class="ship-bulk">' +
+            '<button class="btn btn-primary act-labels-all" type="button">' + A.icon('print', 'ic') +
+              ' Print all ' + queue.length + ' shipping label' + (queue.length === 1 ? '' : 's') + '</button>' +
+            '<span class="adm-note" style="margin:0">Name, address, reference and contents are filled in from ' +
+              'each order. <a href="admin.html#labeldesign">Design the label</a>.</span>' +
+          '</div>'
+        : '') +
       (queue.length
         ? queue.map(shipCard).join('')
         : '<div class="adm-card">' +
@@ -852,6 +1146,8 @@
              this queue overnight is a refund waiting to happen. */
           (o.shippingLabel ? ' · <strong>' + esc(o.shippingLabel) + '</strong>' : '') + '</span>' +
         '<div class="right">' +
+          '<button class="btn btn-ghost btn-sm act-label" data-id="' + esc(o.orderId) + '">' +
+            A.icon('tag', 'ic') + ' Shipping label</button> ' +
           '<button class="btn btn-ghost btn-sm act-slip" data-id="' + esc(o.orderId) + '">' +
             A.icon('print', 'ic') + ' Packing slip</button>' +
         '</div>' +
@@ -1765,12 +2061,51 @@
       else if (t.classList.contains('act-rate-save')) saveRate(t.getAttribute('data-key'), t.getAttribute('data-id'), t);
       else if (t.classList.contains('act-rate-del')) deleteRate(t.getAttribute('data-id'), t.getAttribute('data-name'), t);
       else if (t.classList.contains('act-slip')) packingSlip(t.getAttribute('data-id'));
+      else if (t.classList.contains('act-label')) {
+        printOrderLabels((state.orders || []).filter(function (o) { return o.orderId === t.getAttribute('data-id'); }));
+      } else if (t.classList.contains('act-labels-all')) {
+        printOrderLabels(toShip(state.orders || []));
+      } else if (t.classList.contains('act-label-save')) saveLabelDesign(t);
+      else if (t.classList.contains('act-label-reset')) resetLabelDesign(t);
+      else if (t.classList.contains('act-label-test')) printOrderLabels([previewOrder()], LBL && LBL.withDefaults(readLabelForm()));
       else if (t.classList.contains('act-cancel')) cancelOrder(t.getAttribute('data-id'), t);
       else if (t.classList.contains('act-paylink')) sendPayLink(t.getAttribute('data-id'), t.getAttribute('data-due'), t);
       else if (t.classList.contains('act-collect')) collectBalance(t.getAttribute('data-id'), t.getAttribute('data-got'), t.getAttribute('data-total'), t);
       else if (t.classList.contains('act-reconcile')) reconcileOrder(t.getAttribute('data-id'), t);
       else if (t.classList.contains('act-del-user')) deleteUser(t.getAttribute('data-id'), t.getAttribute('data-name'), t);
       else if (t.classList.contains('act-due')) dueNow(t.getAttribute('data-id'), t);
+    });
+
+    /* The designer previews live: every keystroke redraws the label from the
+       form using the same document the printer gets. Delegated for the same
+       reason as the clicks — the view is re-rendered wholesale. */
+    document.addEventListener('input', function (e) {
+      var t = e.target;
+      if (state.view !== 'labeldesign' || !t || !t.id || t.id.indexOf('ld-') !== 0) return;
+      if (t.id === 'ld-preview-order') return;      // a select; handled on change
+      updateLabelPreview();
+    });
+
+    document.addEventListener('change', function (e) {
+      var t = e.target;
+      if (state.view !== 'labeldesign' || !t || !t.id) return;
+      if (t.id === 'ld-preview-order') { state.previewId = t.value; updateLabelPreview(); return; }
+      if (t.id.indexOf('ld-') !== 0) return;
+      if (t.id === 'ld-size') {
+        // Only a custom size has dimensions worth typing; a preset's are fixed
+        // by the stock in the printer, so they are shown but locked.
+        var custom = t.value === 'custom';
+        var preset = (LBL && LBL.SIZES[t.value]) || null;
+        var w = document.getElementById('ld-w'), h = document.getElementById('ld-h');
+        if (w) { w.disabled = !custom; if (!custom && preset) w.value = preset.widthMm; }
+        if (h) { h.disabled = !custom; if (!custom && preset) h.value = preset.heightMm; }
+      }
+      updateLabelPreview();
+    });
+
+    // The preview is scaled to the column, so a resized window has to re-fit it.
+    window.addEventListener('resize', function () {
+      if (state.view === 'labeldesign') updateLabelPreview();
     });
 
     window.addEventListener('hashchange', function () {

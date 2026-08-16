@@ -224,6 +224,7 @@
     { key: 'orders', href: 'admin.html#orders', label: 'Orders', icon: 'orders', tally: 'navUnpaid' },
     { key: 'ship', href: 'admin.html#ship', label: 'To ship', icon: 'box', tally: 'navShip' },
     { key: 'rates', href: 'admin.html#rates', label: 'Shipping rates', icon: 'truck' },
+    { key: 'labeldesign', href: 'admin.html#labeldesign', label: 'Label designer', icon: 'tag' },
     { key: 'btcpay', href: 'admin.html#btcpay', label: 'BTCPay', icon: 'bitcoin', tally: 'navBtcpay' },
     { key: 'autoship', href: 'admin.html#autoship', label: 'Auto-Ship', icon: 'repeat' },
     { key: 'customers', href: 'admin.html#customers', label: 'Customers', icon: 'users' },

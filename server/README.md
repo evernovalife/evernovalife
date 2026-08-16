@@ -93,6 +93,9 @@ The server also serves the static site, so open **http://localhost:4242/checkout
 | POST   | `/api/shipping`        | Admin: add or edit a delivery method |
 | DELETE | `/api/shipping/:id`    | Admin: remove a delivery method |
 | POST   | `/api/admin/orders/:orderId/reconcile` | Rebuild an order's payment ledger from BTCPay |
+| GET    | `/api/admin/label-design` | Admin: the shipping-label design (+ the size list) |
+| PUT    | `/api/admin/label-design` | Admin: save the label design (merged onto what's stored) |
+| POST   | `/api/admin/label-design/reset` | Admin: back to the default label |
 | POST   | `/api/auth/register`   | Create an account (bcrypt) → returns a JWT       |
 | POST   | `/api/auth/login`      | Verify email + password → returns a JWT          |
 | GET    | `/api/auth/me`         | Current user (needs `Authorization: Bearer …`)   |
@@ -512,6 +515,34 @@ checks and takes in the same turn.
 Covered by `test/stock.test.js` (the counting rules) and
 `test/stock-orders.test.js` (the same rules driven through the real order
 routes, including cancel-and-restore and the two-buyers-one-unit case).
+
+## Shipping labels
+
+Every paid order arrives at **Admin → To ship** with its label already made:
+press **Shipping label** on a card, or **Print all N shipping labels** for the
+whole queue in one print dialog. Nothing is typed — the buyer's name, delivery
+address, order reference, delivery service and contents are read off the stored
+order, so a label can never disagree with the sale it belongs to.
+
+What the label *looks like* is designed once in **Admin → Label designer**:
+stock size (4×6 thermal, 4×4, 3×4, A6, half-letter or a custom size), inner
+margin, text size, which blocks print, a handling stamp, the small print, and
+the **return address** — the one thing only the owner can supply. The preview
+beside the form is an iframe running the very document that goes to the
+printer, so what you see is what comes out.
+
+- Stored in `DATA_DIR/label-design.json` via `label-design.js`; rendered by
+  `../js/admin-labels.js` (shared by the preview and the print sheet).
+- **Admin-only in both directions.** It holds the store's own street address,
+  which the public site deliberately never shows.
+- The barcode is **Code 39** carrying the order reference (or the tracking
+  number, if you switch it) — chosen because a reference is exactly the
+  character set Code 39 covers. The reference is printed underneath in plain
+  type as well, so a smudged label is still a readable one.
+- **This is not postage.** No carrier indicia, nothing prepaid: it is a
+  packing/routing label. Buy the postage label from USPS/UPS/FedEx as usual and
+  put it on the box alongside this one.
+- Covered by `test/label-design.test.js`.
 
 ## Notes & next steps
 

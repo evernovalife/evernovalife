@@ -201,6 +201,51 @@ body.adm {
   .rate-form .btn { width: 100%; }
 }
 
+/* ---------- label designer ----------
+   Form on the left, the label itself on the right, both in view at once: every
+   control here changes something you can see, and a preview you have to scroll
+   to is a preview nobody checks before printing forty of them. */
+.lbl-designer { display: grid; gap: var(--adm-gap); grid-template-columns: minmax(0, 1.35fr) minmax(320px, 1fr); align-items: start; }
+.lbl-grid { display: grid; gap: 0.7rem 0.8rem; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+.lbl-grid.one { grid-template-columns: 1fr; }
+.lbl-grid .form-field { margin-bottom: 0; min-width: 0; }
+.lbl-grid .form-field label { font-size: 0.78rem; }
+.lbl-grid input[type="range"] { padding: 0; }
+.lbl-checks {
+  display: grid; gap: 0.35rem 1rem; margin: 0.2rem 0 0.6rem;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+.lbl-checks .form-check { margin: 0; font-size: 0.86rem; }
+.lbl-form .ship-h { margin-top: 1.25rem; }
+.lbl-form .ship-h:first-of-type { margin-top: 0.4rem; }
+.lbl-actions { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: 1.1rem; }
+
+/* The stage is a white gutter around a white label: without it the label's own
+   edge disappears into the dark console and the margins can't be judged. */
+.lbl-stage {
+  position: relative; overflow: hidden; border-radius: 8px;
+  background: repeating-conic-gradient(rgba(255,255,255,0.06) 0% 25%, transparent 0% 50%) 50% / 16px 16px;
+  border: 1px solid var(--adm-line-soft); padding: 0;
+}
+.lbl-stage iframe {
+  border: 0; display: block; background: #fff;
+  transform-origin: top left; box-shadow: 0 6px 22px rgba(0, 0, 0, 0.45);
+}
+.lbl-preview .adm-note a { color: inherit; }
+
+/* Print-the-whole-queue bar above the to-ship cards. */
+.ship-bulk {
+  display: flex; align-items: center; gap: 0.9rem; flex-wrap: wrap;
+  margin-bottom: var(--adm-gap);
+}
+
+@media (max-width: 900px) {
+  .lbl-designer { grid-template-columns: 1fr; }
+}
+@media (max-width: 560px) {
+  .lbl-actions .btn { width: 100%; }
+}
+
 /* ---------- KPI tiles ---------- */
 .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(196px, 1fr)); gap: var(--adm-gap); }
 
