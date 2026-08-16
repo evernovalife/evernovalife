@@ -40,9 +40,11 @@ const SIZES = {
   'custom': { label: 'Custom', widthMm: 101.6, heightMm: 152.4 }
 };
 
-/* The out-of-the-box label: 4×6 thermal, every block on, no return address
-   yet — that is the one thing only the owner can supply, and the console says
-   so until it is filled in. */
+/* The out-of-the-box label: 4×6 thermal, every block on, and the store's own
+   return address already in it — the owner should never have to type their own
+   address to print their own parcel. It is the ONE place this address lives:
+   it goes on the box, never on a public page (see terms.html §12 and the
+   payment review — the site publishes no street address). */
 const SEED = {
   size: '4x6',
   widthMm: 101.6,
@@ -61,11 +63,11 @@ const SEED = {
   barcodeSource: 'orderId',
   from: {
     name: 'Ever Nova Life',
-    line1: '',
-    line2: '',
-    city: '',
-    state: '',
-    postalCode: '',
+    line1: '2901 Clint Moore Road',
+    line2: 'Suite 2 #1047',
+    city: 'Boca Raton',
+    state: 'FL',
+    postalCode: '33496',
     country: 'USA',
     phone: ''
   },
@@ -116,7 +118,13 @@ function normalise(input) {
   const widthMm = size === 'custom' ? clamp(d.widthMm, 40, 305, 101.6) : preset.widthMm;
   const heightMm = size === 'custom' ? clamp(d.heightMm, 40, 305, 152.4) : preset.heightMm;
 
-  const from = { ...SEED.from, ...(d.from && typeof d.from === 'object' ? d.from : {}) };
+  const stored = d.from && typeof d.from === 'object' ? d.from : {};
+  /* A design saved before the address was seeded (or one saved with the street
+     cleared) would print a label a carrier cannot return. There is exactly one
+     return address for this store, so fall back to it rather than shipping a
+     nameless box. */
+  const hasStreet = String(stored.line1 || '').trim() || String(stored.city || '').trim();
+  const from = hasStreet ? { ...SEED.from, ...stored } : { ...SEED.from, name: stored.name || SEED.from.name };
 
   return {
     size,

@@ -147,10 +147,28 @@ test('type scale and margin stay inside printable limits', async () => {
     `padding clamped, got ${res.body.design.paddingMm}`);
 });
 
-test('reset puts the default label back, address and all', async () => {
+test('the store\'s own return address is built in, not typed', async () => {
+  // Nobody should have to type their own address to print their own parcel,
+  // and a label with no return address is one a carrier cannot send back.
+  const fresh = await api('/api/admin/label-design/reset', { method: 'POST', token: boss.token });
+  assert.equal(fresh.body.design.from.line1, '2901 Clint Moore Road');
+  assert.equal(fresh.body.design.from.city, 'Boca Raton');
+  assert.equal(fresh.body.design.from.state, 'FL');
+  assert.equal(fresh.body.design.from.postalCode, '33496');
+
+  // A design stored with the street cleared (or saved before the address was
+  // seeded) heals rather than printing an unreturnable label.
+  const cleared = await api('/api/admin/label-design', {
+    method: 'PUT', token: boss.token,
+    body: { from: { name: 'Ever Nova Life', line1: '', line2: '', city: '', state: '', postalCode: '' } }
+  });
+  assert.equal(cleared.body.design.from.line1, '2901 Clint Moore Road');
+  assert.equal(cleared.body.design.from.postalCode, '33496');
+});
+
+test('reset puts the default label back', async () => {
   const res = await api('/api/admin/label-design/reset', { method: 'POST', token: boss.token });
   assert.equal(res.status, 200);
-  assert.equal(res.body.design.from.line1, '');
   assert.equal(res.body.design.handling, '');
   assert.equal(res.body.design.size, '4x6');
 

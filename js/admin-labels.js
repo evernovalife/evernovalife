@@ -39,7 +39,12 @@
     border: true, showLogo: true, showFrom: true, showBarcode: true, showItems: true,
     showService: true, showDate: true, showEmail: false, showResearchNote: true,
     barcodeSource: 'orderId',
-    from: { name: 'Ever Nova Life', line1: '', line2: '', city: '', state: '', postalCode: '', country: 'USA', phone: '' },
+    /* Mirrors the server's seed, so a label drawn before the design has loaded
+       (or against an older backend) still carries the right return address. */
+    from: {
+      name: 'Ever Nova Life', line1: '2901 Clint Moore Road', line2: 'Suite 2 #1047',
+      city: 'Boca Raton', state: 'FL', postalCode: '33496', country: 'USA', phone: ''
+    },
     handling: '',
     researchNote: 'For in-vitro research use only. Not for human or veterinary use.',
     footer: ''
