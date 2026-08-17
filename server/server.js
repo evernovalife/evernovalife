@@ -2283,6 +2283,81 @@ app.post('/api/admin/orders/:orderId/cancel', requireAdmin, (req, res) => {
   res.json({ success: true, order: upd && upd.order });
 });
 
+/* ---- ADMIN: take a duplicate order out of the books ----
+   One purchase recorded twice — the shape of the 12–13 Aug 2026 pair, where a
+   short-paid order was re-checked-out instead of topped up. Leaving both in
+   place double-counts the revenue, hands out the loyalty points twice, holds
+   two lots of stock and puts a second parcel in the packing queue.
+
+   Cancelling is the wrong tool: cancel means "this sale did not happen", and
+   it refuses paid orders on purpose. This says something narrower — "this
+   RECORD is a duplicate of that one" — so it reverses what the record took and
+   removes it, keeping a copy in DATA_DIR/voided-orders.json.
+
+   Deliberately conservative:
+     · a shipped order is refused (a parcel really went out under it)
+     · it never moves money. Coins received against the duplicate's invoice are
+       in the wallet either way; what to do with them is the owner's call.
+
+   Body: { duplicateOf?: 'ENL-…', reason?: string } */
+app.delete('/api/admin/orders/:orderId', requireAdmin, (req, res) => {
+  const orderId = req.params.orderId;
+  const existing = findOrder(orderId);
+  if (!existing) return res.status(404).json({ error: 'No order with that reference.' });
+
+  const status = String(existing.status).toLowerCase();
+  if (status === 'shipped' || status === 'delivered') {
+    return res.status(400).json({
+      error: 'That order has already shipped — a parcel went out under it, so it is part of the ' +
+             'history whether or not it was a duplicate. Leave it in the books.'
+    });
+  }
+
+  const body = req.body || {};
+  const keep = String(body.duplicateOf || '').trim();
+  if (keep && keep === orderId) {
+    return res.status(400).json({ error: 'An order cannot be a duplicate of itself.' });
+  }
+  if (keep && !findOrder(keep)) {
+    return res.status(400).json({ error: `There is no order ${keep} to keep — check the reference.` });
+  }
+
+  /* Reverse what this record took, in the same order the money did:
+     1. loyalty points EARNED when it was marked paid — a duplicate paid the
+        buyer twice for one purchase
+     2. loyalty points HELD against it at checkout, if never returned
+     3. stock: only one parcel is going out, so the duplicate's units go back */
+  const reversed = { pointsClawedBack: 0, pointsReturned: 0, stockReleased: false };
+  const isGuest = existing.userId === store.GUEST_KEY;
+
+  const earned = Number(existing.pointsEarned) || 0;
+  if (earned > 0 && !isGuest) {
+    try {
+      loyalty.redeem(existing.userId, earned, 'Reversed — duplicate order ' + orderId, { orderId });
+      reversed.pointsClawedBack = earned;
+    } catch (e) {
+      console.error('[loyalty] could not claw back points for ' + orderId + ':', e.message);
+    }
+  }
+  reversed.pointsReturned = refundReservedPoints(orderId);
+
+  const held = Array.isArray(existing.stockReserved) ? existing.stockReserved : [];
+  if (held.length && !existing.stockReleased) {
+    releaseOrderStock(orderId);
+    reversed.stockReleased = true;
+  }
+
+  const removed = store.removeOrder(orderId, {
+    by: (req.user && req.user.email) || 'admin key',
+    reason: String(body.reason || 'duplicate order').slice(0, 200),
+    duplicateOf: keep
+  });
+  if (!removed) return res.status(404).json({ error: 'No order with that reference.' });
+
+  console.log(`[admin] removed duplicate order ${orderId}` + (keep ? ` (kept ${keep})` : ''));
+  res.json({ success: true, removed, reversed, keptOrderId: keep || '' });
+});
+
 /* ---- order emails ---- */
 
 /* Shared wrapper so every order email matches the rest of the site. */

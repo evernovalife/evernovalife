@@ -1341,9 +1341,21 @@
           '<button class="btn btn-ghost btn-sm act-label" data-id="' + esc(o.orderId) + '">' +
           A.icon('tag', 'ic') + ' Shipping label</button>';
       }
+      /* One purchase that got recorded twice. Only offered where it is
+         plausible — a same-buyer, same-cart twin is actually on the books —
+         because "remove this order" is not something to have lying around next
+         to every row. A shipped order is never offered it: a parcel went out. */
+      if (opts.actions && ['shipped', 'delivered'].indexOf(o.status) === -1 && twinOf(o)) {
+        actions += (actions ? ' ' : '') +
+          '<button class="btn btn-ghost btn-sm act-dupe" data-id="' + esc(o.orderId) + '">Remove duplicate</button>';
+      }
       return '<tr>' +
         '<td><span class="ref">' + esc(o.orderId) + '</span>' +
-          (o.subscriptionId ? '<span class="muted">auto-ship</span>' : '') + '</td>' +
+          (o.subscriptionId ? '<span class="muted">auto-ship</span>' : '') +
+          /* Say it on the row, not just on the button: two references for one
+             purchase is the thing that makes an order list impossible to read. */
+          (opts.actions && twinOf(o)
+            ? '<span class="muted">same purchase as ' + esc(twinOf(o).orderId) + '</span>' : '') + '</td>' +
         '<td>' + esc(A.date(o.createdAt, true)) + '<span class="muted">' + esc(A.ago(o.createdAt)) + '</span></td>' +
         '<td>' + who + addr + '</td>' +
         '<td>' + esc(itemsText(o.items)) + '</td>' +
@@ -2005,6 +2017,67 @@
     } catch (e) { A.toast(e.message, 'error'); btn.disabled = false; }
   }
 
+  /* ---- one purchase, two records ----
+     Two orders are the same purchase when the same buyer bought the same items
+     for the same money within a day of each other. That is the pattern a
+     re-checkout leaves behind (see the 12–13 Aug 2026 pair), and it is specific
+     enough that it never fires on someone genuinely reordering next month. */
+  function purchaseKey(o) {
+    var items = (o.items || []).map(function (i) { return i.id + 'x' + (Number(i.quantity) || 0); })
+      .sort().join('|');
+    return (String(o.email || o.userEmail || '').toLowerCase()) + '::' + items + '@' +
+      (Number(o.total) || 0).toFixed(2);
+  }
+
+  var TWIN_WINDOW_MS = 36 * 60 * 60 * 1000;
+
+  /* The OTHER record of this purchase — preferring the older one, since that is
+     the original and this is the copy. */
+  function twinOf(o) {
+    if (!o || isTestOrder(o)) return null;
+    var key = purchaseKey(o);
+    var at = new Date(o.createdAt).getTime();
+    return (state.orders || []).filter(function (x) {
+      return x.orderId !== o.orderId && !isTestOrder(x) && purchaseKey(x) === key &&
+        Math.abs(new Date(x.createdAt).getTime() - at) < TWIN_WINDOW_MS;
+    }).sort(function (a, b) { return new Date(a.createdAt) - new Date(b.createdAt); })[0] || null;
+  }
+
+  async function removeDuplicate(orderId, btn) {
+    var o = (state.orders || []).find(function (x) { return x.orderId === orderId; });
+    if (!o) { A.toast('That order is no longer loaded — press Refresh.', 'error'); return; }
+    var twin = twinOf(o);
+    var earned = Number(o.pointsEarned) || 0;
+
+    if (!window.confirm(
+        'Remove ' + orderId + ' from the books?\n\n' +
+        (twin ? 'It looks like a second record of the same purchase as ' + twin.orderId +
+                ' — same customer, same items, same ' + money(o.total) + '.\n\n' : '') +
+        'This takes it off every figure and out of the packing queue' +
+        (earned ? ', takes back the ' + earned + ' loyalty points it awarded' : '') +
+        ', and puts any stock it was holding back on the shelf.\n\n' +
+        'It does NOT move money. Anything the customer actually sent is still in your wallet — ' +
+        'decide separately whether any of it goes back.\n\n' +
+        'A copy is archived on the server, but it will not appear in this console again.')) return;
+
+    btn.disabled = true;
+    btn.textContent = 'Removing…';
+    try {
+      var data = await A.api('/api/admin/orders/' + encodeURIComponent(orderId), {
+        method: 'DELETE',
+        body: { duplicateOf: twin ? twin.orderId : '', reason: 'duplicate of the same purchase' }
+      });
+      var r = data.reversed || {};
+      A.toast(orderId + ' removed' + (r.pointsClawedBack ? ' · ' + r.pointsClawedBack + ' points reversed' : '') +
+        (r.stockReleased ? ' · stock returned' : '') + '.', 'success');
+      await loadAll({ quiet: true });
+    } catch (e) {
+      A.toast(e.message, 'error');
+      btn.disabled = false;
+      btn.textContent = 'Remove duplicate';
+    }
+  }
+
   async function deleteUser(id, name, btn) {
     if (!window.confirm('Delete ' + name + '?\n\nThis permanently removes their account, saved cart and orders. ' +
         'This cannot be undone.')) return;
@@ -2083,6 +2156,7 @@
       else if (t.classList.contains('act-paylink')) sendPayLink(t.getAttribute('data-id'), t.getAttribute('data-due'), t);
       else if (t.classList.contains('act-collect')) collectBalance(t.getAttribute('data-id'), t.getAttribute('data-got'), t.getAttribute('data-total'), t);
       else if (t.classList.contains('act-reconcile')) reconcileOrder(t.getAttribute('data-id'), t);
+      else if (t.classList.contains('act-dupe')) removeDuplicate(t.getAttribute('data-id'), t);
       else if (t.classList.contains('act-del-user')) deleteUser(t.getAttribute('data-id'), t.getAttribute('data-name'), t);
       else if (t.classList.contains('act-due')) dueNow(t.getAttribute('data-id'), t);
     });

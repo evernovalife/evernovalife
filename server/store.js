@@ -19,6 +19,10 @@ const path = require('path');
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const CARTS_FILE = path.join(DATA_DIR, 'carts.json');
 const ORDERS_FILE = path.join(DATA_DIR, 'orders.json');
+/* Orders taken out of the books, kept so a removed figure can still be
+   explained. Written to, never read by the app. */
+const VOIDED_FILE = path.join(DATA_DIR, 'voided-orders.json');
+const MAX_VOIDED_KEPT = 500;
 
 const MAX_CART_ITEMS = 100;      // guard against a runaway / tampered cart
 const MAX_ORDERS_KEPT = 200;     // per user, newest kept
@@ -155,6 +159,56 @@ function updateOrderStatus(orderId, status, patch) {
   return null;
 }
 
+/* Take an order out of the books entirely — the duplicate case: one purchase
+   that ended up recorded twice, where leaving both in place double-counts the
+   revenue and puts a second parcel in the packing queue.
+
+   It is NOT deleted quietly. The record is copied to DATA_DIR/voided-orders.json
+   first, with who removed it and why, so a figure that used to be in the books
+   can still be explained months later. Returns the removed order (stamped with
+   its userId) or null if there was nothing by that reference. */
+function removeOrder(orderId, meta) {
+  if (!orderId) return null;
+  const orders = loadMap(ORDERS_FILE);
+  for (const uid of Object.keys(orders)) {
+    const list = orders[uid];
+    if (!Array.isArray(list)) continue;
+    const at = list.findIndex(o => o && o.orderId === orderId);
+    if (at === -1) continue;
+
+    const removed = { ...list[at], userId: uid };
+    archiveOrder(removed, meta);
+    list.splice(at, 1);
+    orders[uid] = list;
+    saveMap(ORDERS_FILE, orders);
+    return removed;
+  }
+  return null;
+}
+
+/* The archive is append-only and never read by the app — it exists for the
+   question "what happened to that order?", which is asked by a human, later. */
+function archiveOrder(order, meta) {
+  try {
+    ensureDir();
+    let all = [];
+    try {
+      const parsed = JSON.parse(fs.readFileSync(VOIDED_FILE, 'utf8'));
+      if (Array.isArray(parsed)) all = parsed;
+    } catch (e) { /* first void, or unreadable — start a fresh list */ }
+    all.unshift({
+      voidedAt: new Date().toISOString(),
+      voidedBy: (meta && meta.by) || 'admin',
+      reason: (meta && meta.reason) || '',
+      duplicateOf: (meta && meta.duplicateOf) || '',
+      order
+    });
+    saveMap(VOIDED_FILE, all.slice(0, MAX_VOIDED_KEPT));
+  } catch (e) {
+    console.error('[store] could not archive the voided order:', e.message);
+  }
+}
+
 module.exports = {
   getCart,
   saveCart,
@@ -164,6 +218,7 @@ module.exports = {
   listAllOrders,
   addOrder,
   updateOrderStatus,
+  removeOrder,
   sanitizeItems,
   GUEST_KEY
 };

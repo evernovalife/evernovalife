@@ -944,3 +944,58 @@ test('a different cart, or a settled first order, is never a duplicate', async (
   const afterCancel = await openOrder(b.token);
   assert.equal(afterCancel.status, 201, 'a cancelled order blocks nothing');
 });
+
+/* ============================================================
+   6) Taking a duplicate out of the books
+   The repair for the pair that already exists. It has to reverse what the
+   duplicate record took — points, stock — without pretending to move money,
+   and it must never quietly rewrite history for a parcel that has shipped.
+   ============================================================ */
+test('a duplicate order is reversed and removed, and the original is untouched', async () => {
+  const b = await buyer();
+  const boss = await admin();
+  const first = await openOrder(b.token);
+  const second = await openOrder(b.token, { allowDuplicate: true });
+
+  // Both get marked paid by hand — exactly how the real pair ended up.
+  await api(`/api/admin/orders/${first.body.orderId}/paid`, { method: 'POST', token: boss.token });
+  await api(`/api/admin/orders/${second.body.orderId}/paid`, { method: 'POST', token: boss.token });
+  const doubled = loyalty.getBalance(b.user.id);
+  assert.ok(doubled > 0, 'both orders paid points out');
+
+  const gone = await api(`/api/admin/orders/${second.body.orderId}`, {
+    method: 'DELETE', token: boss.token, body: { duplicateOf: first.body.orderId }
+  });
+  assert.equal(gone.status, 200);
+  assert.equal(gone.body.keptOrderId, first.body.orderId);
+  assert.ok(gone.body.reversed.pointsClawedBack > 0, 'the points it awarded are taken back');
+  assert.ok(loyalty.getBalance(b.user.id) < doubled, 'the buyer is no longer paid twice for one purchase');
+
+  const left = store.listOrders(b.user.id).map(o => o.orderId);
+  assert.ok(!left.includes(second.body.orderId), 'the duplicate is out of the books');
+  assert.ok(left.includes(first.body.orderId), 'the order it duplicated is still there');
+
+  // Removed, not lost: the archive can still answer for the figure.
+  const archived = JSON.parse(fs.readFileSync(path.join(TMP_DATA, 'voided-orders.json'), 'utf8'));
+  assert.equal(archived[0].order.orderId, second.body.orderId);
+  assert.equal(archived[0].duplicateOf, first.body.orderId);
+});
+
+test('a shipped order is never removed, and only an admin can remove anything', async () => {
+  const b = await buyer();
+  const boss = await admin();
+  const res = await openOrder(b.token);
+  const orderId = res.body.orderId;
+
+  const asBuyer = await api(`/api/admin/orders/${orderId}`, { method: 'DELETE', token: b.token });
+  assert.equal(asBuyer.status, 401, 'a customer cannot delete their own order record');
+
+  await api(`/api/admin/orders/${orderId}/paid`, { method: 'POST', token: boss.token });
+  await api(`/api/admin/orders/${orderId}/shipped`, { method: 'POST', token: boss.token, body: {} });
+  const shipped = await api(`/api/admin/orders/${orderId}`, { method: 'DELETE', token: boss.token });
+  assert.equal(shipped.status, 400, 'a parcel that went out stays in the history');
+  assert.ok(store.listOrders(b.user.id).some(o => o.orderId === orderId), 'and the record survives');
+
+  const missing = await api('/api/admin/orders/ENL-NOSUCHREF', { method: 'DELETE', token: boss.token });
+  assert.equal(missing.status, 404);
+});
