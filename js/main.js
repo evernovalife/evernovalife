@@ -5,6 +5,53 @@
    · Page initializers (catalog, detail, cart, checkout, faq…)
    ============================================================ */
 
+/* ============================================================
+   ANALYTICS — funnel only, cookieless, off by default
+   Configured in js/config.js (window.ENL_ANALYTICS). With no
+   provider set, nothing is loaded and enlTrack() is a no-op, so
+   the site runs exactly as it did before.
+
+   Only the shape of the funnel is sent: which step, which product.
+   Never an email, an address, an order reference or a money figure
+   — the server's order records are the books, and a third party
+   has no business holding any of that.
+   ============================================================ */
+const enlTrack = (function () {
+  const cfg = (typeof window !== 'undefined' && window.ENL_ANALYTICS) || {};
+  const provider = String(cfg.provider || '').toLowerCase();
+  if (!provider || typeof document === 'undefined') {
+    return function noop() {};
+  }
+
+  const s = document.createElement('script');
+  s.defer = true;
+  if (provider === 'plausible') {
+    s.src = cfg.src || 'https://plausible.io/js/script.js';
+    s.setAttribute('data-domain', cfg.domain || location.hostname);
+    // Plausible's queue stub, so events fired before the script lands survive.
+    window.plausible = window.plausible || function () {
+      (window.plausible.q = window.plausible.q || []).push(arguments);
+    };
+  } else if (provider === 'umami') {
+    s.src = cfg.src || '';
+    if (cfg.websiteId) s.setAttribute('data-website-id', cfg.websiteId);
+  } else {
+    return function noop() {};       // unknown provider — load nothing
+  }
+  if (s.src) document.head.appendChild(s);
+
+  return function track(event, props) {
+    try {
+      if (provider === 'plausible' && typeof window.plausible === 'function') {
+        window.plausible(event, props ? { props } : undefined);
+      } else if (provider === 'umami' && window.umami && typeof window.umami.track === 'function') {
+        window.umami.track(event, props || {});
+      }
+    } catch (e) { /* analytics must never break a checkout */ }
+  };
+})();
+if (typeof window !== 'undefined') window.enlTrack = enlTrack;
+
 /* ---------- helpers ---------- */
 function formatPrice(n) {
   return '$' + Number(n).toFixed(2);
@@ -518,6 +565,7 @@ function addToCartById(id, qty = 1, sourceEl = null) {
   }
   cart.addItem(product, qty);       // existing green toast + badge sync
   pnCartCelebrate(sourceEl);
+  enlTrack('add_to_cart', { product: product.name, category: product.categoryName || product.category || '' });
 }
 
 function renderProducts(list, container) {
@@ -655,6 +703,10 @@ function initHeader() {
 function initProductsPage() {
   const grid = document.getElementById('productsGrid');
   if (!grid) return;
+  /* Describe the whole catalog to a crawler, not the filtered view — the
+     filters are a reading of the page, and a search engine should see the
+     shelf rather than whichever slice this visitor happened to pick. */
+  initCatalogSchema(PRODUCTS);
   const params = new URLSearchParams(location.search);
   const urlCat = params.get('category');
   const urlSearch = params.get('search');
@@ -1569,17 +1621,7 @@ function initProductDetailPage() {
   if (canonical) canonical.href = pageUrl;
 
   // structured data for rich search results
-  injectJSONLD({
-    '@context': 'https://schema.org', '@type': 'Product',
-    name: product.name, description: product.description,
-    sku: product.lot, category: product.categoryName,
-    brand: { '@type': 'Brand', name: 'Ever Nova Life' },
-    offers: {
-      '@type': 'Offer', url: location.href, priceCurrency: 'USD',
-      price: product.price.toFixed(2),
-      availability: 'https://schema.org/' + (product.inStock ? 'InStock' : 'OutOfStock')
-    }
-  }, 'ld-product');
+  injectJSONLD(productSchema(product, pageUrl), 'ld-product');
   injectJSONLD({
     '@context': 'https://schema.org', '@type': 'BreadcrumbList',
     itemListElement: [
@@ -1592,6 +1634,7 @@ function initProductDetailPage() {
   root.innerHTML = productDetailMarkup(product);
   wireProductDetail(root, product);
   renderProductNav(root, product);
+  enlTrack('view_item', { product: product.name, category: product.categoryName || '' });
 
   // related products
   const relatedGrid = document.getElementById('relatedProducts');
@@ -2435,6 +2478,9 @@ async function submitCryptoOrder(form, btn) {
       body = await res.json().catch(() => ({}));
     }
     if (!res.ok || !body.checkoutLink) throw new Error(body.error || 'Could not start crypto checkout.');
+    /* The last thing measurable from the browser. What happens after this is
+       a wallet we can't see — whether it was paid is the server's to know. */
+    enlTrack('payment_started', { method: 'crypto', items: cart.items.length });
     // Remember the order so we can show a proper confirmation on redirect back.
     // The subscription rides along because the confirmation is rendered after a
     // full page navigation, with none of this scope left.
@@ -2557,6 +2603,7 @@ async function submitZelleOrder(form, btn) {
       body = await res.json().catch(() => ({}));
     }
     if (!res.ok || !body.success) throw new Error(body.error || 'Could not place your Zelle order.');
+    enlTrack('payment_started', { method: 'zelle', items: cart.items.length });
     showZelleInstructions(body);
   } catch (err) {
     console.error('[zelle checkout]', err);
@@ -2601,6 +2648,8 @@ function initCheckoutPage() {
   // verified buyer we can contact and keep records for. Enforced on the server
   // too — this only saves a signed-out visitor from filling in the whole form.
   if (!isSignedIn()) { showCheckoutAccountGate(); return; }
+
+  enlTrack('begin_checkout', { items: cart.items.length });
 
   window._enlRedeem = { points: 0, discount: 0 };
   window._cryptoAvailable = true;
@@ -2876,6 +2925,79 @@ function injectJSONLD(obj, id) {
   let s = document.getElementById(id);
   if (!s) { s = document.createElement('script'); s.type = 'application/ld+json'; s.id = id; document.head.appendChild(s); }
   s.textContent = JSON.stringify(obj);
+}
+
+/* ============================================================
+   PRODUCT STRUCTURED DATA
+   One description of a SKU, used by the product page and by the
+   catalog's ItemList, so the two can never drift apart.
+
+   Availability comes from stockInfo(), not from `inStock` alone —
+   a SKU counted down to zero is unbuyable, and telling a search
+   engine otherwise sends people to a page they can't order from.
+
+   No aggregateRating and no review: there are none, and inventing
+   them is a manual action from Google as well as a lie. Purity and
+   form ride along as additionalProperty rather than as claims.
+   ============================================================ */
+const SITE_ORIGIN = 'https://evernovalife.com/';
+
+function productSchema(product, pageUrl) {
+  const st = stockInfo(product);
+  const url = pageUrl || `${SITE_ORIGIN}product.html?id=${product.id}`;
+  const specs = product.specs || {};
+  const props = Object.keys(specs)
+    .filter(k => specs[k])
+    .map(k => ({ '@type': 'PropertyValue', name: k, value: String(specs[k]) }));
+
+  /* A year out is the convention for a price with no planned end date; without
+     it Google reports the offer as missing priceValidUntil. */
+  const validUntil = new Date(Date.now() + 365 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+
+  const schema = {
+    '@context': 'https://schema.org',
+    '@type': 'Product',
+    '@id': url + '#product',
+    name: product.name,
+    description: product.description,
+    image: SITE_ORIGIN + `assets/vials/${product.id}.webp`,
+    sku: product.lot || `ENL-${product.id}`,
+    productID: String(product.id),
+    category: product.categoryName || '',
+    brand: { '@type': 'Brand', name: 'Ever Nova Life' },
+    offers: {
+      '@type': 'Offer',
+      url,
+      priceCurrency: 'USD',
+      price: Number(product.price).toFixed(2),
+      priceValidUntil: validUntil,
+      itemCondition: 'https://schema.org/NewCondition',
+      availability: 'https://schema.org/' + (st.sellable ? 'InStock' : 'OutOfStock'),
+      seller: { '@type': 'Organization', name: 'Ever Nova Life', '@id': SITE_ORIGIN + '#org' }
+    }
+  };
+  if (props.length) schema.additionalProperty = props;
+  return schema;
+}
+
+/* The catalog page paints its grid from the live API, so describe the same
+   list to a crawler. products.html also carries a baked copy of this in its
+   markup (tools/build-jsonld.js) for the crawl that never runs the JS —
+   same @id on both, so they are one node rather than two competing ones. */
+function initCatalogSchema(list) {
+  if (!Array.isArray(list) || !list.length) return;
+  injectJSONLD({
+    '@context': 'https://schema.org',
+    '@type': 'ItemList',
+    '@id': SITE_ORIGIN + 'products.html#catalog',
+    name: 'Ever Nova Life research materials',
+    numberOfItems: list.length,
+    itemListElement: list.map((p, i) => {
+      // The list already declares the context; repeating it per item is noise.
+      const { '@context': _ctx, ...item } = productSchema(p);
+      return { '@type': 'ListItem', position: i + 1, item };
+    })
+  }, 'ld-catalog');
 }
 
 /* ============================================================

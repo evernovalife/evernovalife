@@ -3,12 +3,17 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Finish Paying — Ever Nova Life</title>
-  <meta name="description" content="Pay the outstanding balance on your Ever Nova Life order.">
+  <title>Track Your Order — Ever Nova Life</title>
+  <meta name="description" content="Check the status of an Ever Nova Life order with your order reference and email address — no account needed. See payment status, shipping and tracking.">
   <meta name="theme-color" content="#07040f">
-  <!-- Reached only from a link in an email, and the URL carries a token.
-       Nothing here belongs in a search index. -->
-  <meta name="robots" content="noindex, nofollow">
+  <link rel="canonical" href="https://evernovalife.com/order-status.html">
+  <meta property="og:title" content="Track Your Order — Ever Nova Life">
+  <meta property="og:description" content="Check the status of an Ever Nova Life order with your order reference and email address — no account needed.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://evernovalife.com/order-status.html">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Track Your Order — Ever Nova Life">
+  <meta name="twitter:description" content="Check the status of an Ever Nova Life order with your order reference and email address — no account needed.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap">
@@ -21,6 +26,11 @@
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to main content</a>
+
+  <!-- ===== ANNOUNCEMENT BAR ===== -->
+  <div style="background:#07040f;color:#f6df9b;text-align:center;font-size:.78rem;padding:.55rem 1rem;letter-spacing:.14em;text-transform:uppercase;font-weight:600;border-bottom:1px solid rgba(212,175,55,.35)">
+    LABORATORY RESEARCH USE ONLY. NOT INTENDED FOR CONSUMPTION.
+  </div>
 
   <!-- ===== HEADER ===== -->
   <header class="site-header">
@@ -56,10 +66,33 @@
     <section class="section">
       <div class="container">
         <div class="auth-wrap">
-          <div class="auth-card glass" id="payCard">
-            <h1>Finish <span class="gradient-text">paying</span></h1>
-            <p class="sub" id="paySub">Checking what's outstanding on your order…</p>
-            <div id="payBody"></div>
+          <div class="auth-card glass">
+            <h1>Track your <span class="gradient-text">order</span></h1>
+            <p class="sub">Enter your order reference and the email address you ordered with. No account needed.</p>
+
+            <form id="lookupForm" novalidate>
+              <div class="form-group">
+                <label for="orderId">Order reference</label>
+                <input type="text" id="orderId" name="orderId" class="form-input" placeholder="ENL-XXXXXXXX"
+                       autocomplete="off" spellcheck="false" required aria-describedby="orderIdHelp">
+                <small id="orderIdHelp" class="text-muted" style="font-size:0.8rem">It's at the top of your confirmation email.</small>
+              </div>
+              <div class="form-group">
+                <label for="email">Email address</label>
+                <input type="email" id="email" name="email" class="form-input" placeholder="you@lab.org"
+                       autocomplete="email" required aria-describedby="emailHelp">
+                <small id="emailHelp" class="text-muted" style="font-size:0.8rem">The address the order was placed with.</small>
+              </div>
+              <button type="submit" class="btn btn-primary btn-block" id="lookupBtn">Check my order</button>
+              <div class="form-msg" id="lookupMsg" role="status" aria-live="polite"></div>
+            </form>
+
+            <div id="result" hidden></div>
+
+            <p class="text-muted" style="font-size:0.85rem;margin-top:1.5rem">
+              Have an account? <a href="account.html" style="color:var(--accent-purple)">Sign in</a> to see every order in one place.
+              Can't find the reference? <a href="contact.html" style="color:var(--accent-purple)">Contact us</a> and we'll look it up.
+            </p>
           </div>
         </div>
       </div>
@@ -104,34 +137,26 @@
   </footer>
 
   <script src="js/config.js?v=64"></script>
-  <!-- Same set every page loads: cart.js is what puts a real number on the
-       header cart badge, so leaving it out would show a stale 0 to someone who
-       still has items waiting. -->
   <script src="js/products-data.js?v=62"></script>
   <script src="js/cart.js?v=62"></script>
   <script src="js/main.js?v=64"></script>
   <script>
   /* ============================================================
-     PAY THE REST OF AN ORDER
-     Reached from an email, by someone who may not have an account and
-     almost certainly isn't signed in. The signed token in the URL is the
-     only credential, and it unlocks exactly one order: read what's owed,
-     and open an invoice for that amount.
+     GUEST ORDER LOOKUP
+     The credential is the PAIR — reference plus the email on the
+     order — and the server answers a wrong pair exactly as it
+     answers a reference that doesn't exist, so nothing here can
+     be used to find out which references are real.
 
-     The BTCPay link is minted on the button press, never baked into the
-     page or the email — a crypto invoice is only payable inside its own
-     window, so any link that sits in an inbox is dead by the time it's
-     opened. This page is the thing that stays valid.
+     Deep-linkable (?order=…&email=…) so a support reply can send
+     someone straight to their own status.
      ============================================================ */
   (function () {
     var API = window.PEPTIDE_API_BASE || '';
-    var qs = new URLSearchParams(location.search);
-    var orderId = qs.get('order') || '';
-    var token = qs.get('t') || '';
-    var returned = qs.get('sent') === '1';     // came back from BTCPay just now
-
-    var sub = document.getElementById('paySub');
-    var body = document.getElementById('payBody');
+    var form = document.getElementById('lookupForm');
+    var btn = document.getElementById('lookupBtn');
+    var msg = document.getElementById('lookupMsg');
+    var result = document.getElementById('result');
 
     function esc(s) {
       return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -139,144 +164,120 @@
       });
     }
     function money(n) { return '$' + (Number(n) || 0).toFixed(2); }
-
-    function show(subtitle, html) {
-      sub.textContent = subtitle;
-      body.innerHTML = html;
+    function when(iso) {
+      var d = new Date(iso);
+      return isFinite(d.getTime())
+        ? d.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })
+        : '';
     }
 
-    function contactLine() {
-      return '<p class="text-muted" style="font-size:0.85rem;margin-top:1.25rem">' +
-        'Something not right? <a href="contact.html" style="color:var(--accent-purple)">Get in touch</a> ' +
-        'and quote ' + esc(orderId || 'your order number') + ' — we answer every message.</p>';
-    }
+    /* Plain English for each stored status, plus whether it's a good-news or
+       needs-you state. The raw value ("awaiting_payment") is never shown. */
+    var STATES = {
+      pending:          { label: 'Waiting for payment', tone: 'pending',
+                          note: 'We opened an invoice for this order but no payment has reached us yet. Crypto invoices only stay open for a short window — if yours expired, get in touch and we\'ll send a fresh one.' },
+      awaiting_payment: { label: 'Waiting for your Zelle transfer', tone: 'pending',
+                          note: 'We\'re holding the items while we wait for the transfer to land. Put the order reference in the memo so we can match it.' },
+      underpaid:        { label: 'Partly paid', tone: 'pending',
+                          note: 'Part of the payment arrived, so the order is on hold rather than on its way. What you sent is safe with us and counted against it.' },
+      paid:             { label: 'Paid — being packed', tone: 'ok',
+                          note: 'Payment received. It\'s in the packing queue now, and you\'ll get tracking by email as soon as it goes out.' },
+      shipped:          { label: 'Shipped', tone: 'ok',
+                          note: 'It\'s on its way.' },
+      delivered:        { label: 'Delivered', tone: 'ok',
+                          note: 'Marked delivered by the carrier.' },
+      cancelled:        { label: 'Cancelled', tone: 'off',
+                          note: 'This order was cancelled and nothing will ship. If you paid anything toward it, contact us and we\'ll refund you.' }
+    };
 
-    async function getBalance() {
-      var res = await fetch(API + '/api/orders/' + encodeURIComponent(orderId) +
-        '/balance?t=' + encodeURIComponent(token));
-      var data = null;
-      try { data = await res.json(); } catch (e) { /* no JSON body */ }
-      if (!res.ok) throw new Error((data && data.error) || 'We could not look up that order.');
-      return data;
-    }
+    function render(o) {
+      var key = String(o.status || '').toLowerCase();
+      var state = STATES[key] || { label: o.status || 'Open', tone: 'pending', note: '' };
+      var items = (o.items || []).map(function (i) {
+        return '<div class="summary-row"><span>' + esc(i.name) + ' ×' + esc(String(i.quantity)) + '</span><span></span></div>';
+      }).join('');
 
-    /* Nothing owed, and nothing to press. Which of the three "you're done"
-       endings applies depends on why: paid, shipped, or written off. */
-    function renderSettled(d) {
-      var s = String(d.status || '').toLowerCase();
-      if (s === 'cancelled') {
-        return show('This order was cancelled',
-          '<p>Order <strong>' + esc(d.orderId) + '</strong> was cancelled, so there\'s nothing to pay.</p>' +
-          '<p class="text-muted" style="font-size:0.9rem">If you already sent us a payment for it, we still have it and ' +
-          'we\'ll refund you — reply to any of our emails, or use the contact form below.</p>' +
-          '<a class="btn btn-primary btn-block" href="products.html" style="margin-top:1.25rem">Start a new order</a>' +
-          contactLine());
+      var trackingBlock = '';
+      if (o.tracking) {
+        trackingBlock =
+          '<div class="summary-row"><span>Carrier</span><span>' + esc(o.carrier || '—') + '</span></div>' +
+          '<div class="summary-row"><span>Tracking</span><span><strong>' + esc(o.tracking) + '</strong></span></div>';
+      } else if (key === 'shipped' || key === 'delivered') {
+        trackingBlock = '<div class="summary-row"><span>Tracking</span><span>Not recorded — contact us</span></div>';
       }
-      return show('You\'re all paid up',
-        '<p>Order <strong>' + esc(d.orderId) + '</strong> is paid in full — ' + esc(money(d.total)) +
-        ' received. Nothing more is owed.</p>' +
-        '<p class="text-muted" style="font-size:0.9rem">' +
-        (s === 'shipped' || s === 'delivered'
-          ? 'It\'s already on its way. Tracking is on your account page and in your shipping email.'
-          : 'It\'s in our packing queue now. You\'ll get tracking by email as soon as it goes out.') +
-        '</p>' +
-        '<a class="btn btn-primary btn-block" href="account.html" style="margin-top:1.25rem">View my orders</a>');
+
+      var payBlock = '';
+      if (o.payUrl) {
+        payBlock =
+          '<a class="btn btn-primary btn-block" href="' + esc(o.payUrl) + '" style="margin-top:1.25rem">' +
+          'Pay the remaining ' + esc(money(o.due)) + '</a>' +
+          '<p class="text-muted" style="font-size:0.82rem;margin-top:0.5rem">Opens a fresh invoice for exactly what\'s outstanding. The link never expires.</p>';
+      }
+
+      result.innerHTML =
+        '<hr style="border:none;border-top:1px solid rgba(255,255,255,.12);margin:1.5rem 0">' +
+        '<h2 style="font-size:1.1rem;margin-bottom:.25rem">Order ' + esc(o.orderId) + '</h2>' +
+        '<p class="text-muted" style="font-size:0.85rem;margin-bottom:1rem">Placed ' + esc(when(o.createdAt)) + '</p>' +
+        '<p style="margin:0 0 .5rem"><strong style="font-size:1.05rem">' + esc(state.label) + '</strong></p>' +
+        (state.note ? '<p class="text-muted" style="font-size:0.88rem">' + esc(state.note) + '</p>' : '') +
+        '<div style="margin-top:1.25rem">' + items +
+          (o.shippingLabel ? '<div class="summary-row"><span>Shipping</span><span>' + esc(o.shippingLabel) + '</span></div>' : '') +
+          '<div class="summary-row total"><span>Total</span><span>' + esc(money(o.total)) + '</span></div>' +
+          (Number(o.due) > 0 && Number(o.paid) > 0
+            ? '<div class="summary-row"><span>Received so far</span><span>' + esc(money(o.paid)) + '</span></div>' +
+              '<div class="summary-row"><span>Still to pay</span><span><strong>' + esc(money(o.due)) + '</strong></span></div>'
+            : '') +
+          trackingBlock +
+        '</div>' + payBlock;
+      result.hidden = false;
     }
 
-    function renderDue(d) {
-      var items = (d.items || []).map(function (i) { return i.name + ' ×' + i.quantity; }).join(', ');
-      show('There\'s ' + money(d.due) + ' left on order ' + d.orderId, [
-        '<div class="summary-row"><span>Order total</span><span>' + esc(money(d.total)) + '</span></div>',
-        '<div class="summary-row"><span>Already received</span><span>' + esc(money(d.paid)) + '</span></div>',
-        '<div class="summary-row total"><span>Still to pay</span><span>' + esc(money(d.due)) + '</span></div>',
-        items ? '<p class="text-muted" style="font-size:0.85rem;margin-top:0.75rem">' + esc(items) + '</p>' : '',
-        '<button class="btn btn-primary btn-block" id="payBtn" style="margin-top:1.5rem">Pay ' +
-          esc(money(d.due)) + ' with crypto</button>',
-        '<div class="form-msg" id="payMsg"></div>',
-        '<p class="text-muted" style="font-size:0.85rem;margin-top:0.5rem">',
-        'Your ' + esc(money(d.paid)) + ' is safe with us and still counted against this order. ',
-        'We ship as soon as the balance clears.',
-        '</p>',
-        '<p class="text-muted" style="font-size:0.85rem">',
-        'Pressing the button opens a fresh Bitcoin / Lightning invoice for exactly ' + esc(money(d.due)) + ', ',
-        'payable for ' + esc(d.windowMinutes || 60) + ' minutes. This page never expires — if you run out of time, ',
-        'come back and press it again.',
-        '</p>',
-        '<p class="text-muted" style="font-size:0.85rem">',
-        'Would rather have your ' + esc(money(d.paid)) + ' back? ',
-        '<a href="contact.html" style="color:var(--accent-purple)">Ask us for a refund</a> — no questions asked.',
-        '</p>'
-      ].join(''));
-
-      document.getElementById('payBtn').addEventListener('click', payNow);
-    }
-
-    async function payNow() {
-      var btn = document.getElementById('payBtn');
-      var msg = document.getElementById('payMsg');
+    async function lookup(orderId, email) {
       btn.disabled = true;
-      btn.textContent = 'Opening your invoice…';
+      btn.textContent = 'Checking…';
       msg.className = 'form-msg';
       msg.textContent = '';
+      result.hidden = true;
       try {
-        var res = await fetch(API + '/api/orders/' + encodeURIComponent(orderId) + '/balance/invoice', {
+        var res = await fetch(API + '/api/orders/lookup', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ t: token })
+          body: JSON.stringify({ orderId: orderId, email: email })
         });
         var data = null;
         try { data = await res.json(); } catch (e) { /* no JSON body */ }
-        if (!res.ok || !data || !data.checkoutLink) {
-          throw new Error((data && data.error) || 'We could not open an invoice just now.');
+        if (!res.ok || !data || !data.order) {
+          throw new Error((data && data.error) || 'We could not look that up just now. Try again in a moment.');
         }
-        window.location.href = data.checkoutLink;
+        render(data.order);
       } catch (e) {
         msg.className = 'form-msg error';
-        msg.textContent = e.message + ' Please try again in a moment, or contact us and we\'ll sort it out.';
+        msg.textContent = e.message;
+      } finally {
         btn.disabled = false;
-        btn.textContent = 'Try again';
+        btn.textContent = 'Check my order';
       }
     }
 
-    /* Back from BTCPay. A crypto payment isn't final the instant it's sent, so
-       the balance takes a few seconds to catch up — poll rather than telling
-       someone who just paid that they still owe money. */
-    async function waitForSettlement() {
-      show('Checking your payment…',
-        '<p>We\'re waiting for the network to confirm it. This usually takes under a minute — ' +
-        'you can leave this page, we\'ll email you either way.</p>');
-      for (var i = 0; i < 12; i++) {
-        await new Promise(function (r) { setTimeout(r, 5000); });
-        try {
-          var d = await getBalance();
-          if (!d.payable) return renderSettled(d);
-          if (Number(d.due) > 0 && Number(d.paid) > 0 && i > 3) break;   // still short — show the balance
-        } catch (e) { /* transient — keep waiting */ }
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      var orderId = document.getElementById('orderId').value.trim();
+      var email = document.getElementById('email').value.trim();
+      if (!orderId || !email) {
+        msg.className = 'form-msg error';
+        msg.textContent = 'Enter both your order reference and the email address you ordered with.';
+        return;
       }
-      return load();
-    }
+      lookup(orderId, email);
+    });
 
-    async function load() {
-      if (!orderId || !token) {
-        return show('That link is incomplete',
-          '<p>This page needs the full link from your email — the part after the question mark matters.</p>' +
-          '<p class="text-muted" style="font-size:0.9rem">Copy and paste the whole address, or open the email ' +
-          'on this device and tap the button in it.</p>' + contactLine());
-      }
-      try {
-        var d = await getBalance();
-        if (!d.payable) return renderSettled(d);
-        return renderDue(d);
-      } catch (e) {
-        return show('We couldn\'t open that order',
-          '<p>' + esc(e.message) + '</p>' +
-          '<p class="text-muted" style="font-size:0.9rem">Payment links are personal to one order. If you followed ' +
-          'this from an email and it still doesn\'t work, the link may have been cut short by your mail app.</p>' +
-          contactLine());
-      }
-    }
-
-    if (returned) waitForSettlement(); else load();
+    // Prefilled link from a support reply, or a return visit.
+    var qs = new URLSearchParams(location.search);
+    var qOrder = qs.get('order') || '';
+    var qEmail = qs.get('email') || '';
+    if (qOrder) document.getElementById('orderId').value = qOrder;
+    if (qEmail) document.getElementById('email').value = qEmail;
+    if (qOrder && qEmail) lookup(qOrder, qEmail);
   })();
   </script>
 </body>

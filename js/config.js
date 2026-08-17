@@ -33,6 +33,41 @@
 window.ENL_SUPPORT_PHONE = '(561) 954-9253';
 window.ENL_SUPPORT_PHONE_HOURS = '';
 
+/* ------------------------------------------------------------
+   ANALYTICS  (off until you fill this in)
+   Answers the one question the order records can't: of the people
+   who reached the checkout, where did the rest of them go?
+
+   Cookieless by design — Plausible and Umami set no cookies and
+   store no personal data, so no consent banner is required and no
+   advertising network is given a view of who buys research
+   materials. Google Analytics would need both.
+
+     provider — 'plausible' | 'umami' | '' (off)
+     domain   — the site as registered with the provider
+     src      — the script URL. Plausible cloud is the default
+                below; self-hosted or Umami needs your own URL,
+                e.g. 'https://analytics.example.com/script.js'
+     websiteId— Umami only: the site's UUID from its dashboard
+
+   Example (Plausible cloud):
+     window.ENL_ANALYTICS = { provider: 'plausible', domain: 'evernovalife.com' };
+
+   Nothing loads and every track() call is a no-op while provider
+   is empty, so the site behaves identically until you set it.
+
+   NOTE: only the funnel is measured — page views plus add_to_cart,
+   begin_checkout, payment_started. Revenue is NOT sent to the
+   provider; the server's order records are the books, and money
+   figures don't belong in a third party's dataset.
+   ------------------------------------------------------------ */
+window.ENL_ANALYTICS = {
+  provider: '',                       // ← 'plausible' or 'umami' to turn it on
+  domain: 'evernovalife.com',
+  src: 'https://plausible.io/js/script.js',
+  websiteId: ''                       // Umami only
+};
+
 (function () {
   var PROD_API_BASE = 'https://evernova-api.onrender.com';   // ← your Render backend
 

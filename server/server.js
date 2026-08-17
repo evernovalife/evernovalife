@@ -27,6 +27,8 @@ const productStore = require('./products.js');
 const shippingRates = require('./shipping.js');
 const labelDesign = require('./label-design.js');
 const mailer = require('./email.js');
+const outreach = require('./outreach.js');
+const ratelimit = require('./ratelimit.js');
 
 const app = express();
 const PORT = process.env.PORT || 4242;
@@ -72,7 +74,9 @@ app.get('/api/health', (req, res) => res.json({
      silently lose the change — admin-products.html reads this and says so
      instead. Add a flag whenever a new admin endpoint lands. */
   features: {
-    stockCounts: true             // PATCH /api/products/:id/stock exists
+    stockCounts: true,            // PATCH /api/products/:id/stock exists
+    orderLookup: true,            // POST /api/orders/lookup exists (guest order status)
+    outreach: true                // POST /api/outreach/run exists (nudges + stock alerts)
   }
 }));
 
@@ -1611,6 +1615,73 @@ app.post('/api/orders/:orderId/balance/invoice', async (req, res) => {
   }
 });
 
+/* ============================================================
+   GUEST ORDER LOOKUP  —  "where is my order?"
+   Order status has always lived behind sign-in, which leaves out
+   the two people most likely to ask: the guest who never made an
+   account, and the buyer who can't remember which email they used.
+   Both currently have one option — write to us and wait.
+
+   The credential is the pair: the order reference AND the address
+   on that order. Both must match, and a miss says the same thing
+   either way, so a reference can never be confirmed to exist by
+   someone who doesn't have the email that goes with it. Rate
+   limited on top of that, so the references can't be walked.
+
+   What comes back is deliberately thin: status, what was bought,
+   the shipment, and — only if it is genuinely payable — the pay
+   link. No address, no account, no payment detail.
+   ============================================================ */
+const lookupLimiter = ratelimit.limit({
+  name: 'order-lookup',
+  windowMs: 10 * 60 * 1000,
+  max: 12,
+  message: 'Too many lookups from this connection. Wait a few minutes and try again, or email us and we will check for you.'
+});
+
+/* One shape for both the deliberate miss and the real miss, so the two are
+   indistinguishable from outside. */
+const LOOKUP_MISS = {
+  error: 'We could not find an order with that reference and email address. ' +
+         'Check both against your confirmation email — the reference looks like ENL-XXXXXXXX.'
+};
+
+app.post('/api/orders/lookup', lookupLimiter, (req, res) => {
+  const body = req.body || {};
+  const orderId = String(body.orderId || '').trim().toUpperCase();
+  const email = String(body.email || '').trim().toLowerCase();
+
+  if (!orderId || !email) {
+    return res.status(400).json({ error: 'Enter both your order reference and the email address you ordered with.' });
+  }
+
+  const order = findOrder(orderId);
+  if (!order) return res.status(404).json(LOOKUP_MISS);
+  if (String(order.email || '').trim().toLowerCase() !== email) return res.status(404).json(LOOKUP_MISS);
+
+  const due = amountDue(order);
+  res.json({
+    success: true,
+    order: {
+      orderId: order.orderId,
+      createdAt: order.createdAt,
+      status: order.status,
+      method: order.method || '',
+      items: (order.items || []).map(i => ({ name: i.name, quantity: i.quantity })),
+      total: round2(order.total),
+      paid: paidSoFar(order),
+      due,
+      shippingLabel: order.shippingLabel || '',
+      carrier: order.carrier || '',
+      tracking: order.tracking || '',
+      shippedAt: order.shippedAt || '',
+      // Only ever offered when a fresh invoice for the shortfall is the right
+      // answer — see canPayBalance. Otherwise there is nothing to click.
+      payUrl: canPayBalance(order) ? payLinkFor(order.orderId) : ''
+    }
+  });
+});
+
 /* ---- ADMIN: send the buyer their pay-the-rest link ----
    The same link the underpaid email already carries, re-sent on demand: for
    the orders that went short before this existed, and for the buyer who
@@ -3107,6 +3178,288 @@ async function sendSubscriptionCancelledEmail(user, sub) {
   });
 }
 
+/* ============================================================
+   OUTREACH — the three reminders nobody was getting
+   All of it rides on the same trigger as auto-ship, and all of it
+   no-ops quietly when SMTP isn't configured.
+
+     1. an unpaid order that has gone quiet        → the buyer
+     2. a saved cart that sat still and never sold → the buyer
+     3. a SKU that has run down to nothing         → the owner
+
+   (1) is the one that pays for the feature. Crypto is push-only:
+   if a buyer doesn't send the money, nothing anywhere tells them
+   the order is still sitting there waiting. That is how a run of
+   orders can quietly die with the goods still reserved.
+
+   Who has already been told lives in outreach.js, so a repeated
+   trigger can't turn a reminder into a pestering.
+   ============================================================ */
+
+const OUTREACH_RUN_LIMIT = 40;   // emails per tick, per kind — keeps one run bounded
+
+/* Every order in the store that is still waiting on money. */
+function chaseableOrders() {
+  try {
+    return store.listAllOrders().filter(o =>
+      o && outreach.CHASEABLE.indexOf(String(o.status || '').toLowerCase()) !== -1);
+  } catch (e) {
+    console.error('[outreach] could not read orders:', e.message);
+    return [];
+  }
+}
+
+/* Accounts with something in a saved cart, plus the date of their most recent
+   order — which is how we tell "still thinking about it" from "already bought
+   it". Guest carts live only in the browser, so this is signed-in users only. */
+function cartCandidates() {
+  let users = [];
+  try { users = auth.listUsers(); } catch (e) { return []; }
+  const out = [];
+  for (const u of users) {
+    if (!u || !u.id || !u.email) continue;
+    let items = [];
+    try { items = store.getCart(u.id) || []; } catch (e) { continue; }
+    if (!items.length) { out.push({ userId: u.id, email: u.email, items: [], lastOrderAt: '' }); continue; }
+    let lastOrderAt = '';
+    try {
+      const orders = store.listOrders(u.id) || [];        // newest first
+      lastOrderAt = (orders[0] && orders[0].createdAt) || '';
+    } catch (e) { /* no orders is not an error */ }
+    out.push({ userId: u.id, email: u.email, firstName: u.firstName || '', items, lastOrderAt });
+  }
+  return out;
+}
+
+/* The whole tick. Never throws: each kind is isolated so a failure in one
+   still lets the other two run. */
+async function runOutreach(now = Date.now()) {
+  const summary = { cartsNudged: 0, ordersNudged: 0, stockAlerts: 0, errors: 0 };
+
+  /* ---- 1. unpaid orders ---- */
+  try {
+    const due = outreach.selectOrderNudges(chaseableOrders(), now).slice(0, OUTREACH_RUN_LIMIT);
+    for (const { order, stage } of due) {
+      try {
+        await sendUnpaidOrderNudge({ order, stage });
+        summary.ordersNudged++;
+      } catch (e) {
+        summary.errors++;
+        console.error(`[outreach] order nudge ${order.orderId} failed:`, e.message);
+      }
+      /* Stamped whether or not the send worked. A retry loop against a broken
+         SMTP would turn one missed reminder into an hourly one. */
+      outreach.markOrderNudged(order.orderId, stage, now);
+    }
+  } catch (e) {
+    summary.errors++;
+    console.error('[outreach] order pass failed:', e.message);
+  }
+
+  /* ---- 2. abandoned carts ---- */
+  try {
+    const due = outreach.selectCartNudges(cartCandidates(), now).slice(0, OUTREACH_RUN_LIMIT);
+    for (const cart of due) {
+      try {
+        await sendAbandonedCartNudge(cart);
+        summary.cartsNudged++;
+      } catch (e) {
+        summary.errors++;
+        console.error('[outreach] cart nudge failed:', e.message);
+      }
+      outreach.markCartNudged(cart.userId, now);
+    }
+  } catch (e) {
+    summary.errors++;
+    console.error('[outreach] cart pass failed:', e.message);
+  }
+
+  /* ---- 3. low stock (owner) ---- */
+  try {
+    const due = outreach.selectStockAlerts(productStore.listProducts(), now).slice(0, OUTREACH_RUN_LIMIT);
+    for (const alert of due) {
+      try {
+        await sendLowStockAlert(alert);
+        summary.stockAlerts++;
+      } catch (e) {
+        summary.errors++;
+        console.error('[outreach] stock alert failed:', e.message);
+      }
+      outreach.markStockAlerted(alert.product.id, alert.level, now);
+    }
+  } catch (e) {
+    summary.errors++;
+    console.error('[outreach] stock pass failed:', e.message);
+  }
+
+  if (summary.cartsNudged || summary.ordersNudged || summary.stockAlerts || summary.errors) {
+    console.log(`[outreach] orders ${summary.ordersNudged} · carts ${summary.cartsNudged} · ` +
+                `stock ${summary.stockAlerts} · errors ${summary.errors}`);
+  }
+  return summary;
+}
+
+/* Same guard as the auto-ship trigger: the scheduled pinger or an admin. */
+app.post('/api/outreach/run', requireCron, async (req, res) => {
+  const started = Date.now();
+  try {
+    const summary = await runOutreach();
+    res.json({ success: true, ...summary, config: outreach.config(), ms: Date.now() - started });
+  } catch (err) {
+    console.error('[outreach] run failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ---- OUTREACH EMAILS ---- */
+
+/* An order that is waiting on money, with the right next step for HOW it was
+   meant to be paid. The three cases are genuinely different:
+
+     underpaid       — money arrived, but short. There is a safe, self-serve
+                       fix: a fresh invoice for the difference (pay.html).
+     awaiting_payment— Zelle. Nothing is automated; re-state the details.
+     pending         — a crypto invoice that was never paid. We deliberately do
+                       NOT hand out a balance link here: the original invoice is
+                       still the live bill for these goods, and raising a second
+                       one risks billing the same cart twice. Ask them to reply
+                       and we'll issue a fresh one by hand.
+*/
+async function sendUnpaidOrderNudge({ order, stage }) {
+  if (!mailer.CONFIGURED || !order || !order.email) return;
+  const status = String(order.status || '').toLowerCase();
+  const last = stage >= outreach.config().orderNudgeHours.length;
+  const total = Number(order.total || 0).toFixed(2);
+  const due = amountDue(order);
+  const items = (order.items || []).map(i => `${i.quantity}× ${i.name}`).join(', ');
+  const rowsHtml = `<table style="border-collapse:collapse;margin:14px 0;font-size:15px">
+    <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Order</td><td><strong>${escapeHtmlSrv(order.orderId)}</strong></td></tr>
+    <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Items</td><td>${escapeHtmlSrv(items)}</td></tr>
+    <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Total</td><td><strong>$${escapeHtmlSrv(total)}</strong></td></tr>
+    ${due && due < Number(total) ? `<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Still to pay</td><td><strong>$${escapeHtmlSrv(due.toFixed(2))}</strong></td></tr>` : ''}
+  </table>`;
+
+  const closing = last
+    ? `This is the last reminder we'll send about it — the items are held for you until then, and after that they go back on the shelf. Nothing has been charged to you.`
+    : `The items are still held for you. Nothing has been charged, and you can ignore this if you've changed your mind.`;
+
+  let heading, intro, action, actionText, extraHtml;
+
+  if (status === 'underpaid' && canPayBalance(order)) {
+    const payUrl = payLinkFor(order.orderId);
+    heading = 'Your order is still a little short';
+    intro = `We received part of the payment for order <strong>${escapeHtmlSrv(order.orderId)}</strong>, but it came up ` +
+            `<strong>$${escapeHtmlSrv(due.toFixed(2))}</strong> short — so it's on hold rather than on its way.`;
+    action = payUrl;
+    actionText = `Pay the remaining $${due.toFixed(2)}`;
+    extraHtml = `<p><a href="${escapeHtmlSrv(payUrl)}" style="display:inline-block;background:#6d28d9;color:#fff;padding:14px 26px;border-radius:8px;text-decoration:none;font-weight:600">${escapeHtmlSrv(actionText)}</a></p>
+      <p style="color:#6b7280;font-size:14px">The link opens a fresh invoice for the outstanding amount each time, so it never expires on you. What you've already sent is safe with us and counted against this order.</p>`;
+  } else if (status === 'awaiting_payment') {
+    const inst = zelle.CONFIGURED ? zelle.instructions({ orderId: order.orderId, order }) : null;
+    heading = 'Still waiting on your Zelle transfer';
+    intro = `Order <strong>${escapeHtmlSrv(order.orderId)}</strong> is being held for you, but the Zelle transfer hasn't reached us yet.`;
+    extraHtml = inst
+      ? `<table style="border-collapse:collapse;margin:14px 0;font-size:15px">
+           <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Send to</td><td><strong>${escapeHtmlSrv(inst.recipient)}</strong> (${escapeHtmlSrv(inst.recipientName)})</td></tr>
+           <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Amount</td><td><strong>$${escapeHtmlSrv(inst.amount.toFixed(2))} ${escapeHtmlSrv(inst.currency)}</strong></td></tr>
+           <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Memo</td><td><strong>${escapeHtmlSrv(inst.memo)}</strong></td></tr>
+         </table>
+         <p style="font-size:14px">Already sent it? It can take a little while to show in our account — reply to this email and we'll look for it.</p>`
+      : `<p style="font-size:14px">Already sent it? Reply to this email and we'll look for it.</p>`;
+  } else {
+    heading = 'Your order is still waiting to be paid';
+    intro = `Order <strong>${escapeHtmlSrv(order.orderId)}</strong> was placed but never paid — and a Bitcoin or Lightning ` +
+            `invoice only stays open for a short window, so yours has almost certainly expired by now.`;
+    extraHtml = `<p style="font-size:14px">If you still want it, <strong>reply to this email</strong> and we'll send you a fresh invoice for the same order — you won't be billed twice, and nothing is charged until you pay it.</p>
+      <p><a href="${SITE()}/order-status.html" style="display:inline-block;background:#6d28d9;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600">Check your order status</a></p>`;
+  }
+
+  return mailer.sendMail({
+    to: order.email,
+    subject: last
+      ? `Last reminder — order ${order.orderId} is still unpaid`
+      : `Your Ever Nova Life order ${order.orderId} is waiting`,
+    text: `${heading}\n\n` +
+      `Order:  ${order.orderId}\nItems:  ${items}\nTotal:  $${total}\n` +
+      (due && due < Number(total) ? `Still to pay: $${due.toFixed(2)}\n` : '') +
+      (action ? `\nPay it here: ${action}\n` : `\nReply to this email and we'll help you finish it.\n`) +
+      `\n${closing}\n\n— The Ever Nova Life team`,
+    html: orderEmailHtml({
+      heading,
+      intro,
+      rowsHtml,
+      extraHtml: (extraHtml || '') + `<p style="color:#6b7280;font-size:14px">${escapeHtmlSrv(closing)}</p>`
+    })
+  });
+}
+
+/* A saved cart that sat still. One email, never a series — the cart is a
+   convenience we're reminding them about, not a sale they agreed to. */
+async function sendAbandonedCartNudge({ email, firstName, items }) {
+  if (!mailer.CONFIGURED || !email) return;
+  const lines = (items || []).map(i => `${i.quantity}× ${i.name}`);
+  const total = (items || []).reduce((s, i) => s + (Number(i.price) || 0) * (Number(i.quantity) || 0), 0);
+  const rowsHtml = `<table style="border-collapse:collapse;margin:14px 0;font-size:15px">
+    ${(items || []).map(i => `<tr>
+      <td style="padding:4px 14px 4px 0">${escapeHtmlSrv(String(i.quantity))}× ${escapeHtmlSrv(i.name)}</td>
+      <td style="text-align:right">$${escapeHtmlSrv((((Number(i.price) || 0) * (Number(i.quantity) || 0))).toFixed(2))}</td>
+    </tr>`).join('')}
+  </table>`;
+
+  return mailer.sendMail({
+    to: email,
+    subject: 'You left something in your cart',
+    text: `Hi ${firstName || 'there'},\n\n` +
+      `You still have these in your Ever Nova Life cart:\n\n${lines.join('\n')}\n\n` +
+      `Approximate total: $${total.toFixed(2)} (before shipping)\n\n` +
+      `Pick up where you left off: ${SITE()}/cart.html\n\n` +
+      `Stock is counted per lot, so an item can sell out while it sits in a cart — nothing is reserved until an order is placed.\n\n` +
+      `Not interested any more? Just empty the cart and we won't mention it again.\n\n— The Ever Nova Life team`,
+    html: orderEmailHtml({
+      heading: 'You left something in your cart',
+      intro: `Hi ${escapeHtmlSrv(firstName || 'there')}, these are still sitting in your cart:`,
+      rowsHtml,
+      extraHtml: `<p style="margin:6px 0 16px;color:#6b7280;font-size:14px">Approximate total <strong>$${escapeHtmlSrv(total.toFixed(2))}</strong>, before shipping.</p>
+        <p><a href="${SITE()}/cart.html" style="display:inline-block;background:#6d28d9;color:#fff;padding:14px 26px;border-radius:8px;text-decoration:none;font-weight:600">Back to your cart</a></p>
+        <p style="color:#6b7280;font-size:14px">Stock is counted per lot, so an item can sell out while it sits in a cart — nothing is held until an order is placed. Not interested any more? Empty the cart and we won't mention it again.</p>`
+    })
+  });
+}
+
+/* The owner's copy. The dashboard has shown low stock for a while, but only
+   to someone who opens the dashboard — and stock is taken at INVOICE time, so
+   a run of orders can empty a SKU without anyone watching. */
+async function sendLowStockAlert({ product, level, previousLevel, threshold }) {
+  const to = process.env.ADMIN_EMAIL || '';
+  if (!mailer.CONFIGURED || !to) return;
+  const out = level === 0;
+  const name = product.name || `Product ${product.id}`;
+  return mailer.sendMail({
+    to,
+    subject: out ? `OUT OF STOCK: ${name}` : `Low stock: ${name} (${level} left)`,
+    text: (out
+      ? `${name} has run out. The storefront now shows it as unavailable and it can't be ordered.\n\n`
+      : `${name} is down to ${level} unit${level === 1 ? '' : 's'} (alert threshold ${threshold}).\n\n`) +
+      `Lot: ${product.lot || '—'}\nPrice: $${Number(product.price || 0).toFixed(2)}\n` +
+      (previousLevel != null ? `Last alerted at: ${previousLevel}\n` : '') +
+      `\nUpdate the count at ${SITE()}/admin-products.html\n\n` +
+      `You'll only get this again if it runs to zero, or after you restock above ${threshold}.\n`,
+    html: orderEmailHtml({
+      heading: out ? 'Out of stock' : 'Low stock',
+      intro: out
+        ? `<strong>${escapeHtmlSrv(name)}</strong> has run out. The storefront is now showing it as unavailable, and it can't be ordered.`
+        : `<strong>${escapeHtmlSrv(name)}</strong> is down to <strong>${escapeHtmlSrv(String(level))}</strong> unit${level === 1 ? '' : 's'}.`,
+      rowsHtml: `<table style="border-collapse:collapse;margin:14px 0;font-size:15px">
+        <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Lot</td><td>${escapeHtmlSrv(product.lot || '—')}</td></tr>
+        <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Price</td><td>$${escapeHtmlSrv(Number(product.price || 0).toFixed(2))}</td></tr>
+        <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Alert threshold</td><td>${escapeHtmlSrv(String(threshold))}</td></tr>
+      </table>`,
+      extraHtml: `<p><a href="${SITE()}/admin-products.html" style="display:inline-block;background:#6d28d9;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600">Update the stock count</a></p>
+        <p style="color:#6b7280;font-size:14px">You'll only hear about this SKU again if it runs to zero, or after you restock it above ${escapeHtmlSrv(String(threshold))}.</p>`
+    })
+  });
+}
+
 /* ---- serve the static site from the same origin — only when it's actually here ----
    Same-origin deploy (e.g. GoDaddy / local): ROOT holds the site → serve it.
    API-only deploy (e.g. Render, where just /server is deployed and the site lives
@@ -3153,6 +3506,19 @@ if (require.main === module) {
     const tickMinutes = Math.max(5, Number(process.env.SUBSCRIPTION_TICK_MINUTES) || 60);
     setInterval(() => {
       runDueSubscriptions().catch(err => console.error('[autoship] tick failed:', err.message));
+    }, tickMinutes * 60 * 1000).unref();
+  }
+
+  /* Same arrangement for the reminders: the real trigger is an external ping
+     to /api/outreach/run, and this only covers the window while the process
+     is up. Deliberately a separate timer from auto-ship — a slow BTCPay call
+     holding up the invoice run must not also delay the reminders, and one
+     throwing must not cancel the other. Set OUTREACH_INPROCESS_CRON=0 to
+     turn it off. */
+  if (process.env.OUTREACH_INPROCESS_CRON !== '0') {
+    const tickMinutes = Math.max(15, Number(process.env.OUTREACH_TICK_MINUTES) || 60);
+    setInterval(() => {
+      runOutreach().catch(err => console.error('[outreach] tick failed:', err.message));
     }, tickMinutes * 60 * 1000).unref();
   }
 }
