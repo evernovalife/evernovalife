@@ -63,7 +63,7 @@ const SEED_SYNC_VERSION = 2;   // v2 (2026-08-02): MOTS-C → $100, was-price dr
    The trade-off matches the price sync: a bump also brings back a built-in an
    admin had deleted. Bumping is the only way to publish a new built-in without
    re-entering it in admin-products.html by hand. */
-const SEED_ADD_VERSION = 1;    // v1 (2026-08-05): HGH 36 IU (#9)
+const SEED_ADD_VERSION = 2;    // v2 (2026-08-18): Bacteriostatic Water (#2) relisted
 
 /* ---- Certificate-of-analysis re-sync ----
    BACKFILL_FIELDS only fills a field that is MISSING from the store. Every
@@ -79,7 +79,7 @@ const SEED_ADD_VERSION = 1;    // v1 (2026-08-05): HGH 36 IU (#9)
 
    HOW TO PUBLISH A NEW REPORT: drop the file in assets/coa/, fill the `coa`
    block in js/products-data.js, bump the number below, deploy. */
-const COA_SYNC_VERSION = 1;    // v1 (2026-08-09): reports published for #4, #8, #9
+const COA_SYNC_VERSION = 2;    // v2 (2026-08-18): #1 and #6 re-tested by Accurate Test Labs
 
 /* ---- Listing-copy re-sync (compliance) ----
    The same write-once problem as the price sync, and the one that matters most:
@@ -96,9 +96,14 @@ const COA_SYNC_VERSION = 1;    // v1 (2026-08-09): reports published for #4, #8,
    the next deploy re-applies the seed's name/category/description to every
    BUILT-IN product, once.
 
+   The same applies to the STATED SPECIFICATION — `purity` and the `specs`
+   table. A purity figure the certificate on the same page contradicts is the
+   same class of problem as a description that overclaims, so those ride along
+   here rather than being left to drift once a lot is re-tested.
+
    HOW TO CHANGE LISTING COPY: edit js/products-data.js, bump the number below,
    deploy. (Or edit it in admin-products.html and leave this alone.) */
-const COPY_SYNC_VERSION = 1;   // v1 (2026-08-10): compliance rewrite + molecular-class categories
+const COPY_SYNC_VERSION = 2;   // v2 (2026-08-18): purity + specs now synced; #1/#6 re-tested figures
 
 /* ---- Retired built-ins ----
    The mirror image of the add sync, and the one that actually matters for a
@@ -112,13 +117,19 @@ const COPY_SYNC_VERSION = 1;   // v1 (2026-08-10): compliance rewrite + molecula
    a retired id stays retired even after the row is gone.
 
    HOW TO RETIRE A PRODUCT: remove it from js/products-data.js, add its id
-   below, bump the number, deploy. */
-const RETIRED_IDS = [2];       // #2 — reagent SKU delisted 2026-08-11
+   below, bump the number, deploy.
+
+   TO UN-RETIRE ONE: take its id OUT of this list (leave the version alone —
+   a version already applied never runs again) and bump SEED_ADD_VERSION, which
+   is what puts the row back on a store that already dropped it. Leaving a
+   relisted id in the list below is a trap: the next RETIRE_VERSION bump, made
+   for some unrelated product, would silently delete it a second time. */
+const RETIRED_IDS = [];        // #2 was here — reagent SKU delisted 2026-08-11, relisted 2026-08-18
 const RETIRE_VERSION = 1;      // v1 (2026-08-11)
 
 const SYNC_FILE = path.join(DATA_DIR, 'products.sync.json');
 const SYNCED_FIELDS = ['price', 'originalPrice'];
-const COPY_FIELDS = ['name', 'category', 'categoryName', 'description'];
+const COPY_FIELDS = ['name', 'category', 'categoryName', 'description', 'purity', 'quantity', 'specs'];
 
 function readSyncFile() {
   try {
@@ -219,10 +230,19 @@ function syncCopyFromSeed(list) {
     if (!seed) continue;                       // admin-added product — not ours to touch
     for (const field of COPY_FIELDS) {
       if (seed[field] === undefined) continue;
-      if (item[field] === seed[field]) continue;
+      /* `specs` is an object, so === never matches even when the two are
+         identical. Compare by value, and hand the store a COPY — assigning the
+         seed object itself would let a later admin edit mutate the seed that
+         every other product is synced against. */
+      if (seed[field] !== null && typeof seed[field] === 'object') {
+        if (JSON.stringify(item[field]) === JSON.stringify(seed[field])) continue;
+        item[field] = JSON.parse(JSON.stringify(seed[field]));
+      } else {
+        if (item[field] === seed[field]) continue;
+        item[field] = seed[field];
+      }
       // Loud on purpose: this is the log line that proves the live copy moved.
       console.log(`[products] copy sync v${COPY_SYNC_VERSION} · #${item.id} ${seed.name} · ${field} replaced`);
-      item[field] = seed[field];
       changed = true;
     }
   }

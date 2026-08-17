@@ -184,11 +184,11 @@
             <div id="coaFields" class="form-field full" style="display:none">
               <div class="pform-grid" style="gap:.85rem">
                 <div class="form-field"><label for="pCoaLab">Laboratory</label>
-                  <input type="text" id="pCoaLab" placeholder="e.g. Janoshik Analytical"></div>
+                  <input type="text" id="pCoaLab" placeholder="e.g. Accurate Test Labs"></div>
                 <div class="form-field"><label for="pCoaReport">Report ID</label>
-                  <input type="text" id="pCoaReport" placeholder="e.g. #137638"></div>
+                  <input type="text" id="pCoaReport" placeholder="e.g. ATL-38532"></div>
                 <div class="form-field"><label for="pCoaBatch">Batch analyzed</label>
-                  <input type="text" id="pCoaBatch" placeholder="e.g. CS-re10-0322"></div>
+                  <input type="text" id="pCoaBatch" placeholder="e.g. Lot 1 · sample 2608AFL1356.4748"></div>
                 <div class="form-field"><label for="pCoaMethod">Method <span class="muted-sm">(optional)</span></label>
                   <input type="text" id="pCoaMethod" placeholder="e.g. HPLC, UPLC-MS/MS"></div>
                 <div class="form-field"><label for="pCoaTested">Sample received</label>
@@ -196,9 +196,9 @@
                 <div class="form-field"><label for="pCoaIssued">Report issued</label>
                   <input type="date" id="pCoaIssued"></div>
                 <div class="form-field"><label for="pCoaPurity">Purity as reported</label>
-                  <input type="text" id="pCoaPurity" placeholder="e.g. 99.786% — copy it exactly"></div>
+                  <input type="text" id="pCoaPurity" placeholder="e.g. 99.938% — copy it exactly"></div>
                 <div class="form-field"><label for="pCoaContent">Content as reported</label>
-                  <input type="text" id="pCoaContent" placeholder="e.g. Retatrutide 11.86 mg"></div>
+                  <input type="text" id="pCoaContent" placeholder="e.g. Retatrutide 10.16 mg per vial"></div>
                 <div class="form-field full"><label for="pCoaVerify">Lab verification URL <span class="muted-sm">(optional)</span></label>
                   <input type="url" id="pCoaVerify" placeholder="https://janoshik.com"></div>
               </div>
@@ -214,9 +214,9 @@
               <input type="file" id="pCoaFile" accept="application/pdf,image/*">
               <div style="display:flex;align-items:center;gap:1rem;margin-top:0.5rem;flex-wrap:wrap">
                 <a id="coaFileLink" href="#" target="_blank" rel="noopener" class="btn btn-ghost btn-sm" style="display:none">View current document</a>
-                <span class="muted-sm" id="coaFileHint">Leave empty to keep the current document. You can also point at a file already on the site, e.g. <code>assets/coa/137638.pdf</code>.</span>
+                <span class="muted-sm" id="coaFileHint">Leave empty to keep the current document. You can also point at a file already on the site, e.g. <code>assets/coa/ATL-38532.png</code>.</span>
               </div>
-              <input type="text" id="pCoaPath" placeholder="assets/coa/137638.pdf" style="margin-top:0.5rem">
+              <input type="text" id="pCoaPath" placeholder="assets/coa/ATL-38532.png" style="margin-top:0.5rem">
             </div>
 
             <div class="form-field full">
@@ -625,7 +625,7 @@
        the product record. That keeps a COA uploaded from the admin page
        working on a host where this app cannot write files (GoDaddy serves the
        site; the API lives elsewhere). Pointing at a path already on the site —
-       assets/coa/137638.pdf — stays supported and is the lighter option for a
+       assets/coa/ATL-38532.png — stays supported and is the lighter option for a
        file you can upload by FTP. */
     var newCoaData = '';        // set when a new document is chosen
     var newCoaName = '';
@@ -709,7 +709,7 @@
           : 'Currently pointing at ' + file;
       } else {
         link.style.display = 'none';
-        $('coaFileHint').textContent = 'No document yet. Upload one, or enter a path like assets/coa/137638.pdf.';
+        $('coaFileHint').textContent = 'No document yet. Upload one, or enter a path like assets/coa/ATL-38532.png.';
       }
       coaFieldsVisible();
     }

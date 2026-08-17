@@ -15,14 +15,27 @@ it finds, so you do not need to convert anything or edit the catalog.
 
 | Base name         | Product                        | Report          | Batch          |
 |-------------------|--------------------------------|-----------------|----------------|
-| `137638`          | Retatrutide                    | #137638         | CS-re10-0322   |
+| `ATL-38532`       | Retatrutide                    | ATL-38532       | Lot 1          |
 | `122571`          | GHK-Cu (Copper Peptide)        | #122571         | CS-gu50-0309   |
 | `147077`          | MOTS-C                         | #147077         | CS-mc10-0408   |
-| `151337`          | BPC-157 / TB-500 Blend         | #151337         | CS-bb1010-0408 |
+| `ATL-38533`       | BPC-157 / TB-500 Blend         | ATL-38533       | Lot 1          |
 | `122606`          | KLOW Blend                     | #122606         | CS-ko80-0309   |
 | `136634`          | NAD+                           | #136634         | CS-na500-0403  |
 | `87374`           | HGH 36 IU                      | #87374          | CS-h101026     |
 | `OZ-HPLCMS-0ASZ`  | Tesamorelin / Ipamorelin Blend | OZ-HPLCMS-0ASZ  | 22/07/2026     |
+| `bac`             | Bacteriostatic Water           | ATL-38534       | Lot 1          |
+
+The bacteriostatic-water file is the one exception to naming by report id — it
+arrived as `bac.png` and the catalog points straight at it, so it is left alone.
+That report is an Accurate Test Labs **solvent panel**, not a peptide assay: it
+measures benzyl alcohol (0.70%) and covers neither purity nor sterility, which
+is why the listing's `coa.note` says so.
+
+Retatrutide and the BPC-157 / TB-500 blend were re-tested by Accurate Test Labs
+on 2026-08-12 (reported 08-17), replacing Janoshik #137638 and #151337. The old
+files were renamed to the new report ids rather than kept alongside — one lot,
+one current document. The superseded Janoshik reports are still in git history
+if a buyer ever asks for the earlier analysis.
 
 So `137638.png` or `137638.pdf` — either is fine.
 
@@ -40,9 +53,12 @@ a download, which is how most peptide suppliers publish COAs.
 
 ## Where to get them
 
-These five reports are for batches produced by the manufacturing source
-(cocerpeptides.com). Request the original documents from them, or scan the QR
-code on the report you already hold.
+The Janoshik and Ozcanium reports are for batches produced by the manufacturing
+source (cocerpeptides.com) — request the original documents from them, or scan
+the QR code on the report you already hold. The three `ATL-*` reports were
+ordered by us directly from Accurate Test Labs on lots received here, which is
+the cleaner arrangement: the report names Ever Nova Life as the client, so its
+provenance stands on its own.
 
 **Never publish another supplier’s report as documentation for our batch.**
 A Janoshik report is tied to the lot AND the client who ordered the test, and

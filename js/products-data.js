@@ -1,6 +1,6 @@
 /* ============================================================
    EVER NOVA LIFE — Product Catalog
-   8 SKUs · For in-vitro research and laboratory use only
+   9 SKUs · For in-vitro research and laboratory use only
    Each product: id, name, category, categoryName, price,
    originalPrice, purity, quantity, description, specs{},
    coa{}, inStock, badge, featured, lot
@@ -34,7 +34,8 @@ const CATEGORIES = [
   { key: 'growth',   name: 'Proteins & Long-Chain Peptides', icon: 'helix',    blurb: 'Recombinant proteins and long-chain peptides, supplied lyophilized' },
   { key: 'metabolic',name: 'Peptides & Cofactors',           icon: 'bolt',     blurb: 'Synthetic peptides and coenzymes, supplied lyophilized' },
   { key: 'repair',   name: 'Short-Chain Peptides',           icon: 'lattice',  blurb: 'Tripeptides, oligopeptides and metal-complexed peptides' },
-  { key: 'blends',   name: 'Multi-Peptide Blends',           icon: 'layers',   blurb: 'Co-lyophilized multi-component research formulations' }
+  { key: 'blends',   name: 'Multi-Peptide Blends',           icon: 'layers',   blurb: 'Co-lyophilized multi-component research formulations' },
+  { key: 'supplies', name: 'Laboratory Reagents',            icon: 'flask',    blurb: 'Reconstitution diluents and laboratory consumables' }
 ];
 
 const PRODUCTS = [
@@ -45,31 +46,76 @@ const PRODUCTS = [
     categoryName: 'Peptides & Cofactors',
     price: 109.99,
     originalPrice: 134.99,
-    purity: '99.2%',
+    purity: '99.938%',
     quantity: '10mg',
     lot: 'ENL-24001',
     description: 'Triple–receptor-agonist research peptide (GLP-1 / GIP / glucagon receptor) used as a reference compound in in-vitro metabolic-pathway research. Supplied lyophilized for laboratory use.',
     specs: {
       'Molecular Formula': 'C221H342N46O68',
       'Molecular Weight': '4731.3 g/mol',
-      'Purity (HPLC)': '99.2%',
+      'Purity (HPLC)': '99.938%',
       'Form': 'Lyophilized powder',
       'Storage': '-20°C, desiccated'
     },
     coa: {
       status: 'available',
-      lab: 'Janoshik Analytical',
-      reportId: '#137638',
-      batch: 'CS-re10-0322',
-      testDate: '2026-04-07',
-      reportDate: '2026-04-10',
-      purity: '99.786%',
-      content: 'Retatrutide 11.86 mg',
-      file: 'assets/coa/137638.pdf',
-      verifyUrl: 'https://janoshik.com'
+      lab: 'Accurate Test Labs',
+      reportId: 'ATL-38532',
+      batch: 'Lot 1 · sample 2608AFL1356.4748',
+      method: 'HPLC-PDA, 220nm',
+      testDate: '2026-08-12',
+      reportDate: '2026-08-17',
+      purity: '99.938%',
+      content: 'Retatrutide 10.16 mg per vial',
+      file: 'assets/coa/ATL-38532.png',
+      verifyUrl: 'https://accuratetestlab.com'
     },
     inStock: true,
     badge: 'Bestseller',
+    featured: true
+  },
+  {
+    id: 2,
+    name: 'Bacteriostatic Water',
+    category: 'supplies',
+    categoryName: 'Laboratory Reagents',
+    price: 8.99,
+    originalPrice: 11.99,
+    /* The listing states the figure the report actually measured for this lot
+       (0.70%), not the 0.9% nominal grade the earlier listing claimed — a
+       specification a document on the page contradicts is worse than none. */
+    purity: '0.70% benzyl alcohol (measured)',
+    quantity: '10mL',
+    lot: 'ENL-24002',
+    description: 'Sterile water with benzyl alcohol as a bacteriostatic preservative, used for reconstitution of lyophilized research peptides in the laboratory. Multi-dose laboratory reagent.',
+    specs: {
+      'Composition': 'Sterile water + benzyl alcohol (0.70% measured)',
+      'Volume': '10mL multi-dose vial',
+      'Grade': 'Laboratory reagent',
+      'Form': 'Liquid',
+      'Storage': 'Room temperature',
+      'Use': 'Peptide reconstitution'
+    },
+    coa: {
+      status: 'available',
+      lab: 'Accurate Test Labs',
+      reportId: 'ATL-38534',
+      batch: 'Lot 1 · sample 2608AFL1356.4750',
+      method: 'HPLC-PDA, 220nm (solvent panel)',
+      testDate: '2026-08-12',
+      reportDate: '2026-08-17',
+      /* No purity percentage was measured — this is a solvent panel, so the
+         only figure on the report is the benzyl-alcohol content. */
+      purity: 'Not reported (solvent analysis)',
+      content: 'Benzyl alcohol 0.70%',
+      /* Scope note, shown on the panel: the report covers what is in the vial
+         by solvent analysis, and nothing about sterility. */
+      note: 'The report on file is a solvent analysis of this lot: it measures the benzyl-alcohol content (0.70%) and does not cover sterility or endotoxin testing.',
+      file: 'assets/coa/bac.png',
+      verifyUrl: 'https://accuratetestlab.com'
+    },
+    inStock: true,
+    badge: 'Essential',
     featured: true
   },
   {
@@ -185,7 +231,7 @@ const PRODUCTS = [
     categoryName: 'Short-Chain Peptides',
     price: 130.00,
     originalPrice: null,
-    purity: 'ID + content',
+    purity: '99.13% combined',
     quantity: '20mg',
     lot: 'ENL-24006',
     description: 'A co-lyophilized blend of two widely studied research peptides — Body Protection Compound-157 and a Thymosin Beta-4 fragment (TB-500) — supplied for in-vitro research. See the COA Library for lot identity and measured content.',
@@ -194,19 +240,26 @@ const PRODUCTS = [
       'Analysis': 'Identity + content per component (blend)',
       'Form': 'Co-lyophilized powder',
       'Storage': '-20°C, desiccated',
-      'Documentation': 'Available — Janoshik #151337'
+      'Documentation': 'Available — Accurate Test Labs ATL-38533'
     },
     coa: {
       status: 'available',
-      lab: 'Janoshik Analytical',
-      reportId: '#151337',
-      batch: 'CS-bb1010-0408',
-      testDate: '2026-04-20',
-      reportDate: '2026-04-23',
-      purity: 'Not applicable (blend)',
-      content: 'BPC-157 12.60 mg · TB-500 11.90 mg',
-      file: 'assets/coa/151337.pdf',
-      verifyUrl: 'https://janoshik.com'
+      lab: 'Accurate Test Labs',
+      reportId: 'ATL-38533',
+      batch: 'Lot 1 · sample 2608AFL1356.4749',
+      method: 'HPLC-PDA, 220nm',
+      testDate: '2026-08-12',
+      reportDate: '2026-08-17',
+      /* 58.58% + 40.554% by peak area — the two components ARE the sample, so
+         the combined figure is the purity and the split is the composition. */
+      purity: '99.13% combined (BPC-157 58.58% · thymosin beta 4 40.554% by area)',
+      content: 'BPC-157 8.93 mg · thymosin beta 4 (TB-500) 10.59 mg · 19.52 mg total',
+      /* Scope note, shown on the panel: the BPC-157 component measured below
+         the 10mg this listing states. It is on the page rather than left for
+         the buyer to work out from the report. */
+      note: 'The report measures 8.93 mg of BPC-157 in the vial, below the 10mg this listing states for that component; thymosin beta 4 measured 10.59 mg against its stated 10mg, for 19.52 mg of the stated 20mg total. Read the document below before ordering.',
+      file: 'assets/coa/ATL-38533.png',
+      verifyUrl: 'https://accuratetestlab.com'
     },
     inStock: true,
     badge: 'Popular',

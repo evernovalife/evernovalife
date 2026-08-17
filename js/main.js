@@ -310,7 +310,7 @@ function createVialSVG(product) {
    full-frame masters stay in assets/vials/_base/; publish.py there mattes and
    crops them. VIAL_V busts Cloudflare when the artwork is replaced — bump it
    whenever the files change, since the filenames never do. */
-const VIAL_V = 8;
+const VIAL_V = 9;
 function vialPhotoSrc(id) {
   return `assets/vials/${id}.webp?v=${VIAL_V}`;
 }
