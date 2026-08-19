@@ -914,8 +914,137 @@ function loadProducts() {
         window.cart.syncPrices(window.PRODUCTS);
       }
       rerenderProducts();
+      renderPromoBanner();
     })
     .catch(() => { /* offline / cold start → keep the static catalog */ });
+}
+
+/* ============================================================
+   PROMO BANNER
+   A slim bar above the site header on every storefront page,
+   announcing whatever deals are running. It reads the same list
+   js/promos.js already fetched for the price badges, so there is
+   no second request and nothing extra to fill in — create a
+   promotion in admin and the bar appears.
+
+   It sits in normal flow rather than fixed to the viewport: the
+   header is already sticky and the age gate already overlays, and
+   a third layer competing for the top of the screen makes the
+   first paint feel like a pop-up ad.
+
+   Motion is a slow sweep, never a blink. Anything flashing more
+   than three times a second is a seizure risk (WCAG 2.3.1), and a
+   blinking bar reads as a scam storefront — the opposite of what
+   this site's copy works to establish.
+   ============================================================ */
+const PROMO_DISMISS_KEY = 'enl_promo_dismissed';
+let promoRotateTimer = 0;
+
+function promoDismissed() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PROMO_DISMISS_KEY) || '[]');
+    return Array.isArray(raw) ? raw.map(String) : [];
+  } catch (e) { return []; }          // storage disabled / bad JSON
+}
+
+function dismissPromo(id) {
+  try {
+    const seen = promoDismissed();
+    if (seen.indexOf(String(id)) === -1) seen.push(String(id));
+    /* Only the ids still worth remembering: a promotion that has ended will
+       never be offered again, so keeping its id forever just grows the key. */
+    const live = (window.Promos ? window.Promos.list() : []).map(p => String(p.id));
+    localStorage.setItem(PROMO_DISMISS_KEY, JSON.stringify(seen.filter(x => live.indexOf(x) !== -1)));
+  } catch (e) { /* storage disabled — the bar simply comes back next page */ }
+}
+
+/* "ends in 6 days" / "ends today" / "ends in 3 hours" — the closer it gets,
+   the finer the unit, because "in 0 days" reads as already over. */
+function promoEndsLabel(endsAt) {
+  if (!endsAt) return '';
+  const ms = Date.parse(endsAt) - Date.now();
+  if (!Number.isFinite(ms) || ms <= 0) return '';
+  const hours = ms / 3600000;
+  if (hours < 1) return 'ends within the hour';
+  if (hours < 24) { const h = Math.round(hours); return `ends in ${h} hour${h === 1 ? '' : 's'}`; }
+  const days = Math.ceil(hours / 24);
+  return `ends in ${days} day${days === 1 ? '' : 's'}`;
+}
+
+/* A promotion naming exactly one product links to it; anything broader goes
+   to the catalog, where the badges do the rest of the work. */
+function promoHref(promo) {
+  const ids = promo.productIds || [];
+  return ids.length === 1 ? `product.html?id=${encodeURIComponent(ids[0])}` : 'products.html';
+}
+
+function promoBannerLabel(promo) {
+  if (promo.badge) return promo.badge;
+  if (promo.type === 'bogo') return `BUY ${promo.buyQty} GET ${promo.freeQty}`;
+  if (promo.type === 'shipping') return 'FREE SHIPPING';
+  return 'OFFER';
+}
+
+function promoSlideHtml(promo) {
+  const ends = promoEndsLabel(promo.endsAt);
+  return `<a class="promo-bar-item" href="${promoHref(promo)}">
+      <span class="promo-bar-badge">${escapeHtml(promoBannerLabel(promo))}</span>
+      <span class="promo-bar-text">${escapeHtml(promo.name)}</span>
+      ${ends ? `<span class="promo-bar-ends">${ends}</span>` : ''}
+    </a>`;
+}
+
+function renderPromoBanner() {
+  if (!window.Promos) return;
+  const dismissed = promoDismissed();
+  const live = window.Promos.list().filter(p => dismissed.indexOf(String(p.id)) === -1);
+
+  let bar = document.querySelector('.promo-bar');
+  if (!live.length) { if (bar) bar.remove(); return; }
+
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.className = 'promo-bar';
+    /* Announced once, politely, when it appears. The role comes off before the
+       first rotation so a screen reader isn't re-interrupted every six seconds
+       by a bar the listener has already heard. */
+    bar.setAttribute('role', 'status');
+    const header = document.querySelector('.site-header');
+    if (header && header.parentNode) header.parentNode.insertBefore(bar, header);
+    else document.body.insertBefore(bar, document.body.firstChild);
+    setTimeout(() => bar.removeAttribute('role'), 2000);
+  }
+
+  let at = 0;                       // which deal is on screen right now
+  bar.innerHTML =
+    `<div class="promo-bar-track">${promoSlideHtml(live[at])}</div>` +
+    `<button type="button" class="promo-bar-close" aria-label="Dismiss this offer">${iconClose()}</button>`;
+
+  const track = bar.querySelector('.promo-bar-track');
+  const close = bar.querySelector('.promo-bar-close');
+  /* Dismiss the deal the buyer is actually looking at, not the first one in
+     the list — with rotation on, those stop being the same after six seconds. */
+  if (close) close.addEventListener('click', () => {
+    dismissPromo(live[at].id);
+    renderPromoBanner();
+  });
+
+  clearTimeout(promoRotateTimer);
+  /* Rotating content is motion too, so a reader who asked for less of it gets
+     the first deal and nothing that moves under them. */
+  const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (live.length > 1 && !reduce) {
+    const step = () => {
+      at = (at + 1) % live.length;
+      track.classList.add('is-out');
+      setTimeout(() => {
+        track.innerHTML = promoSlideHtml(live[at]);
+        track.classList.remove('is-out');
+      }, 320);
+      promoRotateTimer = setTimeout(step, 6000);
+    };
+    promoRotateTimer = setTimeout(step, 6000);
+  }
 }
 
 function rerenderProducts() {
@@ -2880,6 +3009,7 @@ function iconLock() { return svgLine(`<rect x="4.5" y="10.5" width="15" height="
 function iconTruckLine() { return svgLine(`<path d="M1.5 5.5h13v10h-13z"/><path d="M14.5 9h4l3 3v3.5h-7z"/><circle cx="6" cy="18" r="2"/><circle cx="17.5" cy="18" r="2"/>`); }
 function iconRepeat() { return svgLine(`<path d="M3 11.5a6.5 6.5 0 0 1 6.5-6.5H19"/><path d="m16 2 3 3-3 3"/><path d="M21 12.5a6.5 6.5 0 0 1-6.5 6.5H5"/><path d="m8 22-3-3 3-3"/>`); }
 function iconAlert() { return svgLine(`<path d="M10.3 3.6 1.9 18a2 2 0 0 0 1.7 3h16.8a2 2 0 0 0 1.7-3L13.7 3.6a2 2 0 0 0-3.4 0z"/><path d="M12 9v4.5"/><path d="M12 17.3h.01"/>`); }
+function iconClose() { return svgLine(`<path d="m6 6 12 12"/><path d="m18 6-12 12"/>`); }
 
 /* Category glyphs — keyed by CATEGORIES[].icon in products-data.js. */
 function categoryIcon(name) {
