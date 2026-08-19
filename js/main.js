@@ -884,17 +884,27 @@ function initProductsPage() {
    ============================================================ */
 function loadProducts() {
   if (typeof fetch === 'undefined' || !Array.isArray(window.PRODUCTS)) return;
-  fetch(API_BASE + '/api/products')
-    .then(res => (res.ok ? res.json() : null))
-    .then(data => {
-      if (!data || !Array.isArray(data.products) || !data.products.length) return;
-      // Mutate the SAME array in place so the getProductById/getFeatured…
-      // helpers (which close over it) see the live data.
-      window.PRODUCTS.length = 0;
-      window.PRODUCTS.push(...data.products);
+  /* Promotions and the catalog are fetched together and applied together: a
+     repaint that lands between them would flash the list price. */
+  Promise.all([
+    fetch(API_BASE + '/api/products').then(res => (res.ok ? res.json() : null)).catch(() => null),
+    window.Promos ? window.Promos.load() : Promise.resolve([])
+  ])
+    .then(([data]) => {
+      if (data && Array.isArray(data.products) && data.products.length) {
+        // Mutate the SAME array in place so the getProductById/getFeatured…
+        // helpers (which close over it) see the live data.
+        window.PRODUCTS.length = 0;
+        window.PRODUCTS.push(...data.products);
+      }
+      /* Deals are applied to the catalog itself — product.price becomes the
+         promo price and originalPrice keeps the list price — so cards, the
+         detail page and the cart all show the deal without a special case. */
+      if (window.Promos) window.Promos.decorate(window.PRODUCTS);
       /* The cart caches the price each item was added at. Now that the live
-         catalog is here, correct those caches BEFORE anything repaints — an
-         old cart otherwise shows a total the server will not honour. */
+         (and discounted) catalog is here, correct those caches BEFORE anything
+         repaints — an old cart otherwise shows a total the server will not
+         honour. */
       if (window.cart && typeof window.cart.syncPrices === 'function') {
         window.cart.syncPrices(window.PRODUCTS);
       }
