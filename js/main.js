@@ -2037,13 +2037,16 @@ function checkoutTotals() {
      the ones the invoice will use, down to how shipping and tax round. */
   const q = window._enlQuote;
   const subtotal = round2(q ? q.subtotal : cart.getSubtotal());
-  const discount = round2(Math.min(enlRedeem().discount || 0, subtotal));
   const shipping = round2(q ? q.shipping : cart.getShipping());
   // Which service the fee is for, so the summary can say "Shipping (Overnight)".
   const shippingLabel = (q && q.shippingLabel) || (cart.getShippingLabel ? cart.getShippingLabel() : '');
   // The shop's own cart-wide deal, carried straight from the server's quote —
   // never recomputed here, so the browser can display it but never decide it.
   const promoDiscount = round2(q ? (q.promoDiscount || 0) : 0);
+  // Points can only be spent against what the promotion left behind — the same
+  // bound server/pricing.js applies (subtotal - promoDiscount), so a redeem
+  // chosen after a cart-wide deal is already running can't discount past zero.
+  const discount = round2(Math.min(enlRedeem().discount || 0, Math.max(0, subtotal - promoDiscount)));
   const taxable = round2(Math.max(0, subtotal - promoDiscount - discount));
   const tax = round2(taxable * TAX_RATE);
   return { subtotal, discount, shipping, shippingLabel, promoDiscount, taxable, tax, total: round2(taxable + shipping + tax) };
@@ -2234,7 +2237,16 @@ function renderCheckoutSummary(el) {
   try { signedIn = !!(localStorage.getItem('enl_token') || ''); } catch (e) {}
   const canRedeem = signedIn && loy && loy.balance > 0 && t.subtotal > 0;
   const redeemActive = (enlRedeem().points || 0) > 0;
-  const maxRedeem = canRedeem ? Math.min(loy.dollarValue, t.subtotal) : 0;
+  // Points can only be spent against what the cart-wide promo left behind —
+  // same bound checkoutTotals applies to `discount`, so the offer here can
+  // never promise more than the discount line will actually apply.
+  const maxRedeem = canRedeem
+    ? round2(Math.min(loy.dollarValue, Math.max(0, t.subtotal - (t.promoDiscount || 0)))) : 0;
+  // The points figure shown next to it must match maxRedeem, not the raw
+  // balance — otherwise "Use my 500 points" sits beside a $20 cap a promo
+  // already ate most of.
+  const maxRedeemPoints = canRedeem
+    ? Math.round((maxRedeem * 100) / (loy.valueCents > 0 ? loy.valueCents : 1)) : 0;
 
   el.innerHTML = `
     <div class="summary-row"><span>Subtotal (${cart.getItemCount()} items)</span><span>${formatPrice(t.subtotal)}</span></div>
@@ -2246,7 +2258,7 @@ function renderCheckoutSummary(el) {
     ${canRedeem ? `
       <label class="loyalty-redeem-row">
         <input type="checkbox" id="redeemPoints" ${redeemActive ? 'checked' : ''}>
-        <span>Use my <strong>${loy.balance} points</strong> (−${formatPrice(maxRedeem)})</span>
+        <span>Use my <strong>${maxRedeemPoints} points</strong> (−${formatPrice(maxRedeem)})</span>
       </label>` : ''}
     ${redeemActive ? `<p class="summary-note">Points come off your <strong>Bitcoin / Lightning</strong> total. You'll still earn points on this order.</p>` : ''}
     <p class="summary-note"><span class="summary-note-ic">${iconLock()}</span>Secure checkout · Research use only</p>`;
