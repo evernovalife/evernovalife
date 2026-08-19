@@ -1078,6 +1078,10 @@ function buildOrderRecord({ orderId, order, method, status, email, shipping, tra
     items: order.items,          // [{ id, name, unitPrice, quantity, lineTotal }]
     subtotal: order.subtotal,
     discount: order.discount || 0,
+    // What the shop's own deals took off, kept apart from the loyalty
+    // `discount` above so a refund or a reconcile can tell them apart.
+    ...(order.promoDiscount ? { promoDiscount: order.promoDiscount } : {}),
+    ...(order.promos && order.promos.length ? { promos: order.promos } : {}),
     shippingCost: order.shipping,
     // Which service was bought, so the packing queue knows how fast it has to
     // go out — a fee on its own doesn't say that.
@@ -1427,7 +1431,9 @@ function markOrderPaid(orderId, patch) {
   if (upd.userId === store.GUEST_KEY) return upd;      // guest order — no account to credit
   try {
     const o = upd.order;
-    const earned = loyalty.earnForAmount((o.subtotal || 0) - (o.discount || 0));
+    /* Points are earned on the money that actually arrived: promotions and a
+       points redemption both come off before this. */
+    const earned = loyalty.earnForAmount((o.subtotal || 0) - (o.promoDiscount || 0) - (o.discount || 0));
     if (earned > 0) {
       loyalty.earn(upd.userId, earned, 'Order ' + (o.orderId || ''), { orderId: o.orderId });
       store.updateOrderStatus(orderId, null, { pointsEarned: earned });   // stamp for display
@@ -2926,7 +2932,11 @@ async function runOneSubscription(sub) {
       }
     }
 
-    const order = buildOrder(claimed.items);            // authoritative, re-priced now
+    /* Priced at CATALOG, never on promotion: a ten-day sale must not lock a
+       repeating plan into that price for the life of the plan, and re-reading
+       promotions at every invoice would change a subscriber's charge without
+       warning. Terms §6 — nothing is ever charged automatically. */
+    const order = buildOrder(claimed.items, { noPromos: true });
     const orderId = claimed.pendingOrderId || newOrderId();
 
     /* A repeat shipment takes stock like any other order. If the plan's items

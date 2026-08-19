@@ -134,3 +134,19 @@ test('a bogo line ships more units than it bills', () => {
   assert.strictEqual(order.items[0].paidQuantity, 1);
   assert.strictEqual(order.subtotal, promotions.money(SKU.price));
 });
+
+/* Points are earned on what the customer actually paid. Before promotions
+   existed that was `subtotal - discount`; a promo-discounted order must not
+   earn points against money nobody paid. */
+const loyalty = require('../loyalty.js');
+
+test('points are earned on the amount actually paid, not the list price', () => {
+  clearPromos();
+  promotions.upsert({ name: 'Ten off', type: 'cart', mode: 'amount', value: 10, minSubtotal: 0 });
+  const order = buildOrder([{ id: SKU.id, quantity: 1 }]);
+  clearPromos();
+
+  const paid = promotions.money(order.subtotal - order.promoDiscount - (order.discount || 0));
+  assert.strictEqual(loyalty.earnForAmount(paid), loyalty.earnForAmount(order.subtotal - 10));
+  assert.notStrictEqual(loyalty.earnForAmount(paid), loyalty.earnForAmount(order.subtotal));
+});
