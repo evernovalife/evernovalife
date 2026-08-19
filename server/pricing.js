@@ -95,10 +95,14 @@ function buildOrder(rawItems, opts = {}) {
      cheapest enabled method rather than failing the checkout.
 
      The threshold is measured on the POST-promotion subtotal — what the store
-     actually took, not what the goods list for. */
-  const ship = promo.freeShipping
-    ? { id: 'promo', label: 'Free shipping', fee: 0 }
-    : resolveShipping(opts.shippingMethod, subtotal);
+     actually took, not what the goods list for.
+
+     A shipping promo zeroes the FEE only — the chosen service is still the
+     one the buyer picked, and `shippingMethod`/`shippingLabel` are what the
+     order record and the parcel label print, so "Overnight" must not become
+     a fabricated "Free shipping" line. */
+  const base = resolveShipping(opts.shippingMethod, subtotal);
+  const ship = promo.freeShipping ? { ...base, fee: 0 } : base;
 
   /* Two discounts, kept apart on purpose. `promoDiscount` is the shop's own
      cart-wide deal; `discount` is loyalty points and keeps the meaning every

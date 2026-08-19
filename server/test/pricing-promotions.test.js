@@ -74,13 +74,24 @@ test('loyalty points clamp to what is left after the promotion', () => {
   assert.strictEqual(order.total, promotions.money(order.shipping));
 });
 
-test('a shipping promo zeroes the fee whatever the method costs', () => {
+/* A one-unit cart of SKU already clears the $100 free-shipping THRESHOLD on
+   its own (see the threshold test below), so that cart proves nothing about
+   the shipping-promo mechanism — it would ship free with no promotion at
+   all. Pairing the promo with a 50%-off sale drops the post-promotion
+   subtotal to $55, under the threshold, so the fee is zero only because the
+   promo zeroed it. The chosen service must still survive: a shipping promo
+   zeroes the FEE, it does not fabricate a different "service". */
+test('a shipping promo zeroes the fee whatever the method costs, without discarding the service', () => {
   clearPromos();
+  promotions.upsert({ name: 'Half off', type: 'sale', productIds: [SKU.id], mode: 'percent', value: 50 });
   promotions.upsert({ name: 'Free delivery', type: 'shipping' });
   const order = buildOrder([{ id: SKU.id, quantity: 1 }]);
   clearPromos();
 
+  assert.ok(order.subtotal < 100, 'the fixture must fall under the threshold post-promotion');
   assert.strictEqual(order.shipping, 0);
+  assert.strictEqual(order.shippingMethod, 'standard');
+  assert.strictEqual(order.shippingLabel, 'Standard');
 });
 
 /* The free-shipping THRESHOLD (shipping.js `freeOver`, $100 on Standard) is a
