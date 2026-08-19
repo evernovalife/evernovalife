@@ -210,3 +210,40 @@ test('the admin account can create a product', async () => {
   assert.equal(add.status, 201, 'admin can add a product');
   assert.equal(add.body.product.name, 'Test Reagent');
 });
+
+/* ---- promotions ----
+   Reading which deals are running is public (the storefront needs it to badge
+   a product). Writing one changes what every customer is charged, so it is
+   admin-only — and a scheduled campaign must not leak before it starts. */
+test('anyone may read the running promotions', async () => {
+  const res = await api('/api/promotions');
+  assert.strictEqual(res.status, 200);
+  assert.ok(Array.isArray(res.body.promotions));
+});
+
+test('an ordinary user cannot create, list-all or delete a promotion', async () => {
+  const user = await register('promo-user@example.com');
+  const token = user.body.token;
+
+  // requireAdmin answers 401 for an authenticated non-admin (see "a non-admin
+  // authenticated user is denied admin endpoints" above) — same convention here.
+  const create = await api('/api/admin/promotions', {
+    method: 'POST', token,
+    body: { name: 'Free money', type: 'cart', mode: 'percent', value: 100 }
+  });
+  assert.strictEqual(create.status, 401);
+
+  const listAll = await api('/api/admin/promotions', { token });
+  assert.strictEqual(listAll.status, 401);
+
+  const del = await api('/api/admin/promotions/free-money', { method: 'DELETE', token });
+  assert.strictEqual(del.status, 401);
+});
+
+test('an anonymous caller cannot create a promotion', async () => {
+  const res = await api('/api/admin/promotions', {
+    method: 'POST',
+    body: { name: 'Free money', type: 'cart', mode: 'percent', value: 100 }
+  });
+  assert.ok(res.status === 401 || res.status === 403);
+});

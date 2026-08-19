@@ -17,6 +17,7 @@ const express = require('express');
 const cors = require('cors');
 
 const { buildOrder } = require('./pricing.js');
+const promotions = require('./promotions.js');
 const btcpay = require('./btcpay.js');
 const zelle = require('./zelle.js');
 const auth = require('./auth.js');
@@ -548,6 +549,44 @@ app.delete('/api/shipping/:id', requireAdmin, (req, res) => {
   try {
     const removed = shippingRates.remove(req.params.id);
     res.json({ success: true, removed, methods: shippingRates.listAll() });
+  } catch (err) {
+    res.status(err.status || 400).json({ error: err.message });
+  }
+});
+
+/* ============================================================
+   PROMOTIONS
+   Scheduled deals — a sale price for a date range, buy-X-get-Y, a
+   cart-wide discount, free shipping. pricing.js applies them, so
+   these routes only manage the list.
+
+   The public GET returns the ACTIVE ones only. A campaign that
+   starts on Friday is not something a visitor should be able to
+   read on Tuesday, and an expired one is noise.
+   ============================================================ */
+app.get('/api/promotions', (req, res) => {
+  res.json({ success: true, promotions: promotions.listActive() });
+});
+
+app.get('/api/admin/promotions', requireAdmin, (req, res) => {
+  res.json({ success: true, promotions: promotions.listAll() });
+});
+
+/* Add or edit one. Same route for both: the id is the key, and a blank id on a
+   new promotion is derived from its name. */
+app.post('/api/admin/promotions', requireAdmin, (req, res) => {
+  try {
+    const promotion = promotions.upsert(req.body || {});
+    res.json({ success: true, promotion, promotions: promotions.listAll() });
+  } catch (err) {
+    res.status(err.status || 400).json({ error: err.message });
+  }
+});
+
+app.delete('/api/admin/promotions/:id', requireAdmin, (req, res) => {
+  try {
+    const removed = promotions.remove(req.params.id);
+    res.json({ success: true, removed, promotions: promotions.listAll() });
   } catch (err) {
     res.status(err.status || 400).json({ error: err.message });
   }
