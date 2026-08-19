@@ -164,4 +164,142 @@ function badRequest(message) {
   return err;
 }
 
-module.exports = { listAll, listActive, isActive, normalise, upsert, remove, money };
+/* ============================================================
+   THE EVALUATOR
+   Pure by design: it takes the promotions and the priced lines and
+   returns repriced lines. It reads no store and no catalog, so the
+   whole rule set can be tested without a server, and pricing.js
+   stays the only place that decides what a line costs to begin with.
+
+   Three phases, in order:
+     1. per line   — the single best-value sale OR bogo. Never both:
+                     an evergreen bogo and a short sale on the same
+                     product is a normal thing to have running, and
+                     the buyer should get whichever is worth more.
+     2. cart       — the single best cart-wide promo whose minimum
+                     the (already discounted) subtotal covers.
+     3. shipping   — any active shipping promo zeroes the fee.
+   ============================================================ */
+
+/** Does this promotion name this product? An empty list means all of them. */
+function coversProduct(promo, id) {
+  return !promo.productIds.length || promo.productIds.includes(Number(id));
+}
+
+/* What one unit costs under a sale, or null when the sale does nothing.
+   A `fixed` price above the catalog price is ignored rather than rejected at
+   save time: the catalog can move after the promotion was written, and a deal
+   that would RAISE the price is a stale row, not a charge. */
+function salePrice(promo, unitPrice) {
+  let next;
+  if (promo.mode === 'percent') next = unitPrice * (1 - promo.value / 100);
+  else if (promo.mode === 'amount') next = unitPrice - promo.value;
+  else next = promo.value;                     // 'fixed'
+  next = money(Math.max(0, next));
+  return next < unitPrice ? next : null;
+}
+
+/* Free units this bogo hands out, capped by what is actually on the shelf.
+   `stockLeft` is what the catalog says is available (null = untracked); the
+   paid units come out of the same count, so the free ones can only use what
+   is left over. When nothing is left the promo yields 0 and simply doesn't
+   apply — the checkout is never refused over a free extra. */
+function bogoFreeUnits(promo, quantity, stockLeft) {
+  if (promo.freeQty <= 0) return 0;
+  let free = Math.floor(quantity / promo.buyQty) * promo.freeQty;
+  if (stockLeft !== null && stockLeft !== undefined) {
+    free = Math.min(free, Math.max(0, Number(stockLeft) - quantity));
+  }
+  return Math.max(0, free);
+}
+
+function evaluate(promos, items, opts) {
+  opts = opts || {};
+  const now = Number.isFinite(opts.now) ? opts.now : Date.now();
+  const live = (promos || []).filter(Boolean).filter(p => isActive(p, now));
+  const applied = new Map();          // id -> { id, name, badge, type, saving }
+
+  const noteSaving = (promo, saving) => {
+    const prev = applied.get(promo.id);
+    if (prev) prev.saving = money(prev.saving + saving);
+    else applied.set(promo.id, {
+      id: promo.id, name: promo.name, badge: promo.badge, type: promo.type, saving: money(saving)
+    });
+  };
+
+  /* ---- phase 1: per line ---- */
+  const priced = (items || []).map(item => {
+    const listUnitPrice = money(item.unitPrice);
+    const quantity = Math.max(0, Math.floor(Number(item.quantity) || 0));
+
+    let best = null;                  // { saving, apply(line) }
+
+    live.forEach(promo => {
+      if (!coversProduct(promo, item.id)) return;
+
+      if (promo.type === 'sale') {
+        const unit = salePrice(promo, listUnitPrice);
+        if (unit === null) return;
+        const saving = money((listUnitPrice - unit) * quantity);
+        if (saving > 0 && (!best || saving > best.saving)) {
+          best = { promo, saving, unitPrice: unit, freeUnits: 0 };
+        }
+      } else if (promo.type === 'bogo') {
+        const freeUnits = bogoFreeUnits(promo, quantity, item.stockLeft);
+        const saving = money(freeUnits * listUnitPrice);
+        if (saving > 0 && (!best || saving > best.saving)) {
+          best = { promo, saving, unitPrice: listUnitPrice, freeUnits };
+        }
+      }
+    });
+
+    if (best) noteSaving(best.promo, best.saving);
+
+    const unitPrice = best ? best.unitPrice : listUnitPrice;
+    const freeUnits = best ? best.freeUnits : 0;
+
+    /* `quantity` keeps its existing meaning — how many units go in the box —
+       so the packing slip, the shipping label and the stock reservation are
+       right without knowing promotions exist. Only the money reads
+       `paidQuantity`. */
+    return {
+      id: item.id,
+      name: item.name,
+      unitPrice,
+      listUnitPrice,
+      quantity: quantity + freeUnits,
+      paidQuantity: quantity,
+      lineTotal: money(unitPrice * quantity),
+      promoId: best ? best.promo.id : ''
+    };
+  });
+
+  const subtotal = money(priced.reduce((sum, i) => sum + i.lineTotal, 0));
+
+  /* ---- phase 2: cart-wide ---- */
+  let promoDiscount = 0;
+  let bestCart = null;
+  live.filter(p => p.type === 'cart').forEach(promo => {
+    if (subtotal < promo.minSubtotal) return;
+    const raw = promo.mode === 'percent' ? subtotal * (promo.value / 100) : promo.value;
+    const saving = money(Math.min(Math.max(0, raw), subtotal));
+    if (saving > 0 && (!bestCart || saving > bestCart.saving)) bestCart = { promo, saving };
+  });
+  if (bestCart) {
+    promoDiscount = bestCart.saving;
+    noteSaving(bestCart.promo, bestCart.saving);
+  }
+
+  /* ---- phase 3: shipping ---- */
+  const shipPromo = live.find(p => p.type === 'shipping') || null;
+  if (shipPromo) noteSaving(shipPromo, 0);   // the fee isn't known here; record that it applied
+
+  return {
+    items: priced,
+    promoDiscount,
+    promos: Array.from(applied.values()),
+    freeShipping: !!shipPromo
+  };
+}
+
+module.exports = { listAll, listActive, isActive, normalise, upsert, remove, money, evaluate };

@@ -70,3 +70,75 @@ test('isActive respects the date window and the enabled switch', () => {
   assert.strictEqual(promotions.isActive(off, now), false);
   assert.strictEqual(promotions.isActive({ enabled: true, startsAt: null, endsAt: null }, now), true);
 });
+
+/* ---- the evaluator ----
+   Pure: hand it promotions and lines, get repriced lines back.
+   `line()` builds an untracked-stock item, which is the common case. */
+const line = (id, unitPrice, quantity, stockLeft = null) =>
+  ({ id, name: 'P' + id, unitPrice, quantity, stockLeft });
+
+const NOW = Date.parse('2026-08-19T12:00:00Z');
+const ev = (promos, items) =>
+  promotions.evaluate(promos.map(promotions.normalise), items, { now: NOW });
+
+test('a percent sale lowers the unit price and reports the saving', () => {
+  const r = ev([{ name: '20% off', type: 'sale', productIds: [7], mode: 'percent', value: 20 }],
+    [line(7, 100, 2)]);
+  assert.strictEqual(r.items[0].unitPrice, 80);
+  assert.strictEqual(r.items[0].listUnitPrice, 100);
+  assert.strictEqual(r.items[0].lineTotal, 160);
+  assert.strictEqual(r.promos[0].saving, 40);
+});
+
+test('an amount sale takes dollars off, a fixed sale replaces the price', () => {
+  const amt = ev([{ name: '$15 off', type: 'sale', productIds: [7], mode: 'amount', value: 15 }],
+    [line(7, 100, 1)]);
+  assert.strictEqual(amt.items[0].unitPrice, 85);
+
+  const fixed = ev([{ name: 'Now $89', type: 'sale', productIds: [7], mode: 'fixed', value: 89 }],
+    [line(7, 100, 1)]);
+  assert.strictEqual(fixed.items[0].unitPrice, 89);
+});
+
+test('a fixed sale above the catalog price is ignored — the catalog moved, not the deal', () => {
+  const r = ev([{ name: 'Now $150', type: 'sale', productIds: [7], mode: 'fixed', value: 150 }],
+    [line(7, 100, 1)]);
+  assert.strictEqual(r.items[0].unitPrice, 100);
+  assert.deepStrictEqual(r.promos, []);
+});
+
+test('an empty productIds list means every product', () => {
+  const r = ev([{ name: 'Everything 10% off', type: 'sale', mode: 'percent', value: 10 }],
+    [line(7, 100, 1), line(8, 50, 1)]);
+  assert.strictEqual(r.items[0].unitPrice, 90);
+  assert.strictEqual(r.items[1].unitPrice, 45);
+});
+
+test('two sales on one product: only the bigger one applies, never both', () => {
+  const r = ev([
+    { name: 'Small', type: 'sale', productIds: [7], mode: 'percent', value: 10 },
+    { name: 'Big', type: 'sale', productIds: [7], mode: 'percent', value: 30 }
+  ], [line(7, 100, 1)]);
+  assert.strictEqual(r.items[0].unitPrice, 70);
+  assert.strictEqual(r.promos.length, 1);
+  assert.strictEqual(r.promos[0].name, 'Big');
+});
+
+test('a promotion outside its window does not apply', () => {
+  const r = ev([{
+    name: 'Ended', type: 'sale', productIds: [7], mode: 'percent', value: 50,
+    startsAt: '2026-08-01T00:00:00Z', endsAt: '2026-08-10T00:00:00Z'
+  }], [line(7, 100, 1)]);
+  assert.strictEqual(r.items[0].unitPrice, 100);
+  assert.deepStrictEqual(r.promos, []);
+});
+
+test('an untouched line still carries paidQuantity, so callers never branch', () => {
+  const r = ev([], [line(7, 100, 3)]);
+  assert.strictEqual(r.items[0].paidQuantity, 3);
+  assert.strictEqual(r.items[0].quantity, 3);
+  assert.strictEqual(r.items[0].lineTotal, 300);
+  assert.strictEqual(r.items[0].promoId, '');
+  assert.strictEqual(r.promoDiscount, 0);
+  assert.strictEqual(r.freeShipping, false);
+});
