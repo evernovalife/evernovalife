@@ -302,4 +302,11 @@ function evaluate(promos, items, opts) {
   };
 }
 
-module.exports = { listAll, listActive, isActive, normalise, upsert, remove, money, evaluate };
+/** The store-backed evaluator — what pricing.js calls. */
+function apply(items, opts) {
+  opts = opts || {};
+  const now = Number.isFinite(opts.now) ? opts.now : Date.now();
+  return evaluate(listActive(now), items, { now });
+}
+
+module.exports = { listAll, listActive, isActive, normalise, upsert, remove, money, evaluate, apply };

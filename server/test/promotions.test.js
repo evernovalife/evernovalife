@@ -142,3 +142,90 @@ test('an untouched line still carries paidQuantity, so callers never branch', ()
   assert.strictEqual(r.promoDiscount, 0);
   assert.strictEqual(r.freeShipping, false);
 });
+
+const BOGO = { name: 'Buy 1 get 1', badge: 'BUY 1 GET 1', type: 'bogo', productIds: [7], buyQty: 1, freeQty: 1 };
+
+test('buy 1 get 1 doubles the units shipped but not the units billed', () => {
+  const r = ev([BOGO], [line(7, 100, 2)]);
+  assert.strictEqual(r.items[0].quantity, 4);        // four vials leave the building
+  assert.strictEqual(r.items[0].paidQuantity, 2);    // two are charged for
+  assert.strictEqual(r.items[0].lineTotal, 200);
+  assert.strictEqual(r.promos[0].saving, 200);
+});
+
+test('buy 2 get 1 rounds down on a quantity that is not a multiple', () => {
+  const r = ev([{ name: 'B2G1', type: 'bogo', productIds: [7], buyQty: 2, freeQty: 1 }],
+    [line(7, 30, 5)]);
+  assert.strictEqual(r.items[0].quantity, 7);        // 5 paid + 2 free
+  assert.strictEqual(r.items[0].paidQuantity, 5);
+});
+
+test('bogo degrades to nothing when stock cannot cover the free units', () => {
+  // 2 wanted, only 2 on the shelf — there is no third vial to give away.
+  const r = ev([BOGO], [line(7, 100, 2, 2)]);
+  assert.strictEqual(r.items[0].quantity, 2);
+  assert.strictEqual(r.items[0].lineTotal, 200);
+  assert.deepStrictEqual(r.promos, []);
+});
+
+test('bogo gives away only as many free units as the shelf allows', () => {
+  // 2 wanted, 3 on the shelf — one free unit fits, the second does not.
+  const r = ev([BOGO], [line(7, 100, 2, 3)]);
+  assert.strictEqual(r.items[0].quantity, 3);
+  assert.strictEqual(r.items[0].paidQuantity, 2);
+  assert.strictEqual(r.promos[0].saving, 100);
+});
+
+test('sale and bogo on one product: the bigger saving wins, and only one is recorded', () => {
+  // bogo saves $100 (one free unit); the 20% sale saves $20 on one unit.
+  const r = ev([BOGO, { name: '20% off', type: 'sale', productIds: [7], mode: 'percent', value: 20 }],
+    [line(7, 100, 1)]);
+  assert.strictEqual(r.items[0].unitPrice, 100);
+  assert.strictEqual(r.items[0].quantity, 2);
+  assert.strictEqual(r.promos.length, 1);
+  assert.strictEqual(r.promos[0].type, 'bogo');
+});
+
+test('a cart promo applies only once its minimum is covered', () => {
+  const promo = { name: '10% over $200', type: 'cart', mode: 'percent', value: 10, minSubtotal: 200 };
+  assert.strictEqual(ev([promo], [line(7, 100, 1)]).promoDiscount, 0);
+  assert.strictEqual(ev([promo], [line(7, 100, 3)]).promoDiscount, 30);
+});
+
+test('the cart minimum is measured after line discounts, not on the list price', () => {
+  // $220 of goods, 20% off each line -> $176 subtotal, which misses a $200 minimum.
+  const r = ev([
+    { name: '20% off', type: 'sale', productIds: [7], mode: 'percent', value: 20 },
+    { name: '$25 over $200', type: 'cart', mode: 'amount', value: 25, minSubtotal: 200 }
+  ], [line(7, 110, 2)]);
+  assert.strictEqual(r.items[0].lineTotal, 176);
+  assert.strictEqual(r.promoDiscount, 0);
+});
+
+test('only the best cart promo applies', () => {
+  const r = ev([
+    { name: 'Five off', type: 'cart', mode: 'amount', value: 5 },
+    { name: 'Ten percent', type: 'cart', mode: 'percent', value: 10 }
+  ], [line(7, 100, 1)]);
+  assert.strictEqual(r.promoDiscount, 10);
+  assert.strictEqual(r.promos.length, 1);
+});
+
+test('a cart discount can never exceed the subtotal', () => {
+  const r = ev([{ name: 'Too much', type: 'cart', mode: 'amount', value: 500 }], [line(7, 100, 1)]);
+  assert.strictEqual(r.promoDiscount, 100);
+});
+
+test('a shipping promo raises the free-shipping flag', () => {
+  const r = ev([{ name: 'Free delivery week', type: 'shipping' }], [line(7, 100, 1)]);
+  assert.strictEqual(r.freeShipping, true);
+  assert.strictEqual(r.promos[0].type, 'shipping');
+});
+
+test('apply() reads live promotions from the store', () => {
+  const saved = promotions.upsert({ name: 'Store-wide 10', type: 'sale', mode: 'percent', value: 10 });
+  const r = promotions.apply([line(7, 100, 1)]);
+  assert.strictEqual(r.items[0].unitPrice, 90);
+  promotions.remove(saved.id);
+  assert.strictEqual(promotions.apply([line(7, 100, 1)]).items[0].unitPrice, 100);
+});
