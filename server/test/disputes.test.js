@@ -21,10 +21,14 @@ test.after(() => {
   try { fs.rmSync(TMP_DATA, { recursive: true, force: true }); } catch { /* ignore */ }
 });
 
+// Each call opens its own account, keyed off the order reference, so the
+// unrelated tests in this file don't pile up against the MAX_OPEN_PER_USER
+// cap on a single shared user — only the cap test means to hit that limit.
 function open(over = {}) {
+  const orderId = over.orderId || 'ENL-AAA';
   return disputes.create({
-    userId: 'u1',
-    orderId: 'ENL-AAA',
+    userId: 'u-' + orderId,
+    orderId,
     reason: 'damaged',
     body: 'One vial arrived cracked.',
     authorEmail: 'alice@example.com',
@@ -65,9 +69,13 @@ test('resolving records the outcome, the note and who did it', () => {
   assert.ok(done.resolvedAt);
 });
 
-test('an unknown outcome code is refused', () => {
+test('an unknown outcome code is refused, and the thread stays open', () => {
   const d = open({ orderId: 'ENL-BADO' });
-  assert.throws(() => disputes.resolve(d.id, { outcome: 'vibes', by: 'boss@evernovalife.com' }), /outcome/i);
+  assert.throws(() => disputes.resolve(d.id, { outcome: 'vibes', by: 'boss@evernovalife.com' }));
+  const after = disputes.get(d.id);
+  assert.equal(after.status, 'awaiting_us');
+  assert.equal(after.outcome, '');
+  assert.equal(after.resolvedAt, null);
 });
 
 test('a resolved thread refuses another message until it is reopened', () => {
@@ -78,7 +86,9 @@ test('a resolved thread refuses another message until it is reopened', () => {
     /resolved/i
   );
   const back = disputes.reopen(d.id, { by: 'boss@evernovalife.com' });
-  assert.equal(back.status, 'awaiting_customer');
+  // The store is who reopened it, and no reply has been sent since — so it
+  // is the store that owes the next word, not the customer.
+  assert.equal(back.status, 'awaiting_us');
   assert.equal(back.outcome, '');
   const after = disputes.addMessage(d.id, { from: 'customer', authorEmail: 'alice@example.com', body: 'One more thing' });
   assert.equal(after.status, 'awaiting_us');
