@@ -113,6 +113,44 @@ test('the free-shipping threshold is measured on the post-promotion subtotal', (
   assert.ok(discounted.shipping > 0, 'postage is charged once the paid subtotal falls short');
 });
 
+/* The same threshold, reached the other way. A CART promo doesn't touch any
+   line price — its saving lands in `promoDiscount`, an order-level figure
+   settled after the lines are summed. Reading the pre-`promoDiscount` subtotal
+   at the shipping call meant a 20%-off-cart deal shipped a $109.99 order free
+   while the store only took $87.99. Same rule as the sale case above: the
+   threshold is measured on what the store actually took. */
+test('a cart-wide promo that drops the subtotal under freeOver still pays postage', () => {
+  clearPromos();
+  const qty = Math.ceil(101 / SKU.price);            // enough to clear $100 at list price
+  const full = buildOrder([{ id: SKU.id, quantity: qty }]);
+  assert.ok(full.subtotal >= 100, 'the fixture must clear the threshold at list price');
+  assert.strictEqual(full.shipping, 0);
+
+  promotions.upsert({ name: '20% off the order', type: 'cart', mode: 'percent', value: 20, minSubtotal: 0 });
+  const discounted = buildOrder([{ id: SKU.id, quantity: qty }]);
+  clearPromos();
+
+  assert.strictEqual(discounted.subtotal, full.subtotal, 'a cart promo leaves the line prices alone');
+  assert.ok(discounted.promoDiscount > 0, 'the cart promo must have applied');
+  assert.ok(discounted.subtotal - discounted.promoDiscount < 100,
+    'the cart discount must drop the paid subtotal back under the threshold');
+  assert.ok(discounted.shipping > 0, 'postage is charged once the paid subtotal falls short');
+  assert.strictEqual(discounted.total,
+    promotions.money((discounted.subtotal - discounted.promoDiscount) * 1.08 + discounted.shipping));
+});
+
+/* Loyalty points are the customer spending a reward, not the store lowering
+   its price — so they must NOT be able to knock an order back under the
+   free-shipping threshold. This is the guard rail on the fix above. */
+test('loyalty points do not cost the buyer their free shipping', () => {
+  clearPromos();
+  const qty = Math.ceil(101 / SKU.price);
+  const order = buildOrder([{ id: SKU.id, quantity: qty }], { discount: 100 });
+  assert.ok(order.subtotal >= 100);
+  assert.ok(order.discount > 0, 'the points must have been redeemed');
+  assert.strictEqual(order.shipping, 0);
+});
+
 test('noPromos prices at catalog — this is what auto-ship invoices use', () => {
   clearPromos();
   promotions.upsert({ name: 'Half off', type: 'sale', productIds: [SKU.id], mode: 'percent', value: 50 });

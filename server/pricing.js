@@ -25,12 +25,25 @@ const money = n => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 /**
  * Build an authoritative order from a client-supplied cart.
  * @param {Array<{id:number|string, quantity:number|string}>} rawItems
- * @param {{ discount?: number }} [opts] optional order-level discount in DOLLARS
- *        (e.g. loyalty-points redemption). Always clamped to [0, subtotal] here,
- *        so the browser can never push the charge below zero or discount more
- *        than was actually purchased. Free-shipping is decided on the pre-discount
- *        subtotal (what was actually bought); the discount lowers the taxable base.
- * @returns {{ items, subtotal, discount, shipping, tax, total }}
+ * @param {{ discount?: number, shippingMethod?: string, noPromos?: boolean }} [opts]
+ *        `discount` is an order-level discount in DOLLARS (loyalty-points
+ *        redemption, and only that). Always clamped here to
+ *        [0, subtotal - promoDiscount], so the browser can never push the charge
+ *        below zero or redeem against money a promotion already took off.
+ *        `shippingMethod` picks WHICH service; its fee always comes from the
+ *        rate table, never from the browser.
+ *        `noPromos` skips the promotion engine entirely and prices at catalog —
+ *        auto-ship invoices use it, so a ten-day sale can't follow a repeating
+ *        plan around for its lifetime.
+ *
+ *        Free shipping is decided on the POST-PROMOTION subtotal — after both
+ *        the per-line promo prices and the cart-wide `promoDiscount`, i.e. what
+ *        the store actually took. A $110 cart discounted to $88 does not clear a
+ *        $100 `freeOver`. The loyalty `discount` is NOT part of that test: points
+ *        are the customer spending a reward, not the store lowering its price,
+ *        and they only lower the taxable base.
+ * @returns {{ items, subtotal, promoDiscount, promos, discount, shipping,
+ *             shippingMethod, shippingLabel, tax, total }}
  * @throws  {Error} if the cart is empty or contains unknown / invalid items
  */
 function buildOrder(rawItems, opts = {}) {
@@ -88,6 +101,15 @@ function buildOrder(rawItems, opts = {}) {
   const priced = promo.items.map(({ stockLeft, ...line }) => line);   // stockLeft was input-only
   const subtotal = money(priced.reduce((sum, i) => sum + i.lineTotal, 0));
 
+  /* Two discounts, kept apart on purpose. `promoDiscount` is the shop's own
+     cart-wide deal; `discount` is loyalty points and keeps the meaning every
+     existing caller already reads. Points can only be spent against what the
+     promotion left behind.
+
+     `promoDiscount` is settled BEFORE shipping because the free-shipping
+     threshold is tested against it — see below. */
+  const promoDiscount = money(Math.max(0, Math.min(promo.promoDiscount, subtotal)));
+
   /* The browser sends a shipping METHOD, never a fee. The rate table decides
      what that method costs and whether this subtotal clears its free-shipping
      threshold, so a tampered client can at worst pick a cheaper service that
@@ -95,20 +117,23 @@ function buildOrder(rawItems, opts = {}) {
      cheapest enabled method rather than failing the checkout.
 
      The threshold is measured on the POST-promotion subtotal — what the store
-     actually took, not what the goods list for.
+     actually took, not what the goods list for. That means BOTH kinds of promo:
+     `subtotal` is already at per-line promo prices, and `promoDiscount` (the
+     cart-wide deal) comes off before the figure is handed to the rate table.
+     Reading the pre-`promoDiscount` subtotal here used to let a 20%-off-cart
+     promo carry a $109.99 order over a $100 `freeOver` while the store only
+     took $87.99.
+
+     Loyalty points are deliberately NOT subtracted: they are the customer
+     spending a reward, not the store discounting the goods.
 
      A shipping promo zeroes the FEE only — the chosen service is still the
      one the buyer picked, and `shippingMethod`/`shippingLabel` are what the
      order record and the parcel label print, so "Overnight" must not become
      a fabricated "Free shipping" line. */
-  const base = resolveShipping(opts.shippingMethod, subtotal);
+  const base = resolveShipping(opts.shippingMethod, money(subtotal - promoDiscount));
   const ship = promo.freeShipping ? { ...base, fee: 0 } : base;
 
-  /* Two discounts, kept apart on purpose. `promoDiscount` is the shop's own
-     cart-wide deal; `discount` is loyalty points and keeps the meaning every
-     existing caller already reads. Points can only be spent against what the
-     promotion left behind. */
-  const promoDiscount = money(Math.max(0, Math.min(promo.promoDiscount, subtotal)));
   const discount = money(Math.max(0, Math.min(Number(opts.discount) || 0, subtotal - promoDiscount)));
   const taxable = money(subtotal - promoDiscount - discount);
   const tax = money(taxable * TAX_RATE);

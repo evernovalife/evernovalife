@@ -1854,13 +1854,20 @@ function renderOrderSummary(el, withCheckoutBtn) {
   const deal = window.Promos ? window.Promos.cartPromo(cart.getSubtotal()) : null;
   const freeShip = window.Promos && window.Promos.freeShipping();
   const shipCost = freeShip ? 0 : ship;
-  const total = cart.getSubtotal() - (deal ? deal.saving : 0) + shipCost + cart.getTax();
+  /* Tax follows the same base the server uses: a cart-wide promo comes off
+     BEFORE tax (pricing.js taxes `subtotal - promoDiscount - discount`).
+     cart.getTax() taxes the list subtotal, so using it here printed a total
+     $3.20 above the invoice on a $200 cart with 20% off — and made the rows
+     stop summing to the total. */
+  const taxable = Math.max(0, cart.getSubtotal() - (deal ? deal.saving : 0));
+  const tax = round2(taxable * TAX_RATE);
+  const total = round2(taxable + shipCost + tax);
   el.innerHTML = `
     <h3>Order Summary</h3>
     <div class="summary-row"><span>Subtotal (${cart.getItemCount()} items)</span><span>${formatPrice(cart.getSubtotal())}</span></div>
     ${deal ? `<div class="summary-row discount"><span>${escapeHtml(deal.name)}</span><span>−${formatPrice(deal.saving)}</span></div>` : ''}
     <div class="summary-row"><span>Shipping</span><span>${shipCost === 0 ? 'FREE' : formatPrice(shipCost)}</span></div>
-    <div class="summary-row"><span>Tax (${taxRateLabel()})</span><span>${formatPrice(cart.getTax())}</span></div>
+    <div class="summary-row"><span>Tax (${taxRateLabel()})</span><span>${formatPrice(tax)}</span></div>
     <div class="summary-row total"><span>Total</span><span>${formatPrice(total)}</span></div>
     ${freeShip
       ? `<p class="summary-note"><span class="summary-note-ic">${iconTruckLine()}</span>Free shipping on every order right now</p>`
@@ -2134,7 +2141,12 @@ function renderShippingOptions(el) {
   if (!rates || rates.length < 2) { el.innerHTML = ''; el.hidden = true; return; }
   el.hidden = false;
   const chosen = enlShipChoice();
-  const subtotal = cart.getSubtotal();
+  /* The server tests `freeOver` against the POST-promotion subtotal (see
+     pricing.js), so a cart-wide deal has to come off here too — otherwise this
+     picker advertises FREE on a method the quote then charges for. Display
+     only: the radio sends a method id, never a price. */
+  const shipDeal = window.Promos ? window.Promos.cartPromo(cart.getSubtotal()) : null;
+  const subtotal = Math.max(0, cart.getSubtotal() - (shipDeal ? shipDeal.saving : 0));
 
   /* No step number on this heading: the section is hidden when there is only
      one service, and a numbered step that vanishes leaves a gap in the count. */

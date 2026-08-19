@@ -488,9 +488,27 @@ app.delete('/api/subscriptions/:id', auth.requireAuth, (req, res) => {
 
 /* Cart-shaped items for a plan, taken from an order priced by pricing.js.
    Only id + quantity are ever authoritative; name/price ride along so the
-   account page can show something without a catalog lookup. */
+   account page can show something without a catalog lookup.
+
+   A subscription item is a FUTURE CART LINE, not a shipment line — which makes
+   this the one place outside the pricing path that has to read `paidQuantity`.
+   A promoted order carries `quantity` = paid + free and `unitPrice` = the sale
+   price, so mapping those straight through would bake this week's deal into a
+   plan for the life of the plan: a "Buy 1 Get 1" order that opts into auto-ship
+   would store quantity 2 and then be invoiced for 2 vials at catalog price
+   every month (auto-ship re-prices with `noPromos`, so the free unit never
+   comes back). Store what the customer actually signed up to buy — the BILLED
+   quantity at the CATALOG price — and let each invoice price it fresh.
+
+   The `!= null` fallbacks matter: plans created before promotions existed, and
+   orders priced with `noPromos`, have neither field. */
 function orderToSubscriptionItems(order) {
-  return order.items.map(i => ({ id: i.id, name: i.name, price: i.unitPrice, quantity: i.quantity }));
+  return order.items.map(i => ({
+    id: i.id,
+    name: i.name,
+    price: i.listUnitPrice != null ? i.listUnitPrice : i.unitPrice,
+    quantity: i.paidQuantity != null ? i.paidQuantity : i.quantity
+  }));
 }
 
 /* ============================================================

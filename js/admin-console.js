@@ -830,11 +830,18 @@
   function promoRule(p) {
     if (p.type === 'shipping') return 'Free shipping on every order';
     if (p.type === 'bogo') return 'Buy ' + p.buyQty + ', get ' + p.freeQty + ' free';
-    var off = p.mode === 'percent' ? p.value + '% off'
+    if (p.type === 'cart') {
+      /* No `fixed` arm here. The engine's cart phase (server/promotions.js) has
+         only a percent branch and an else that means "$ off" — there is no
+         "set the order total to $N" rule to describe. The form no longer offers
+         it; an older row that stored `fixed` is described the way it is
+         actually priced, so this line can't contradict the invoice. */
+      var cut = p.mode === 'percent' ? p.value + '% off' : money(p.value) + ' off';
+      return cut + ' the order' + (p.minSubtotal > 0 ? ' over ' + money(p.minSubtotal) : '');
+    }
+    return p.mode === 'percent' ? p.value + '% off'
       : p.mode === 'amount' ? money(p.value) + ' off'
       : 'price set to ' + money(p.value);
-    if (p.type === 'cart') return off + ' the order' + (p.minSubtotal > 0 ? ' over ' + money(p.minSubtotal) : '');
-    return off;
   }
 
   function promoScope(p) {
@@ -966,10 +973,26 @@
           }).join('') +
         '</select></div>' +
 
-      '<div class="form-field promo-if-sale promo-if-cart"><label for="' + pre + 'mode">Discount</label>' +
+      /* TWO mode selects, one per type, each carrying a single promo-if- class
+         so syncPromoFields shows exactly one of them. They are NOT the same
+         list: `set the price to` is a per-product rule, and the engine's cart
+         phase has no `fixed` branch — offering it there let an owner ask for
+         "cart total → $50" and silently get "$50 off". Distinct ids, because a
+         duplicate id would make savePromo read whichever one the DOM happened
+         to hand back. */
+      '<div class="form-field promo-if-sale"><label for="' + pre + 'mode">Discount</label>' +
         '<select id="' + pre + 'mode">' +
           [['percent', '% off'], ['amount', '$ off'], ['fixed', 'set the price to']].map(function (m) {
             return '<option value="' + m[0] + '"' + (p.mode === m[0] ? ' selected' : '') + '>' + esc(m[1]) + '</option>';
+          }).join('') +
+        '</select></div>' +
+      '<div class="form-field promo-if-cart"><label for="' + pre + 'cartmode">Discount</label>' +
+        '<select id="' + pre + 'cartmode">' +
+          [['percent', '% off'], ['amount', '$ off']].map(function (m) {
+            /* A legacy row stored as `fixed` lands on `$ off`, which is what the
+               engine was charging for it anyway. */
+            return '<option value="' + m[0] + '"' +
+              ((p.mode === 'percent' ? 'percent' : 'amount') === m[0] ? ' selected' : '') + '>' + esc(m[1]) + '</option>';
           }).join('') +
         '</select></div>' +
       '<div class="form-field promo-if-sale promo-if-cart"><label for="' + pre + 'value">Amount</label>' +
@@ -1024,13 +1047,18 @@
       .filter(function (c) { return c.checked; })
       .map(function (c) { return Number(c.value); });
 
+    /* The form carries a mode select per type; read the one belonging to the
+       type actually chosen, so a cart promo can never be saved as `fixed`. */
+    var type = val('type');
+    var mode = type === 'cart' ? val('cartmode') : val('mode');
+
     var payload = {
       id: id || '',
       name: val('name'),
       badge: val('badge'),
-      type: val('type'),
+      type: type,
       productIds: skus,
-      mode: val('mode'),
+      mode: mode,
       value: Number(val('value')) || 0,
       buyQty: Number(val('buy')) || 1,
       freeQty: Number(val('free')) || 0,
