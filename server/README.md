@@ -544,6 +544,29 @@ printer, so what you see is what comes out.
   put it on the box alongside this one.
 - Covered by `test/label-design.test.js`.
 
+## Promotions
+
+Scheduled deals, stored in `promotions.json` on `DATA_DIR` and managed at
+`admin.html#promos`. Four types: a **sale** price on a product for a date
+range, **bogo** (buy X get Y — the free units ship free and come off stock),
+a **cart** discount over a minimum subtotal, and free **shipping**.
+
+`pricing.js` applies them inside `buildOrder()`, so every payment path is
+covered by one call and none of them needs to know promotions exist. The
+rules: the single best sale-or-bogo per line (they never stack), plus at most
+one cart-wide promo, plus free shipping. `order.promoDiscount` holds the
+cart-level saving and `order.promos` records what applied;
+`order.discount` still means loyalty points only.
+
+Two things deliberately opt out. **Auto-ship** invoices pass
+`{ noPromos: true }` and always bill at catalog price — a ten-day sale must
+not follow a subscriber around for the life of their plan. And a **bogo
+degrades** rather than failing when `stockQty` cannot cover the free unit:
+the customer is charged normally instead of being refused at checkout.
+
+`GET /api/promotions` is public but returns only what is running — a campaign
+scheduled for Friday is not readable on Tuesday.
+
 ## Notes & next steps
 
 - **Pricing source of truth:** `pricing.js` + `../js/products-data.js`. Update
