@@ -57,6 +57,7 @@
     hooks: null,          // BTCPay webhook wiring, loaded alongside btcpay
     health: null,         // /api/health — which services the backend actually has
     rates: null,          // shipping methods (what checkout charges for delivery)
+    promos: null,         // promotions (what the shop is discounting right now)
     design: null,         // the shipping-label design (admin-only read)
     previewId: '',        // which order the label designer is previewing
     range: 30,            // days; 0 = all time
@@ -83,7 +84,8 @@
       A.api('/api/products'),
       A.api('/api/health'),
       A.api('/api/shipping'),
-      A.api('/api/admin/label-design')
+      A.api('/api/admin/label-design'),
+      A.api('/api/admin/promotions')
     ]);
     state.loading = false;
 
@@ -106,6 +108,7 @@
     state.health = results[4].status === 'fulfilled' ? results[4].value : (state.health || null);
     state.rates = results[5].status === 'fulfilled' ? (results[5].value.methods || []) : (state.rates || null);
     state.design = results[6].status === 'fulfilled' ? (results[6].value.design || null) : (state.design || null);
+    state.promos = results[7].status === 'fulfilled' ? (results[7].value.promotions || []) : (state.promos || null);
 
     results.forEach(function (r, i) {
       if (r.status === 'rejected' && r.reason.status !== 0) {
@@ -117,8 +120,10 @@
         // Same for the label design — an older backend simply has no designer,
         // and the view explains that rather than shouting about it.
         if (i === 6 && r.reason.status === 404) return;
+        // Promotions: a 404 means the backend predates them; the view says so.
+        if (i === 7 && r.reason.status === 404) return;
         A.toast(['Orders', 'Users', 'Auto-ship plans', 'Products', 'Health', 'Shipping rates',
-          'Label design'][i] + ': ' + r.reason.message, 'error');
+          'Label design', 'Promotions'][i] + ': ' + r.reason.message, 'error');
       }
     });
 
@@ -329,6 +334,7 @@
     orders: ['Orders', 'Every order, and the ones waiting on money'],
     ship: ['To ship', 'Paid orders waiting to go out, with everything you need to pack them'],
     rates: ['Shipping rates', 'What checkout charges for delivery — edit it here, it applies immediately'],
+    promos: ['Promotions', 'Deals the shop is running — they apply to the next checkout immediately'],
     labeldesign: ['Label designer', 'Design the parcel label once — every order fills in its own name and address'],
     btcpay: ['BTCPay', 'What the payment server says, next to what we recorded'],
     autoship: ['Auto-Ship', 'Repeating orders and their next invoice'],
@@ -356,6 +362,7 @@
     if (state.view === 'orders') renderOrders();
     else if (state.view === 'ship') renderShip();
     else if (state.view === 'rates') renderRates();
+    else if (state.view === 'promos') renderPromos();
     else if (state.view === 'labeldesign') renderLabelDesign();
     else if (state.view === 'btcpay') renderBtcpay();
     else if (state.view === 'autoship') renderAutoship();
@@ -789,6 +796,271 @@
       A.toast(name + ' deleted.', 'success');
       render();
     } catch (e) { A.toast(e.message, 'error'); btn.disabled = false; }
+  }
+
+  /* ============================================================
+     PROMOTIONS
+     Scheduled deals, as editable data. Saving here changes what the
+     NEXT customer is charged — pricing.js reads the same list, so
+     there is nothing to deploy and nothing to keep in step by hand.
+
+     Three tabs off one array: what is running, what is waiting for
+     its start date, and what is over. An expired promotion is kept
+     rather than deleted, because "run last month's deal again" is
+     the most common next thing anyone wants.
+     ============================================================ */
+  var PROMO_TYPES = [
+    ['sale', 'Sale price', 'A product costs less for a while'],
+    ['bogo', 'Buy X get Y', 'Buy 1 get 1, buy 2 get 1 — the free units ship free'],
+    ['cart', 'Cart discount', 'Money off the whole order over a minimum'],
+    ['shipping', 'Free shipping', 'Delivery is free while this runs']
+  ];
+  var promoTab = 'live';
+
+  function promoState(p) {
+    var now = Date.now();
+    if (p.enabled === false) return 'off';
+    if (p.startsAt && Date.parse(p.startsAt) > now) return 'scheduled';
+    if (p.endsAt && Date.parse(p.endsAt) <= now) return 'expired';
+    return 'live';
+  }
+
+  /* What this promotion actually does, in one line, so the table can be read
+     without opening every row. */
+  function promoRule(p) {
+    if (p.type === 'shipping') return 'Free shipping on every order';
+    if (p.type === 'bogo') return 'Buy ' + p.buyQty + ', get ' + p.freeQty + ' free';
+    var off = p.mode === 'percent' ? p.value + '% off'
+      : p.mode === 'amount' ? money(p.value) + ' off'
+      : 'price set to ' + money(p.value);
+    if (p.type === 'cart') return off + ' the order' + (p.minSubtotal > 0 ? ' over ' + money(p.minSubtotal) : '');
+    return off;
+  }
+
+  function promoScope(p) {
+    if (p.type === 'cart' || p.type === 'shipping') return 'Whole order';
+    if (!p.productIds || !p.productIds.length) return 'Every product';
+    var names = p.productIds.map(function (id) {
+      var hit = (state.products || []).find(function (pr) { return Number(pr.id) === Number(id); });
+      return hit ? hit.name : '#' + id;
+    });
+    return names.join(', ');
+  }
+
+  function promoWindow(p) {
+    if (!p.startsAt && !p.endsAt) return 'No end date';
+    var from = p.startsAt ? A.date(p.startsAt) : 'now';
+    var to = p.endsAt ? A.date(p.endsAt) : 'no end';
+    return from + ' → ' + to;
+  }
+
+  function renderPromos() {
+    var promos = state.promos;
+
+    if (!promos) {
+      body.innerHTML = '<div class="adm-card">' +
+        '<div class="adm-card-head"><h3>Promotions are not available</h3></div>' +
+        '<p class="adm-note" style="margin:0">This backend does not have promotions yet — deploy the ' +
+        'current <code>server/</code> to Render. Until then every order is charged at catalog price.</p></div>';
+      return;
+    }
+
+    var groups = { live: [], scheduled: [], expired: [], off: [] };
+    promos.forEach(function (p) { groups[promoState(p)].push(p); });
+    // The off-switch list belongs with whatever else isn't charging anyone.
+    groups.expired = groups.expired.concat(groups.off);
+
+    var shown = groups[promoTab] || [];
+
+    body.innerHTML =
+      '<div class="adm-card">' +
+        '<div class="adm-card-head"><h3>Deals</h3>' +
+          '<span class="hint">saving one changes what the next customer pays</span></div>' +
+        '<div class="seg" id="promoTabs" role="group" aria-label="Promotion state">' +
+          [['live', 'Live', groups.live.length],
+           ['scheduled', 'Scheduled', groups.scheduled.length],
+           ['expired', 'Finished', groups.expired.length]].map(function (t) {
+            return '<button type="button" data-ptab="' + t[0] + '" aria-pressed="' + (promoTab === t[0]) + '">' +
+              t[1] + ' (' + t[2] + ')</button>';
+          }).join('') +
+        '</div>' +
+        (shown.length
+          ? '<div class="adm-table-wrap"><table class="adm-table"><thead><tr>' +
+              '<th>Promotion</th><th>What it does</th><th>Applies to</th><th>When</th><th></th>' +
+            '</tr></thead><tbody>' + shown.map(promoRow).join('') + '</tbody></table></div>'
+          : '<p class="adm-note" style="margin:0">Nothing here yet.</p>') +
+      '</div>' +
+
+      '<div class="adm-card">' +
+        '<div class="adm-card-head"><h3>Create a promotion</h3>' +
+          '<span class="hint">e.g. buy 1 get 1, or 20% off for ten days</span></div>' +
+        promoForm('new', { id: '', name: '', badge: '', type: 'sale', productIds: [], mode: 'percent',
+                           value: '', buyQty: 1, freeQty: 1, minSubtotal: 0,
+                           startsAt: '', endsAt: '', enabled: true, sort: 50 }) +
+      '</div>' +
+
+      '<p class="adm-note">Only the <strong>best</strong> deal applies to any one product — a sale and a ' +
+        'buy-one-get-one on the same product will not stack, the customer gets whichever is worth more. ' +
+        'One cart-wide discount applies on top of that. Repeating <a href="admin.html#autoship">auto-ship</a> ' +
+        'invoices are always charged at catalog price.</p>';
+
+    body.querySelectorAll('.promo-form').forEach(syncPromoFields);
+  }
+
+  function promoRow(p) {
+    var st = promoState(p);
+    var pill = st === 'live' ? 'paid' : st === 'scheduled' ? 'pending' : 'cancelled';
+    return '<tr>' +
+      '<td><strong>' + esc(p.name) + '</strong>' +
+        (p.badge ? ' <span class="pill ' + pill + '">' + esc(p.badge) + '</span>' : '') +
+        '<span class="muted">' + esc(p.id) + '</span></td>' +
+      '<td>' + esc(promoRule(p)) + '</td>' +
+      '<td>' + esc(promoScope(p)) + '</td>' +
+      '<td>' + esc(promoWindow(p)) + (p.enabled === false ? ' <span class="muted">(switched off)</span>' : '') + '</td>' +
+      '<td class="actions">' +
+        '<button class="btn btn-ghost btn-sm act-promo-edit" data-id="' + esc(p.id) + '">Edit</button> ' +
+        '<button class="btn btn-ghost btn-sm act-promo-del" data-id="' + esc(p.id) +
+          '" data-name="' + esc(p.name) + '">Delete</button>' +
+      '</td>' +
+    '</tr>' +
+    '<tr class="promo-edit-row" id="promo-edit-' + esc(p.id) + '" hidden>' +
+      '<td colspan="5">' + promoForm(p.id, p) + '</td>' +
+    '</tr>';
+  }
+
+  /* A datetime-local input wants 'YYYY-MM-DDTHH:mm' in LOCAL time; the store
+     holds UTC ISO. Convert both ways or the owner sets a start date and the
+     form shows a different one back. */
+  function toLocalInput(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    var pad = function (n) { return String(n).padStart(2, '0'); };
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+      'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
+  function fromLocalInput(v) {
+    if (!v) return null;
+    var t = Date.parse(v);
+    return Number.isFinite(t) ? new Date(t).toISOString() : null;
+  }
+
+  function promoForm(key, p) {
+    var pre = 'promo-' + key + '-';
+    var ids = (p.productIds || []).join(',');
+    var opts = (state.products || []).map(function (pr) {
+      return '<label class="form-check"><input type="checkbox" class="' + pre + 'sku" value="' + esc(pr.id) + '"' +
+        ((p.productIds || []).map(Number).indexOf(Number(pr.id)) !== -1 ? ' checked' : '') + '> ' +
+        esc(pr.name) + '</label>';
+    }).join('');
+
+    return '<div class="promo-form" data-key="' + esc(key) + '">' +
+      '<div class="form-field"><label for="' + pre + 'name">Name</label>' +
+        '<input id="' + pre + 'name" type="text" value="' + esc(p.name || '') + '" placeholder="Retatrutide — Buy 1 Get 1"></div>' +
+      '<div class="form-field"><label for="' + pre + 'badge">Badge on the shop</label>' +
+        '<input id="' + pre + 'badge" type="text" maxlength="16" value="' + esc(p.badge || '') + '" placeholder="BUY 1 GET 1"></div>' +
+      '<div class="form-field"><label for="' + pre + 'type">Type</label>' +
+        '<select id="' + pre + 'type" class="promo-type">' +
+          PROMO_TYPES.map(function (t) {
+            return '<option value="' + t[0] + '"' + (p.type === t[0] ? ' selected' : '') + '>' + esc(t[1]) + '</option>';
+          }).join('') +
+        '</select></div>' +
+
+      '<div class="form-field promo-if-sale promo-if-cart"><label for="' + pre + 'mode">Discount</label>' +
+        '<select id="' + pre + 'mode">' +
+          [['percent', '% off'], ['amount', '$ off'], ['fixed', 'set the price to']].map(function (m) {
+            return '<option value="' + m[0] + '"' + (p.mode === m[0] ? ' selected' : '') + '>' + esc(m[1]) + '</option>';
+          }).join('') +
+        '</select></div>' +
+      '<div class="form-field promo-if-sale promo-if-cart"><label for="' + pre + 'value">Amount</label>' +
+        '<input id="' + pre + 'value" type="number" min="0" step="0.01" value="' + esc(p.value === '' ? '' : p.value) + '" placeholder="20"></div>' +
+
+      '<div class="form-field promo-if-bogo"><label for="' + pre + 'buy">Buy</label>' +
+        '<input id="' + pre + 'buy" type="number" min="1" step="1" value="' + esc(p.buyQty || 1) + '"></div>' +
+      '<div class="form-field promo-if-bogo"><label for="' + pre + 'free">Get free</label>' +
+        '<input id="' + pre + 'free" type="number" min="0" step="1" value="' + esc(p.freeQty == null ? 1 : p.freeQty) + '"></div>' +
+
+      '<div class="form-field promo-if-cart"><label for="' + pre + 'min">Order must be over ($)</label>' +
+        '<input id="' + pre + 'min" type="number" min="0" step="1" value="' + esc(p.minSubtotal || 0) + '"></div>' +
+
+      '<div class="form-field"><label for="' + pre + 'starts">Starts</label>' +
+        '<input id="' + pre + 'starts" type="datetime-local" value="' + esc(toLocalInput(p.startsAt)) + '"></div>' +
+      '<div class="form-field"><label for="' + pre + 'ends">Ends</label>' +
+        '<input id="' + pre + 'ends" type="datetime-local" value="' + esc(toLocalInput(p.endsAt)) + '"></div>' +
+
+      '<div class="form-field promo-if-sale promo-if-bogo promo-skus"><label>Products <span class="hint">none ticked = every product</span></label>' +
+        '<div class="promo-sku-list" data-ids="' + esc(ids) + '">' + (opts || '<span class="muted">No products loaded</span>') + '</div></div>' +
+
+      '<label class="form-check"><input id="' + pre + 'enabled" type="checkbox" ' +
+        (p.enabled !== false ? 'checked' : '') + '> Running (untick to switch it off without deleting it)</label>' +
+      '<button class="btn btn-primary act-promo-save" data-key="' + esc(key) + '" data-id="' + esc(p.id || '') + '">' +
+        (key === 'new' ? 'Create promotion' : 'Save') + '</button>' +
+    '</div>';
+  }
+
+  function togglePromoEdit(id) {
+    var row = document.getElementById('promo-edit-' + id);
+    if (row) row.hidden = !row.hidden;
+  }
+
+  /* Only show the fields the chosen type actually uses — a bogo has no
+     percentage and a free-shipping promo has neither. */
+  function syncPromoFields(form) {
+    var sel = form.querySelector('.promo-type');
+    if (!sel) return;
+    var type = sel.value;
+    form.querySelectorAll('[class*="promo-if-"]').forEach(function (el) {
+      el.hidden = !el.classList.contains('promo-if-' + type);
+    });
+  }
+
+  async function savePromo(key, id, btn) {
+    var pre = 'promo-' + key + '-';
+    var val = function (s) { var el = document.getElementById(pre + s); return el ? el.value : ''; };
+    var checked = function (s) { var el = document.getElementById(pre + s); return !!(el && el.checked); };
+    var skus = Array.prototype.slice.call(document.querySelectorAll('.' + pre + 'sku'))
+      .filter(function (c) { return c.checked; })
+      .map(function (c) { return Number(c.value); });
+
+    var payload = {
+      id: id || '',
+      name: val('name'),
+      badge: val('badge'),
+      type: val('type'),
+      productIds: skus,
+      mode: val('mode'),
+      value: Number(val('value')) || 0,
+      buyQty: Number(val('buy')) || 1,
+      freeQty: Number(val('free')) || 0,
+      minSubtotal: Number(val('min')) || 0,
+      startsAt: fromLocalInput(val('starts')),
+      endsAt: fromLocalInput(val('ends')),
+      enabled: checked('enabled')
+    };
+
+    btn.disabled = true;
+    try {
+      var out = await A.api('/api/admin/promotions', { method: 'POST', body: payload });
+      state.promos = out.promotions || [];
+      A.toast('Saved — it applies to the next checkout', 'ok');
+      render();
+    } catch (e) {
+      A.toast(e.message, 'error');
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function deletePromo(id, name) {
+    if (!confirm('Delete "' + name + '"? Orders already placed keep the price they were charged.')) return;
+    try {
+      var out = await A.api('/api/admin/promotions/' + encodeURIComponent(id), { method: 'DELETE' });
+      state.promos = out.promotions || [];
+      A.toast('Deleted', 'ok');
+      render();
+    } catch (e) {
+      A.toast(e.message, 'error');
+    }
   }
 
   /* ============================================================
@@ -2144,6 +2416,10 @@
       else if (t.classList.contains('act-rate-edit')) toggleRateEdit(t.getAttribute('data-id'));
       else if (t.classList.contains('act-rate-save')) saveRate(t.getAttribute('data-key'), t.getAttribute('data-id'), t);
       else if (t.classList.contains('act-rate-del')) deleteRate(t.getAttribute('data-id'), t.getAttribute('data-name'), t);
+      else if (t.classList.contains('act-promo-save')) savePromo(t.getAttribute('data-key'), t.getAttribute('data-id'), t);
+      else if (t.classList.contains('act-promo-edit')) togglePromoEdit(t.getAttribute('data-id'));
+      else if (t.classList.contains('act-promo-del')) deletePromo(t.getAttribute('data-id'), t.getAttribute('data-name'));
+      else if (t.hasAttribute('data-ptab')) { promoTab = t.getAttribute('data-ptab'); render(); }
       else if (t.classList.contains('act-slip')) packingSlip(t.getAttribute('data-id'));
       else if (t.classList.contains('act-label')) {
         printOrderLabels((state.orders || []).filter(function (o) { return o.orderId === t.getAttribute('data-id'); }));
@@ -2173,6 +2449,8 @@
 
     document.addEventListener('change', function (e) {
       var t = e.target;
+      var typeSel = e.target.closest('.promo-type');
+      if (typeSel) { syncPromoFields(typeSel.closest('.promo-form')); return; }
       if (state.view !== 'labeldesign' || !t || !t.id) return;
       if (t.id === 'ld-preview-order') { state.previewId = t.value; updateLabelPreview(); return; }
       if (t.id.indexOf('ld-') !== 0) return;
