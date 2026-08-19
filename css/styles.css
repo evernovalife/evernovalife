@@ -2729,65 +2729,68 @@ body.pd-modal-open { overflow: hidden; }
 /* ---- promotions ----
    The deal's own chip, distinct from .product-badge (which says
    "Best Seller" and belongs to the product, not the campaign). */
-/* ---- promo banner ----
-   A slim bar above the site header on every storefront page. It sits in
-   normal flow and scrolls away: the header is already sticky and the age
-   gate already overlays, and a third element fighting for the top of the
-   screen makes the first paint feel like a pop-up.
+/* ---- promo card ----
+   A floating card in the bottom-left corner of every storefront page,
+   announcing whatever deals are running. Fixed rather than in flow, so it
+   stays on screen as the buyer scrolls; bottom-LEFT because .toast already
+   owns bottom-right and the two must never stack on each other.
 
-   The motion is a 3s sweep of light across the bar — never a blink.
-   Anything flashing more than three times a second is a seizure risk
-   (WCAG 2.3.1), and a blinking bar reads as a scam storefront. */
-.promo-bar {
-  position: relative;
+   It flashes, on request. The rate is deliberately ~1.25 Hz: WCAG 2.3.1
+   draws its seizure-risk line at three flashes per second, so this blinks
+   visibly while staying well under it. Under prefers-reduced-motion the
+   flashing stops entirely and the same words stay on screen.
+*/
+.promo-card {
+  position: fixed;
+  left: 1.25rem;
+  bottom: 1.25rem;
+  z-index: 900;                     /* over the page, under .toast (999) */
+  width: min(340px, calc(100vw - 2.5rem));
   display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 1.25rem;
-  background: linear-gradient(90deg, #120a22 0%, #1d1233 50%, #120a22 100%);
-  border-bottom: 1px solid rgba(212, 175, 55, 0.28);
-  overflow: hidden;
-  z-index: 2;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.85rem 0.9rem 0.85rem 1rem;
+  border-radius: 14px;
+  background: linear-gradient(140deg, #1d1233 0%, #120a22 100%);
+  border: 2px solid rgba(212, 175, 55, 0.85);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.55), 0 0 22px rgba(212, 175, 55, 0.35);
+  /* Off-screen until .is-in, so it arrives rather than appearing mid-paint. */
+  transform: translateY(140%);
+  opacity: 0;
+  transition: transform 0.42s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.3s ease;
 }
-/* The sweep is a pseudo-element so it can travel the full width without
-   moving the text or triggering layout — transform only, GPU-cheap. */
-.promo-bar::after {
-  content: '';
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 45%;
-  pointer-events: none;
-  background: linear-gradient(100deg, transparent 0%, rgba(245, 217, 130, 0.14) 50%, transparent 100%);
-  transform: translateX(-120%);
-  animation: promoSweep 3.2s var(--ease, ease) infinite;
-}
-@keyframes promoSweep {
-  0%   { transform: translateX(-120%); }
-  60%  { transform: translateX(340%); }
-  100% { transform: translateX(340%); }
+.promo-card.is-in {
+  transform: translateY(0);
+  opacity: 1;
+  animation: promoFlash 0.8s steps(1, end) infinite;
 }
 
-.promo-bar-track {
+/* The flash itself: border and glow snap between bright and dim once per
+   0.8s. `steps(1)` makes it a real blink rather than a fade. */
+@keyframes promoFlash {
+  0%, 49%   { border-color: rgba(212, 175, 55, 0.85);
+              box-shadow: 0 18px 40px rgba(0, 0, 0, 0.55), 0 0 22px rgba(212, 175, 55, 0.35); }
+  50%, 100% { border-color: rgba(245, 217, 130, 1);
+              box-shadow: 0 18px 40px rgba(0, 0, 0, 0.55), 0 0 34px rgba(245, 217, 130, 0.85); }
+}
+
+.promo-card-track {
   flex: 1;
   min-width: 0;
   transition: opacity 0.3s ease, transform 0.3s ease;
 }
-.promo-bar-track.is-out { opacity: 0; transform: translateY(-4px); }
+.promo-card-track.is-out { opacity: 0; transform: translateY(-4px); }
 
-.promo-bar-item {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.6rem;
-  flex-wrap: wrap;
+.promo-card-item {
+  display: block;
   text-decoration: none;
   color: #f3ecff;
-  font-size: 0.86rem;
 }
-.promo-bar-item:hover .promo-bar-text { text-decoration: underline; }
 
-.promo-bar-badge {
-  padding: 0.12rem 0.5rem;
+.promo-card-badge {
+  display: inline-block;
+  margin-bottom: 0.35rem;
+  padding: 0.14rem 0.55rem;
   border-radius: 999px;
   background: linear-gradient(135deg, #f5d982, #d4af37);
   color: #07040f;
@@ -2795,24 +2798,30 @@ body.pd-modal-open { overflow: hidden; }
   font-weight: 800;
   letter-spacing: 0.05em;
   text-transform: uppercase;
-  white-space: nowrap;
-  box-shadow: 0 0 0 0 rgba(212, 175, 55, 0.55);
-  animation: promoBadgeGlow 3.2s ease-in-out infinite;
+  animation: promoBadgeBlink 0.8s steps(1, end) infinite;
 }
-@keyframes promoBadgeGlow {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(212, 175, 55, 0.5); }
-  50%      { box-shadow: 0 0 0 5px rgba(212, 175, 55, 0); }
+@keyframes promoBadgeBlink {
+  0%, 49%   { filter: none; }
+  50%, 100% { filter: brightness(1.35); }
 }
 
-.promo-bar-text { font-weight: 600; }
-.promo-bar-ends {
+.promo-card-text {
+  display: block;
+  font-size: 0.92rem;
+  font-weight: 700;
+  line-height: 1.3;
+}
+.promo-card-item:hover .promo-card-text { text-decoration: underline; }
+
+.promo-card-ends {
+  display: block;
+  margin-top: 0.2rem;
   font-size: 0.78rem;
-  color: #d4af37;
-  white-space: nowrap;
+  font-weight: 600;
+  color: #f5d982;
 }
-.promo-bar-ends::before { content: '· '; color: rgba(243, 236, 255, 0.4); }
 
-.promo-bar-close {
+.promo-card-close {
   flex: none;
   display: inline-flex;
   align-items: center;
@@ -2822,27 +2831,29 @@ body.pd-modal-open { overflow: hidden; }
   padding: 0;
   border: 0;
   border-radius: 50%;
-  background: transparent;
-  color: rgba(243, 236, 255, 0.55);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(243, 236, 255, 0.7);
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
 }
-.promo-bar-close:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
-.promo-bar-close svg { width: 15px; height: 15px; }
+.promo-card-close:hover { background: rgba(255, 255, 255, 0.14); color: #fff; }
+.promo-card-close svg { width: 15px; height: 15px; }
 
 @media (max-width: 560px) {
-  .promo-bar { padding: 0.45rem 0.75rem; }
-  .promo-bar-item { font-size: 0.8rem; gap: 0.45rem; }
-  /* On a phone the countdown is the first thing to go — the deal itself has
-     to survive the wrap, the clock does not. */
-  .promo-bar-ends { display: none; }
+  .promo-card {
+    left: 0.75rem;
+    right: 0.75rem;
+    bottom: 0.75rem;
+    width: auto;
+  }
 }
 
-/* Same bar, same information, nothing moving. */
+/* Same card, same words, nothing blinking. */
 @media (prefers-reduced-motion: reduce) {
-  .promo-bar::after { animation: none; opacity: 0; }
-  .promo-bar-badge { animation: none; box-shadow: none; }
-  .promo-bar-track { transition: none; }
+  .promo-card { transition: none; transform: translateY(0); opacity: 1; }
+  .promo-card.is-in { animation: none; }
+  .promo-card-badge { animation: none; }
+  .promo-card-track { transition: none; }
 }
 
 .promo-chip {

@@ -914,28 +914,28 @@ function loadProducts() {
         window.cart.syncPrices(window.PRODUCTS);
       }
       rerenderProducts();
-      renderPromoBanner();
+      renderPromoCard();
     })
     .catch(() => { /* offline / cold start → keep the static catalog */ });
 }
 
 /* ============================================================
-   PROMO BANNER
-   A slim bar above the site header on every storefront page,
-   announcing whatever deals are running. It reads the same list
-   js/promos.js already fetched for the price badges, so there is
-   no second request and nothing extra to fill in — create a
-   promotion in admin and the bar appears.
+   PROMO CARD
+   A floating card in the bottom-left corner of every storefront
+   page, announcing whatever deals are running. It reads the same
+   list js/promos.js already fetched for the price badges, so
+   there is no second request and nothing extra to fill in —
+   create a promotion in admin and the card appears.
 
-   It sits in normal flow rather than fixed to the viewport: the
-   header is already sticky and the age gate already overlays, and
-   a third layer competing for the top of the screen makes the
-   first paint feel like a pop-up ad.
+   Fixed rather than in flow, so it stays on screen as the buyer
+   scrolls. Bottom-LEFT specifically: .toast already owns
+   bottom-right, and the two must never stack on each other.
 
-   Motion is a slow sweep, never a blink. Anything flashing more
-   than three times a second is a seizure risk (WCAG 2.3.1), and a
-   blinking bar reads as a scam storefront — the opposite of what
-   this site's copy works to establish.
+   It flashes, by the owner's decision, at roughly 1.25 Hz. WCAG
+   2.3.1 puts the seizure-risk line at three flashes per second,
+   so this blinks visibly while staying well under that. Under
+   prefers-reduced-motion the flashing stops and the same words
+   stay on screen.
    ============================================================ */
 const PROMO_DISMISS_KEY = 'enl_promo_dismissed';
 let promoRotateTimer = 0;
@@ -955,7 +955,7 @@ function dismissPromo(id) {
        never be offered again, so keeping its id forever just grows the key. */
     const live = (window.Promos ? window.Promos.list() : []).map(p => String(p.id));
     localStorage.setItem(PROMO_DISMISS_KEY, JSON.stringify(seen.filter(x => live.indexOf(x) !== -1)));
-  } catch (e) { /* storage disabled — the bar simply comes back next page */ }
+  } catch (e) { /* storage disabled — the card simply comes back next page */ }
 }
 
 /* "ends in 6 days" / "ends today" / "ends in 3 hours" — the closer it gets,
@@ -978,7 +978,7 @@ function promoHref(promo) {
   return ids.length === 1 ? `product.html?id=${encodeURIComponent(ids[0])}` : 'products.html';
 }
 
-function promoBannerLabel(promo) {
+function promoCardLabel(promo) {
   if (promo.badge) return promo.badge;
   if (promo.type === 'bogo') return `BUY ${promo.buyQty} GET ${promo.freeQty}`;
   if (promo.type === 'shipping') return 'FREE SHIPPING';
@@ -987,46 +987,48 @@ function promoBannerLabel(promo) {
 
 function promoSlideHtml(promo) {
   const ends = promoEndsLabel(promo.endsAt);
-  return `<a class="promo-bar-item" href="${promoHref(promo)}">
-      <span class="promo-bar-badge">${escapeHtml(promoBannerLabel(promo))}</span>
-      <span class="promo-bar-text">${escapeHtml(promo.name)}</span>
-      ${ends ? `<span class="promo-bar-ends">${ends}</span>` : ''}
+  return `<a class="promo-card-item" href="${promoHref(promo)}">
+      <span class="promo-card-badge">${escapeHtml(promoCardLabel(promo))}</span>
+      <span class="promo-card-text">${escapeHtml(promo.name)}</span>
+      ${ends ? `<span class="promo-card-ends">${ends}</span>` : ''}
     </a>`;
 }
 
-function renderPromoBanner() {
+function renderPromoCard() {
   if (!window.Promos) return;
   const dismissed = promoDismissed();
   const live = window.Promos.list().filter(p => dismissed.indexOf(String(p.id)) === -1);
 
-  let bar = document.querySelector('.promo-bar');
-  if (!live.length) { if (bar) bar.remove(); return; }
+  let card = document.querySelector('.promo-card');
+  if (!live.length) { if (card) card.remove(); return; }
 
-  if (!bar) {
-    bar = document.createElement('div');
-    bar.className = 'promo-bar';
+  if (!card) {
+    card = document.createElement('div');
+    card.className = 'promo-card';
     /* Announced once, politely, when it appears. The role comes off before the
        first rotation so a screen reader isn't re-interrupted every six seconds
-       by a bar the listener has already heard. */
-    bar.setAttribute('role', 'status');
-    const header = document.querySelector('.site-header');
-    if (header && header.parentNode) header.parentNode.insertBefore(bar, header);
-    else document.body.insertBefore(bar, document.body.firstChild);
-    setTimeout(() => bar.removeAttribute('role'), 2000);
+       by a card the listener has already heard. */
+    card.setAttribute('role', 'status');
+    /* Floats over the page in the bottom-left corner, so it stays on screen as
+       the buyer scrolls. Last child of <body> — the toast lives bottom-RIGHT,
+       so the two never overlap. */
+    document.body.appendChild(card);
+    requestAnimationFrame(() => card.classList.add('is-in'));   // slide it up
+    setTimeout(() => card.removeAttribute('role'), 2000);
   }
 
   let at = 0;                       // which deal is on screen right now
-  bar.innerHTML =
-    `<div class="promo-bar-track">${promoSlideHtml(live[at])}</div>` +
-    `<button type="button" class="promo-bar-close" aria-label="Dismiss this offer">${iconClose()}</button>`;
+  card.innerHTML =
+    `<div class="promo-card-track">${promoSlideHtml(live[at])}</div>` +
+    `<button type="button" class="promo-card-close" aria-label="Dismiss this offer">${iconClose()}</button>`;
 
-  const track = bar.querySelector('.promo-bar-track');
-  const close = bar.querySelector('.promo-bar-close');
+  const track = card.querySelector('.promo-card-track');
+  const close = card.querySelector('.promo-card-close');
   /* Dismiss the deal the buyer is actually looking at, not the first one in
      the list — with rotation on, those stop being the same after six seconds. */
   if (close) close.addEventListener('click', () => {
     dismissPromo(live[at].id);
-    renderPromoBanner();
+    renderPromoCard();
   });
 
   clearTimeout(promoRotateTimer);
