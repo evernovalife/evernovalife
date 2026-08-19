@@ -442,6 +442,10 @@ function createProductCard(product) {
     : '';
   const oldPrice = product.originalPrice && product.originalPrice > product.price
     ? `<span class="product-price-old">${formatPrice(product.originalPrice)}</span>` : '';
+  /* The deal's own chip, separate from product.badge — that one says
+     "Best Seller" and is not ours to overwrite. */
+  const promoChip = product.promo
+    ? `<span class="promo-chip">${escapeHtml(product.promo.badge)}</span>` : '';
   const st = stockInfo(product);
   const stock = `<span class="stock-pill ${st.cls}">${st.label}</span>`;
 
@@ -468,6 +472,7 @@ function createProductCard(product) {
       <div class="product-price-row">
         <span class="product-price gradient-text">${formatPrice(product.price)}</span>
         ${oldPrice}
+        ${promoChip}
       </div>
       ${stock}
       <div class="product-actions">
@@ -1293,6 +1298,14 @@ function productDetailMarkup(product, opts = {}) {
     .map(([k, v]) => `<tr><td>${escapeHtml(k)}</td><td>${escapeHtml(v)}</td></tr>`).join('');
   const oldPrice = product.originalPrice > product.price
     ? `<span class="detail-price-old">${formatPrice(product.originalPrice)}</span>` : '';
+  const promoChip = product.promo
+    ? `<span class="promo-chip">${escapeHtml(product.promo.badge)}</span>` : '';
+  /* A deal with an end date says so. Rounded UP, because "ends in 0 days"
+     on the last day reads as "already over". */
+  const daysLeft = product.promo && product.promo.endsAt
+    ? Math.ceil((Date.parse(product.promo.endsAt) - Date.now()) / 86400000) : 0;
+  const promoEnds = daysLeft > 0
+    ? `<p class="promo-ends">${iconAlert()} Ends in ${daysLeft} day${daysLeft === 1 ? '' : 's'}</p>` : '';
   const badge = product.badge ? `<span class="product-badge ${productBadgeClass(product.badge)}" style="position:static;display:inline-block">${escapeHtml(product.badge)}</span>` : '';
   const st = stockInfo(product);
 
@@ -1336,8 +1349,10 @@ function productDetailMarkup(product, opts = {}) {
       <div class="detail-price-row">
         <span class="detail-price gradient-text">${formatPrice(product.price)}</span>
         ${oldPrice}
+        ${promoChip}
         <span class="stock-pill ${st.cls}">${st.label}</span>
       </div>
+      ${promoEnds}
       <p class="detail-desc">${escapeHtml(product.description)}</p>
       <div class="qty-selector">
         <span>Quantity</span>
@@ -1699,6 +1714,12 @@ function cartRowMarkup(item) {
   if (!st.sellable) warn = `<p class="cart-row-warn">${iconAlert()} Out of stock — remove this line to continue.</p>`;
   else if (st.left !== null && item.quantity > st.left) warn = `<p class="cart-row-warn">${iconAlert()} Only ${st.left} left — lower the quantity to continue.</p>`;
 
+  /* A bogo line ships more than it bills. Say so on the line — the summary
+     total alone makes it look like the free vial was forgotten. */
+  const freeUnits = window.Promos ? window.Promos.freeUnitsFor(item.id, item.quantity) : 0;
+  const freeNote = freeUnits > 0
+    ? `<p class="cart-row-free">${iconCheckCircle()} +${freeUnits} free with this deal</p>` : '';
+
   return `
     <div class="cart-row glass${warn ? ' has-warn' : ''}" data-id="${item.id}">
       <div class="cart-row-media">${createVialPhoto(product, { width: VIAL_W.thumb })}</div>
@@ -1707,6 +1728,7 @@ function cartRowMarkup(item) {
         <h4><a href="product.html?id=${item.id}">${name}</a></h4>
         <div class="cart-price gradient-text">${formatPrice(item.price)}</div>
         ${warn}
+        ${freeNote}
       </div>
       <div class="cart-row-controls">
         <div class="qty-control">
@@ -1829,13 +1851,22 @@ function renderOrderSummary(el, withCheckoutBtn) {
   if (!el) return;
   const ship = cart.getShipping();
   const remaining = FREE_SHIP_THRESHOLD - cart.getSubtotal();
+  const deal = window.Promos ? window.Promos.cartPromo(cart.getSubtotal()) : null;
+  const freeShip = window.Promos && window.Promos.freeShipping();
+  const shipCost = freeShip ? 0 : ship;
+  const total = cart.getSubtotal() - (deal ? deal.saving : 0) + shipCost + cart.getTax();
   el.innerHTML = `
     <h3>Order Summary</h3>
     <div class="summary-row"><span>Subtotal (${cart.getItemCount()} items)</span><span>${formatPrice(cart.getSubtotal())}</span></div>
-    <div class="summary-row"><span>Shipping</span><span>${ship === 0 ? 'FREE' : formatPrice(ship)}</span></div>
+    ${deal ? `<div class="summary-row discount"><span>${escapeHtml(deal.name)}</span><span>−${formatPrice(deal.saving)}</span></div>` : ''}
+    <div class="summary-row"><span>Shipping</span><span>${shipCost === 0 ? 'FREE' : formatPrice(shipCost)}</span></div>
     <div class="summary-row"><span>Tax (${taxRateLabel()})</span><span>${formatPrice(cart.getTax())}</span></div>
-    <div class="summary-row total"><span>Total</span><span>${formatPrice(cart.getTotal())}</span></div>
-    ${remaining > 0 ? `<p class="summary-note"><span class="summary-note-ic">${iconTruckLine()}</span>Add ${formatPrice(remaining)} more for free shipping</p>` : `<p class="summary-note"><span class="summary-note-ic">${iconCheckCircle()}</span>Free shipping unlocked</p>`}
+    <div class="summary-row total"><span>Total</span><span>${formatPrice(total)}</span></div>
+    ${freeShip
+      ? `<p class="summary-note"><span class="summary-note-ic">${iconTruckLine()}</span>Free shipping on every order right now</p>`
+      : remaining > 0
+        ? `<p class="summary-note"><span class="summary-note-ic">${iconTruckLine()}</span>Add ${formatPrice(remaining)} more for free shipping</p>`
+        : `<p class="summary-note"><span class="summary-note-ic">${iconCheckCircle()}</span>Free shipping unlocked</p>`}
     ${withCheckoutBtn ? `<a class="btn btn-primary btn-block" href="${checkoutHref()}">Proceed to Checkout</a>` : ''}
     ${withCheckoutBtn && !isSignedIn()
       ? `<p class="summary-note">An account is required to check out — you'll be asked to sign in or register next.</p>` : ''}
@@ -2010,9 +2041,12 @@ function checkoutTotals() {
   const shipping = round2(q ? q.shipping : cart.getShipping());
   // Which service the fee is for, so the summary can say "Shipping (Overnight)".
   const shippingLabel = (q && q.shippingLabel) || (cart.getShippingLabel ? cart.getShippingLabel() : '');
-  const taxable = round2(Math.max(0, subtotal - discount));
+  // The shop's own cart-wide deal, carried straight from the server's quote —
+  // never recomputed here, so the browser can display it but never decide it.
+  const promoDiscount = round2(q ? (q.promoDiscount || 0) : 0);
+  const taxable = round2(Math.max(0, subtotal - promoDiscount - discount));
   const tax = round2(taxable * TAX_RATE);
-  return { subtotal, discount, shipping, shippingLabel, taxable, tax, total: round2(taxable + shipping + tax) };
+  return { subtotal, discount, shipping, shippingLabel, promoDiscount, taxable, tax, total: round2(taxable + shipping + tax) };
 }
 
 /* The checkout line items, as their own function so a fresh server quote can
@@ -2205,6 +2239,7 @@ function renderCheckoutSummary(el) {
   el.innerHTML = `
     <div class="summary-row"><span>Subtotal (${cart.getItemCount()} items)</span><span>${formatPrice(t.subtotal)}</span></div>
     <div class="summary-row"><span>Shipping${t.shippingLabel ? ` (${escapeHtml(t.shippingLabel)})` : ''}</span><span>${t.shipping === 0 ? 'FREE' : formatPrice(t.shipping)}</span></div>
+    ${t.promoDiscount > 0 ? `<div class="summary-row discount"><span>Promotion</span><span>−${formatPrice(t.promoDiscount)}</span></div>` : ''}
     ${t.discount > 0 ? `<div class="summary-row discount"><span>Points discount</span><span>−${formatPrice(t.discount)}</span></div>` : ''}
     <div class="summary-row"><span>Tax (${taxRateLabel()})</span><span>${formatPrice(t.tax)}</span></div>
     <div class="summary-row total"><span>Total</span><span>${formatPrice(t.total)}</span></div>

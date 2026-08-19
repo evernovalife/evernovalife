@@ -445,6 +445,8 @@ app.post('/api/quote', (req, res) => {
       success: true,
       items: order.items,          // [{ id, name, unitPrice, quantity, lineTotal }]
       subtotal: order.subtotal,
+      promoDiscount: order.promoDiscount,
+      promos: order.promos,
       shipping: order.shipping,
       shippingMethod: order.shippingMethod,
       shippingLabel: order.shippingLabel,

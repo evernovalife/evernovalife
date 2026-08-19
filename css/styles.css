@@ -2725,3 +2725,40 @@ body.pd-modal-open { overflow: hidden; }
   background: rgba(224, 165, 42, 0.09);
   color: var(--dark-text);
 }
+
+/* ---- promotions ----
+   The deal's own chip, distinct from .product-badge (which says
+   "Best Seller" and belongs to the product, not the campaign). */
+.promo-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #07040f;
+  background: linear-gradient(135deg, #f5d982, #d4af37);
+  white-space: nowrap;
+}
+
+.promo-ends {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.5rem 0 0;
+  font-size: 0.85rem;
+  color: #d4af37;
+}
+.promo-ends svg { width: 1em; height: 1em; flex: none; }
+
+.cart-row-free {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.35rem 0 0;
+  font-size: 0.85rem;
+  color: #7bd88f;
+}
+.cart-row-free svg { width: 1em; height: 1em; flex: none; }
