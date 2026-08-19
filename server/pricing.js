@@ -11,6 +11,7 @@
 // so products added or edited in the admin are priced correctly at checkout.
 const { findProductById: getProductById, availableQty, isPublished } = require('./products.js');
 const shippingRates = require('./shipping.js');
+const promotions = require('./promotions.js');
 
 /* Kept as the last-resort figures only. The live rate comes from shipping.js,
    which seeds itself with these; they exist so a shipping store that cannot be
@@ -66,27 +67,53 @@ function buildOrder(rawItems, opts = {}) {
       name: product.name,
       unitPrice,
       quantity,
-      lineTotal: money(unitPrice * quantity)
+      lineTotal: money(unitPrice * quantity),
+      /* Carried for the promotion engine only: a bogo can hand out a free unit
+         only if there is one on the shelf after the paid units are taken.
+         null = untracked, which is unlimited. */
+      stockLeft: left
     };
   });
 
-  const subtotal = money(items.reduce((sum, i) => sum + i.lineTotal, 0));
+  /* Promotions reprice the lines before anything is summed, so every payment
+     path — crypto, Zelle, the balance link, /api/quote — charges the same
+     figure without any of them knowing promotions exist. `noPromos` is for
+     auto-ship: a repeating plan bills at catalog price, because a ten-day sale
+     must not follow a subscriber around for the life of their plan. */
+  const promo = opts.noPromos
+    ? { items: items.map(i => ({ ...i, paidQuantity: i.quantity, listUnitPrice: i.unitPrice, promoId: '' })),
+        promoDiscount: 0, promos: [], freeShipping: false }
+    : promotions.apply(items);
+
+  const priced = promo.items.map(({ stockLeft, ...line }) => line);   // stockLeft was input-only
+  const subtotal = money(priced.reduce((sum, i) => sum + i.lineTotal, 0));
 
   /* The browser sends a shipping METHOD, never a fee. The rate table decides
      what that method costs and whether this subtotal clears its free-shipping
      threshold, so a tampered client can at worst pick a cheaper service that
      the store is already offering. An unknown or disabled id resolves to the
-     cheapest enabled method rather than failing the checkout. */
-  const ship = resolveShipping(opts.shippingMethod, subtotal);
+     cheapest enabled method rather than failing the checkout.
 
-  // clamp the discount to [0, subtotal] — never trust the caller with a raw value
-  const discount = money(Math.max(0, Math.min(Number(opts.discount) || 0, subtotal)));
-  const taxable = money(subtotal - discount);
+     The threshold is measured on the POST-promotion subtotal — what the store
+     actually took, not what the goods list for. */
+  const ship = promo.freeShipping
+    ? { id: 'promo', label: 'Free shipping', fee: 0 }
+    : resolveShipping(opts.shippingMethod, subtotal);
+
+  /* Two discounts, kept apart on purpose. `promoDiscount` is the shop's own
+     cart-wide deal; `discount` is loyalty points and keeps the meaning every
+     existing caller already reads. Points can only be spent against what the
+     promotion left behind. */
+  const promoDiscount = money(Math.max(0, Math.min(promo.promoDiscount, subtotal)));
+  const discount = money(Math.max(0, Math.min(Number(opts.discount) || 0, subtotal - promoDiscount)));
+  const taxable = money(subtotal - promoDiscount - discount);
   const tax = money(taxable * TAX_RATE);
   const total = money(taxable + ship.fee + tax);
 
   return {
-    items, subtotal, discount,
+    items: priced, subtotal, discount,
+    promoDiscount,
+    promos: promo.promos,
     shipping: money(ship.fee),
     // Carried through so the invoice, the order record and the packing queue
     // all say which service was bought — "shipping $19.99" alone doesn't.
