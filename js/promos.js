@@ -22,7 +22,7 @@
   var money = function (n) { return Math.round((Number(n) + Number.EPSILON) * 100) / 100; };
 
   function apiBase() {
-    return (window.ENL_CONFIG && window.ENL_CONFIG.API_BASE) || window.API_BASE || '';
+    return window.PEPTIDE_API_BASE || '';
   }
 
   /** Fetch the running promotions. Resolves to [] on any failure — no deals
@@ -78,8 +78,15 @@
     if (!Array.isArray(products)) return products;
 
     products.forEach(function (p) {
-      // The list price is whatever the catalog said BEFORE we touched it.
-      var listPrice = money(p.originalPrice && p.promo ? p.originalPrice : p.price);
+      /* The pre-promotion selling price, and the catalog's own "was" price.
+         originalPrice belongs to whoever merchandised the product, not to us:
+         a promotion borrows the field while it runs and hands it back when it
+         ends. Discount from the current selling price (p.price), not from the
+         was-price — that matches the server, which applies salePrice to the
+         catalog price, so the struck figure here matches the invoice's
+         listUnitPrice. */
+      var priorWas = p.promo ? (p.promo.wasPrice || null) : (p.originalPrice || null);
+      var listPrice = money(p.promo ? p.promo.listPrice : p.price);
       var bestSale = null;      // { promo, unit, saving }
       var bestBogo = null;      // { promo, saving }
 
@@ -103,8 +110,14 @@
 
       if (!winner) {
         // A promotion that ended between two page loads must not leave a
-        // struck-through price behind.
-        if (p.promo) { p.price = listPrice; delete p.originalPrice; delete p.promo; }
+        // struck-through promo price behind — but a merchandising markdown
+        // that predates the promotion (the catalog's own originalPrice) is
+        // not ours to erase, so hand it back instead of deleting it.
+        if (p.promo) {
+          p.price = listPrice;
+          if (priorWas) p.originalPrice = priorWas; else delete p.originalPrice;
+          delete p.promo;
+        }
         return;
       }
 
@@ -116,7 +129,9 @@
         type: winner.promo.type,
         endsAt: winner.promo.endsAt || null,
         buyQty: winner.promo.buyQty || 1,
-        freeQty: winner.promo.freeQty || 0
+        freeQty: winner.promo.freeQty || 0,
+        listPrice: listPrice,     // what one unit cost before this promotion
+        wasPrice: priorWas        // the catalog's own markdown, handed back on clear
       };
     });
 
