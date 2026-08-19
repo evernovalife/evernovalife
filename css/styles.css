@@ -2735,43 +2735,69 @@ body.pd-modal-open { overflow: hidden; }
    stays on screen as the buyer scrolls; bottom-LEFT because .toast already
    owns bottom-right and the two must never stack on each other.
 
-   It flashes, on request. The rate is deliberately ~1.25 Hz: WCAG 2.3.1
-   draws its seizure-risk line at three flashes per second, so this blinks
-   visibly while staying well under it. Under prefers-reduced-motion the
-   flashing stops entirely and the same words stay on screen.
+   The first version of this only pulsed its glow radius, which on a near-black
+   page is invisible — it was animating and still read as "the flashing isn't
+   working". A flash has to change something with hard edges, so what blinks
+   here is the badge (gold to white-hot) and a hard ring around the whole card.
+
+   Rate is ~1.25 Hz. WCAG 2.3.1 draws the seizure-risk line at three flashes a
+   second, so this blinks unmistakably while staying well under it. Under
+   prefers-reduced-motion nothing blinks and the same words stay on screen.
 */
 .promo-card {
   position: fixed;
   left: 1.25rem;
   bottom: 1.25rem;
   z-index: 900;                     /* over the page, under .toast (999) */
-  width: min(340px, calc(100vw - 2.5rem));
+  width: min(360px, calc(100vw - 2.5rem));
   display: flex;
   align-items: flex-start;
-  gap: 0.6rem;
-  padding: 0.85rem 0.9rem 0.85rem 1rem;
-  border-radius: 14px;
-  background: linear-gradient(140deg, #1d1233 0%, #120a22 100%);
-  border: 2px solid rgba(212, 175, 55, 0.85);
-  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.55), 0 0 22px rgba(212, 175, 55, 0.35);
+  gap: 0.5rem;
+  padding: 0;
+  border-radius: 18px;
+  background:
+    radial-gradient(120% 100% at 0% 0%, rgba(124, 58, 237, 0.35) 0%, transparent 58%),
+    linear-gradient(150deg, #23153f 0%, #14092a 60%, #0c0518 100%);
+  border: 1px solid rgba(212, 175, 55, 0.55);
+  box-shadow: 0 22px 55px rgba(0, 0, 0, 0.65);
+  overflow: hidden;
   /* Off-screen until .is-in, so it arrives rather than appearing mid-paint. */
   transform: translateY(140%);
   opacity: 0;
-  transition: transform 0.42s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.3s ease;
+  transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.3s ease;
 }
-.promo-card.is-in {
-  transform: translateY(0);
-  opacity: 1;
-  animation: promoFlash 0.8s steps(1, end) infinite;
+.promo-card.is-in { transform: translateY(0); opacity: 1; }
+
+/* The ring that blinks. A pseudo-element so it can sit exactly on the card's
+   edge without the border-box shifting anything inside it. */
+.promo-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 2px solid #f5d982;
+  /* Inset only: the card clips its overflow to keep the gold seam inside the
+     rounded corner, so an outward spread would be cut off and buy nothing. */
+  box-shadow: 0 0 26px rgba(245, 217, 130, 0.55) inset;
+  pointer-events: none;
+  opacity: 0;
+  z-index: 3;
+}
+.promo-card.is-in::before { animation: promoRingBlink 0.8s steps(1, end) infinite; }
+@keyframes promoRingBlink {
+  0%, 49%   { opacity: 0; }
+  50%, 100% { opacity: 1; }
 }
 
-/* The flash itself: border and glow snap between bright and dim once per
-   0.8s. `steps(1)` makes it a real blink rather than a fade. */
-@keyframes promoFlash {
-  0%, 49%   { border-color: rgba(212, 175, 55, 0.85);
-              box-shadow: 0 18px 40px rgba(0, 0, 0, 0.55), 0 0 22px rgba(212, 175, 55, 0.35); }
-  50%, 100% { border-color: rgba(245, 217, 130, 1);
-              box-shadow: 0 18px 40px rgba(0, 0, 0, 0.55), 0 0 34px rgba(245, 217, 130, 0.85); }
+/* A gold seam down the left edge — the card reads as a label pulled off the
+   vial rather than a generic notification. */
+.promo-card::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: linear-gradient(180deg, #f5d982, #d4af37 55%, #7c3aed);
+  z-index: 2;
 }
 
 .promo-card-track {
@@ -2782,78 +2808,129 @@ body.pd-modal-open { overflow: hidden; }
 .promo-card-track.is-out { opacity: 0; transform: translateY(-4px); }
 
 .promo-card-item {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.9rem 0.9rem 0.9rem 1.1rem;
   text-decoration: none;
   color: #f3ecff;
 }
 
+/* The vial. Sized to carry the card without crowding the words. */
+.promo-card-media {
+  flex: none;
+  width: 62px;
+  height: 78px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: radial-gradient(60% 60% at 50% 40%, rgba(168, 85, 247, 0.3), transparent 70%);
+}
+.promo-card-media img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  filter: drop-shadow(0 6px 12px rgba(0, 0, 0, 0.5));
+}
+
+.promo-card-body { display: flex; flex-direction: column; gap: 0.18rem; min-width: 0; }
+
 .promo-card-badge {
-  display: inline-block;
-  margin-bottom: 0.35rem;
-  padding: 0.14rem 0.55rem;
+  align-self: flex-start;
+  padding: 0.16rem 0.55rem;
   border-radius: 999px;
   background: linear-gradient(135deg, #f5d982, #d4af37);
   color: #07040f;
-  font-size: 0.68rem;
+  font-size: 0.66rem;
   font-weight: 800;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  animation: promoBadgeBlink 0.8s steps(1, end) infinite;
+  white-space: nowrap;
 }
+/* The badge is the other half of the flash: gold, then white-hot. A colour
+   swap this large is legible at a glance in a way a glow never is. */
+.promo-card.is-in .promo-card-badge { animation: promoBadgeBlink 0.8s steps(1, end) infinite; }
 @keyframes promoBadgeBlink {
-  0%, 49%   { filter: none; }
-  50%, 100% { filter: brightness(1.35); }
+  0%, 49%   { background: linear-gradient(135deg, #f5d982, #d4af37); box-shadow: none; }
+  50%, 100% { background: linear-gradient(135deg, #ffffff, #ffe9a8);
+              box-shadow: 0 0 14px rgba(255, 233, 168, 0.9); }
 }
 
 .promo-card-text {
-  display: block;
-  font-size: 0.92rem;
-  font-weight: 700;
-  line-height: 1.3;
+  font-size: 1.02rem;
+  font-weight: 800;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  color: #fff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.promo-card-item:hover .promo-card-text { text-decoration: underline; }
+.promo-card-terms {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #e9d5ff;
+}
 
 .promo-card-ends {
-  display: block;
-  margin-top: 0.2rem;
-  font-size: 0.78rem;
-  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 0.1rem;
+  font-size: 0.74rem;
+  font-weight: 700;
   color: #f5d982;
 }
+.promo-card-ends svg { width: 12px; height: 12px; flex: none; }
+
+.promo-card-cta {
+  margin-top: 0.4rem;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: #c4b5fd;
+  transition: color 0.15s ease;
+}
+.promo-card-cta span { display: inline-block; transition: transform 0.15s ease; }
+.promo-card-item:hover .promo-card-cta { color: #fff; }
+.promo-card-item:hover .promo-card-cta span { transform: translateX(3px); }
+.promo-card-item:hover .promo-card-text { text-decoration: underline; }
 
 .promo-card-close {
-  flex: none;
+  position: absolute;
+  top: 0.4rem;
+  right: 0.4rem;
+  z-index: 4;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   border: 0;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.06);
-  color: rgba(243, 236, 255, 0.7);
+  background: rgba(0, 0, 0, 0.35);
+  color: rgba(243, 236, 255, 0.65);
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
 }
-.promo-card-close:hover { background: rgba(255, 255, 255, 0.14); color: #fff; }
-.promo-card-close svg { width: 15px; height: 15px; }
+.promo-card-close:hover { background: rgba(255, 255, 255, 0.16); color: #fff; }
+.promo-card-close svg { width: 13px; height: 13px; }
 
 @media (max-width: 560px) {
-  .promo-card {
-    left: 0.75rem;
-    right: 0.75rem;
-    bottom: 0.75rem;
-    width: auto;
-  }
+  .promo-card { left: 0.7rem; right: 0.7rem; bottom: 0.7rem; width: auto; }
+  .promo-card-media { width: 50px; height: 62px; }
+  .promo-card-text { font-size: 0.95rem; }
 }
 
-/* Same card, same words, nothing blinking. */
+/* Same card, same words, nothing blinking or sliding. */
 @media (prefers-reduced-motion: reduce) {
   .promo-card { transition: none; transform: translateY(0); opacity: 1; }
-  .promo-card.is-in { animation: none; }
-  .promo-card-badge { animation: none; }
+  .promo-card::before { animation: none; opacity: 1; }
+  .promo-card.is-in .promo-card-badge { animation: none; }
   .promo-card-track { transition: none; }
+  .promo-card-cta span { transition: none; }
 }
 
 .promo-chip {

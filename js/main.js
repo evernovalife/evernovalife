@@ -937,26 +937,18 @@ function loadProducts() {
    prefers-reduced-motion the flashing stops and the same words
    stay on screen.
    ============================================================ */
-const PROMO_DISMISS_KEY = 'enl_promo_dismissed';
 let promoRotateTimer = 0;
 
-function promoDismissed() {
-  try {
-    const raw = JSON.parse(localStorage.getItem(PROMO_DISMISS_KEY) || '[]');
-    return Array.isArray(raw) ? raw.map(String) : [];
-  } catch (e) { return []; }          // storage disabled / bad JSON
-}
+/* Dismissal lasts for THIS page view only, deliberately. It used to persist to
+   localStorage, which meant closing the card once silenced the deal on every
+   page for the rest of the campaign — the owner closed it while testing and
+   never saw it again. An X on an offer means "not right now", not "never show
+   me this promotion again", so it lives in memory and the next page brings the
+   card back. Nothing to clear, nothing to go stale. */
+const promoDismissedNow = new Set();
 
-function dismissPromo(id) {
-  try {
-    const seen = promoDismissed();
-    if (seen.indexOf(String(id)) === -1) seen.push(String(id));
-    /* Only the ids still worth remembering: a promotion that has ended will
-       never be offered again, so keeping its id forever just grows the key. */
-    const live = (window.Promos ? window.Promos.list() : []).map(p => String(p.id));
-    localStorage.setItem(PROMO_DISMISS_KEY, JSON.stringify(seen.filter(x => live.indexOf(x) !== -1)));
-  } catch (e) { /* storage disabled — the card simply comes back next page */ }
-}
+function promoDismissed() { return Array.from(promoDismissedNow); }
+function dismissPromo(id) { promoDismissedNow.add(String(id)); }
 
 /* "ends in 6 days" / "ends today" / "ends in 3 hours" — the closer it gets,
    the finer the unit, because "in 0 days" reads as already over. */
@@ -985,12 +977,64 @@ function promoCardLabel(promo) {
   return 'OFFER';
 }
 
+/* The line under the headline: what the buyer actually gets, in plain words.
+   The promotion's own name is the owner's label ("Discounted"), which is not
+   the same thing and often says nothing to a customer. */
+function promoCardTerms(promo) {
+  if (promo.type === 'bogo') {
+    return promo.buyQty === 1 && promo.freeQty === 1
+      ? 'Buy one, get one free'
+      : `Buy ${promo.buyQty}, get ${promo.freeQty} free`;
+  }
+  if (promo.type === 'shipping') return 'Free delivery on every order';
+  const amount = promo.mode === 'percent' ? `${promo.value}% off`
+    : promo.mode === 'amount' ? `${formatPrice(promo.value)} off`
+    : `Now ${formatPrice(promo.value)}`;
+  if (promo.type === 'cart') {
+    return promo.minSubtotal > 0
+      ? `${amount} orders over ${formatPrice(promo.minSubtotal)}`
+      : `${amount} your whole order`;
+  }
+  return amount;
+}
+
+/* A promotion on exactly one product shows that vial. It is the single most
+   eye-catching thing available and costs no extra request — the image is
+   already in the page's cache from the catalog. */
+function promoCardMedia(promo) {
+  const ids = promo.productIds || [];
+  if (ids.length !== 1) return '';
+  const product = typeof getProductById === 'function' ? getProductById(ids[0]) : null;
+  if (!product) return '';
+  const src = product.image || vialPhotoSrc(product.id);
+  return `<span class="promo-card-media">
+      <img src="${escapeHtml(src)}" alt="" loading="lazy" decoding="async"
+           onerror="this.closest('.promo-card-media').remove()">
+    </span>`;
+}
+
+/* The headline: the product's own name when the deal names one, otherwise the
+   promotion's. "Retatrutide" sells; "Discounted" does not. */
+function promoCardHeadline(promo) {
+  const ids = promo.productIds || [];
+  if (ids.length === 1 && typeof getProductById === 'function') {
+    const product = getProductById(ids[0]);
+    if (product && product.name) return product.name;
+  }
+  return promo.name || 'Limited offer';
+}
+
 function promoSlideHtml(promo) {
   const ends = promoEndsLabel(promo.endsAt);
   return `<a class="promo-card-item" href="${promoHref(promo)}">
-      <span class="promo-card-badge">${escapeHtml(promoCardLabel(promo))}</span>
-      <span class="promo-card-text">${escapeHtml(promo.name)}</span>
-      ${ends ? `<span class="promo-card-ends">${ends}</span>` : ''}
+      ${promoCardMedia(promo)}
+      <span class="promo-card-body">
+        <span class="promo-card-badge">${escapeHtml(promoCardLabel(promo))}</span>
+        <span class="promo-card-text">${escapeHtml(promoCardHeadline(promo))}</span>
+        <span class="promo-card-terms">${escapeHtml(promoCardTerms(promo))}</span>
+        ${ends ? `<span class="promo-card-ends">${iconClock()}${ends}</span>` : ''}
+        <span class="promo-card-cta">Shop the deal <span aria-hidden="true">&rarr;</span></span>
+      </span>
     </a>`;
 }
 
@@ -3012,6 +3056,7 @@ function iconTruckLine() { return svgLine(`<path d="M1.5 5.5h13v10h-13z"/><path 
 function iconRepeat() { return svgLine(`<path d="M3 11.5a6.5 6.5 0 0 1 6.5-6.5H19"/><path d="m16 2 3 3-3 3"/><path d="M21 12.5a6.5 6.5 0 0 1-6.5 6.5H5"/><path d="m8 22-3-3 3-3"/>`); }
 function iconAlert() { return svgLine(`<path d="M10.3 3.6 1.9 18a2 2 0 0 0 1.7 3h16.8a2 2 0 0 0 1.7-3L13.7 3.6a2 2 0 0 0-3.4 0z"/><path d="M12 9v4.5"/><path d="M12 17.3h.01"/>`); }
 function iconClose() { return svgLine(`<path d="m6 6 12 12"/><path d="m18 6-12 12"/>`); }
+function iconClock() { return svgLine(`<circle cx="12" cy="12" r="9"/><path d="M12 7v5.2l3.2 2"/>`); }
 
 /* Category glyphs — keyed by CATEGORIES[].icon in products-data.js. */
 function categoryIcon(name) {
