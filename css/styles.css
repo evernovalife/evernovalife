@@ -2749,7 +2749,13 @@ body.pd-modal-open { overflow: hidden; }
   left: 1.25rem;
   bottom: 1.25rem;
   z-index: 900;                     /* over the page, under .toast (999) */
-  width: min(360px, calc(100vw - 2.5rem));
+  /* Shrink-wraps its own content instead of always filling 360px: a short deal
+     like "20% off" was leaving half the card empty. A fixed element with `left`
+     set and no `right` sizes to its content, so `auto` plus a ceiling is all
+     this needs. The floor stops a two-word promo looking like a stray tooltip. */
+  width: auto;
+  min-width: 210px;
+  max-width: min(360px, calc(100vw - 2.5rem));
   display: flex;
   align-items: flex-start;
   gap: 0.5rem;
@@ -2811,7 +2817,9 @@ body.pd-modal-open { overflow: hidden; }
   display: flex;
   align-items: center;
   gap: 0.85rem;
-  padding: 0.9rem 0.9rem 0.9rem 1.1rem;
+  /* Barely any right padding: the close button is the next flex sibling and
+     supplies the gap itself. */
+  padding: 0.9rem 0.2rem 0.9rem 1.1rem;
   text-decoration: none;
   color: #f3ecff;
 }
@@ -2897,10 +2905,13 @@ body.pd-modal-open { overflow: hidden; }
 .promo-card-item:hover .promo-card-cta span { transform: translateX(3px); }
 .promo-card-item:hover .promo-card-text { text-decoration: underline; }
 
+/* In the flex row rather than absolutely positioned over it. Taken out of flow
+   it needed a slab of reserved right padding so the copy could not run under
+   it — which is the empty space this card was carrying. As a flex sibling it
+   claims exactly its own width and the card ends where the button does. */
 .promo-card-close {
-  position: absolute;
-  top: 0.4rem;
-  right: 0.4rem;
+  align-self: flex-start;
+  margin: 0.5rem 0.45rem 0 0;
   z-index: 4;
   display: inline-flex;
   align-items: center;
