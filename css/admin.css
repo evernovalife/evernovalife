@@ -454,6 +454,12 @@ body.adm {
 }
 .promo-form .form-field { min-width: 10rem; }
 .promo-form .promo-skus { flex: 1 1 100%; min-width: 0; }
+/* syncPromoFields() hides the fields that don't belong to the chosen type by
+   setting `hidden`. That attribute is only a `display: none` from the browser's
+   own stylesheet, which `.form-field { display: flex }` outranks — so without
+   this line every type's fields show at once and the form asks for a percentage,
+   a buy-quantity and a cart minimum all in one row. */
+.promo-form [hidden] { display: none; }
 
 .promo-sku-list {
   display: flex;
