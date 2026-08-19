@@ -987,6 +987,8 @@
         '<input id="' + pre + 'starts" type="datetime-local" value="' + esc(toLocalInput(p.startsAt)) + '"></div>' +
       '<div class="form-field"><label for="' + pre + 'ends">Ends</label>' +
         '<input id="' + pre + 'ends" type="datetime-local" value="' + esc(toLocalInput(p.endsAt)) + '"></div>' +
+      '<div class="form-field"><label for="' + pre + 'sort">Order</label>' +
+        '<input id="' + pre + 'sort" type="number" min="0" step="10" value="' + esc(p.sort == null ? 50 : p.sort) + '"></div>' +
 
       '<div class="form-field promo-if-sale promo-if-bogo promo-skus"><label>Products <span class="hint">none ticked = every product</span></label>' +
         '<div class="promo-sku-list" data-ids="' + esc(ids) + '">' + (opts || '<span class="muted">No products loaded</span>') + '</div></div>' +
@@ -1035,6 +1037,7 @@
       minSubtotal: Number(val('min')) || 0,
       startsAt: fromLocalInput(val('starts')),
       endsAt: fromLocalInput(val('ends')),
+      sort: Number(val('sort')) || 50,
       enabled: checked('enabled')
     };
 
@@ -1042,7 +1045,7 @@
     try {
       var out = await A.api('/api/admin/promotions', { method: 'POST', body: payload });
       state.promos = out.promotions || [];
-      A.toast('Saved — it applies to the next checkout', 'ok');
+      A.toast('Saved — it applies to the next checkout', 'success');
       render();
     } catch (e) {
       A.toast(e.message, 'error');
@@ -1056,7 +1059,7 @@
     try {
       var out = await A.api('/api/admin/promotions/' + encodeURIComponent(id), { method: 'DELETE' });
       state.promos = out.promotions || [];
-      A.toast('Deleted', 'ok');
+      A.toast('Deleted', 'success');
       render();
     } catch (e) {
       A.toast(e.message, 'error');
