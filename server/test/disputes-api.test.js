@@ -138,6 +138,31 @@ test('a report cannot be opened on a cancelled order', async () => {
   assert.equal(status, 400);
 });
 
+/* No test anywhere drives disputeOpenLimiter to an actual 429 — it is
+   wired to POST /api/disputes but nothing proves that. 6 opens/hour is
+   the deliberate cap (a disk-abuse control), so this account needs 7
+   requests, each against its own order to get past the one-open-per-
+   order rule, and the rate limiter runs before the route handler, so
+   the 7th is refused before it ever looks at order state. */
+test('the open-a-report limiter answers 429 once its per-hour budget is spent', async () => {
+  const nolan = await signUp('nolan-d@example.com');
+  const orderIds = [];
+  for (let i = 1; i <= 7; i++) {
+    const orderId = `ENL-LIMIT${i}`;
+    placeOrder(nolan.user.id, orderId);
+    orderIds.push(orderId);
+  }
+  let last;
+  for (const orderId of orderIds) {
+    last = await api('/api/disputes', {
+      method: 'POST', token: nolan.token,
+      body: { orderId, reason: 'other', message: 'Testing the limiter.' }
+    });
+  }
+  assert.equal(last.status, 429);
+  assert.equal(last.body.error, 'That is a lot of reports in an hour. Reply on one of the open ones, or email support@evernovalife.com.');
+});
+
 test("another account gets 404 — not 403 — on someone else's thread", async () => {
   const erin = await signUp('erin-d@example.com');
   placeOrder(erin.user.id, 'ENL-PRIV');
@@ -152,8 +177,9 @@ test("another account gets 404 — not 403 — on someone else's thread", async 
   assert.equal((await api(`/api/disputes/${id}`, { token: frank.token })).status, 404);
   assert.equal((await api(`/api/disputes/${id}/messages`, { method: 'POST', token: frank.token, body: { message: 'hi' } })).status, 404);
   assert.equal((await api(`/api/disputes/${id}/files/${fileId}`, { token: frank.token })).status, 404);
+  assert.equal((await api(`/api/disputes/${id}/read`, { method: 'POST', token: frank.token, body: {} })).status, 404);
 
-  // …and the owner can still do all three.
+  // …and the owner can still do all four.
   assert.equal((await api(`/api/disputes/${id}`, { token: erin.token })).status, 200);
   const img = await api(`/api/disputes/${id}/files/${fileId}`, { token: erin.token });
   assert.equal(img.res.status, 200);
@@ -198,4 +224,113 @@ test('deleting the account takes the threads with it', async () => {
   assert.equal(del.status, 200);
   const disputes = require('../disputes.js');
   assert.equal(disputes.get(made.body.dispute.id), null);
+});
+
+/* ============================================================
+   ADMIN SIDE
+   ============================================================ */
+
+async function adminToken() {
+  const r = await api('/api/auth/login', { method: 'POST', body: { email: 'boss@evernovalife.com', password: 'password123' } });
+  if (r.body && r.body.token) return r.body.token;
+  const reg = await signUp('boss@evernovalife.com');
+  return reg.token;
+}
+
+test('an ordinary account is refused every admin dispute route', async () => {
+  const mallory = await signUp('mallory-d@example.com');
+  const cases = [
+    ['GET', '/api/admin/disputes'],
+    ['GET', '/api/admin/disputes/DSP-NOPE'],
+    ['POST', '/api/admin/disputes/DSP-NOPE/messages'],
+    ['POST', '/api/admin/disputes/DSP-NOPE/resolve'],
+    ['POST', '/api/admin/disputes/DSP-NOPE/reopen'],
+    ['POST', '/api/admin/disputes/DSP-NOPE/read']
+  ];
+  for (const [method, pathname] of cases) {
+    const { status } = await api(pathname, { method, token: mallory.token, body: method === 'GET' ? undefined : {} });
+    assert.equal(status, 401, `${method} ${pathname} should be 401 for a non-admin, got ${status}`);
+  }
+});
+
+test('the admin list stitches the customer and the order onto each thread', async () => {
+  const nina = await signUp('nina-d@example.com');
+  placeOrder(nina.user.id, 'ENL-ADM1');
+  await api('/api/disputes', { method: 'POST', token: nina.token, body: { orderId: 'ENL-ADM1', reason: 'damaged', message: 'Cracked.' } });
+
+  const token = await adminToken();
+  const { status, body } = await api('/api/admin/disputes', { token });
+  assert.equal(status, 200);
+  const row = body.disputes.find(d => d.orderId === 'ENL-ADM1');
+  assert.ok(row, 'the new thread is in the list');
+  assert.equal(row.customerEmail, 'nina-d@example.com');
+  assert.equal(row.order.total, 96.39);
+  assert.equal(row.unreadForAdmin, true);
+  assert.ok(body.outcomes.some(o => o.code === 'refunded'));
+});
+
+test('the store replies, the thread flips, and the customer sees it', async () => {
+  const omar = await signUp('omar-d@example.com');
+  placeOrder(omar.user.id, 'ENL-ADM2');
+  const made = await api('/api/disputes', { method: 'POST', token: omar.token, body: { orderId: 'ENL-ADM2', reason: 'not_delivered', message: 'Nothing came.' } });
+  const id = made.body.dispute.id;
+
+  const token = await adminToken();
+  const reply = await api(`/api/admin/disputes/${id}/messages`, { method: 'POST', token, body: { message: 'We have opened a claim with the courier.' } });
+  assert.equal(reply.status, 200);
+  assert.equal(reply.body.dispute.status, 'awaiting_customer');
+
+  const seen = await api(`/api/disputes/${id}`, { token: omar.token });
+  assert.equal(seen.body.dispute.messages.length, 2);
+  assert.equal(seen.body.dispute.messages[1].from, 'admin');
+});
+
+test('resolving records the outcome and closes the thread to replies', async () => {
+  const pia = await signUp('pia-d@example.com');
+  placeOrder(pia.user.id, 'ENL-ADM3');
+  const made = await api('/api/disputes', { method: 'POST', token: pia.token, body: { orderId: 'ENL-ADM3', reason: 'damaged', message: 'Broken.' } });
+  const id = made.body.dispute.id;
+  const token = await adminToken();
+
+  const done = await api(`/api/admin/disputes/${id}/resolve`, { method: 'POST', token, body: { outcome: 'replaced', note: 'Reshipped.' } });
+  assert.equal(done.status, 200);
+  assert.equal(done.body.dispute.status, 'resolved');
+  assert.equal(done.body.dispute.outcome, 'replaced');
+
+  const blocked = await api(`/api/disputes/${id}/messages`, { method: 'POST', token: pia.token, body: { message: 'Thanks!' } });
+  assert.equal(blocked.status, 409);
+
+  const back = await api(`/api/admin/disputes/${id}/reopen`, { method: 'POST', token });
+  // Ruling (matches Task 1's identical correction, same reason): deriveStatus
+  // ignores `system` lines, and this thread's only real message is the
+  // customer's opening one — the store resolved it without ever replying.
+  // A thread the store reopens with no reply of its own is waiting on the
+  // store, i.e. 'awaiting_us', not 'awaiting_customer'.
+  assert.equal(back.body.dispute.status, 'awaiting_us');
+  const allowed = await api(`/api/disputes/${id}/messages`, { method: 'POST', token: pia.token, body: { message: 'Thanks!' } });
+  assert.equal(allowed.status, 200);
+});
+
+test('an unknown outcome is refused', async () => {
+  const quinn = await signUp('quinn-d@example.com');
+  placeOrder(quinn.user.id, 'ENL-ADM4');
+  const made = await api('/api/disputes', { method: 'POST', token: quinn.token, body: { orderId: 'ENL-ADM4', reason: 'other', message: 'Hm.' } });
+  const token = await adminToken();
+  const bad = await api(`/api/admin/disputes/${made.body.dispute.id}/resolve`, { method: 'POST', token, body: { outcome: 'whatever' } });
+  assert.equal(bad.status, 400);
+});
+
+test('an admin can download an attachment on any thread', async () => {
+  const rosa = await signUp('rosa-d@example.com');
+  placeOrder(rosa.user.id, 'ENL-ADM5');
+  const made = await api('/api/disputes', {
+    method: 'POST', token: rosa.token,
+    body: { orderId: 'ENL-ADM5', reason: 'damaged', message: 'See photo.', attachments: [{ name: 'p.png', data: PNG }] }
+  });
+  const id = made.body.dispute.id;
+  const fileId = made.body.dispute.messages[0].attachments[0].id;
+  const token = await adminToken();
+  const img = await api(`/api/admin/disputes/${id}/files/${fileId}`, { token });
+  assert.equal(img.res.status, 200);
+  assert.equal(img.res.headers.get('content-type'), 'image/png');
 });

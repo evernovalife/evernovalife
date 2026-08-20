@@ -2254,6 +2254,98 @@ app.get('/api/disputes/:id/files/:fileId', auth.requireAuth, (req, res) => {
   res.send(buf);
 });
 
+/* Filled in by the notification task; declared here so the routes below have
+   something to call. */
+async function sendDisputeReplyEmail() { }
+async function sendDisputeResolvedEmail() { }
+
+/* ---- ADMIN: the dispute queue ----
+   The owner works from this: every thread, newest activity first, each with
+   the order and the customer already attached so the queue answers "what is
+   this about?" without a second request. */
+app.get('/api/admin/disputes', requireAdmin, (req, res) => {
+  const rows = disputes.list().map(d => {
+    const user = auth.getUserById(d.userId);
+    const order = store.listOrders(d.userId).find(o => o && o.orderId === d.orderId) || null;
+    return {
+      ...disputes.summarize(d),
+      customerEmail: user ? user.email : '',
+      customerName: user ? [user.firstName, user.lastName].filter(Boolean).join(' ') : '',
+      order: disputeOrderView(order)
+    };
+  });
+  res.json({ success: true, reasons: disputes.REASONS, outcomes: disputes.OUTCOMES, disputes: rows });
+});
+
+app.get('/api/admin/disputes/:id', requireAdmin, (req, res) => {
+  const d = disputes.get(req.params.id);
+  if (!d) return res.status(404).json({ error: 'No report with that reference.' });
+  const user = auth.getUserById(d.userId);
+  const order = store.listOrders(d.userId).find(o => o && o.orderId === d.orderId) || null;
+  res.json({
+    success: true,
+    dispute: d,
+    order: disputeOrderView(order),
+    customer: user ? { id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName } : null
+  });
+});
+
+app.post('/api/admin/disputes/:id/messages', requireAdmin, async (req, res) => {
+  const d = disputes.get(req.params.id);
+  if (!d) return res.status(404).json({ error: 'No report with that reference.' });
+  try {
+    const updated = disputes.addMessage(d.id, {
+      from: 'admin',
+      authorEmail: (req.user && req.user.email) || 'admin',
+      body: req.body.message,
+      attachments: req.body.attachments
+    });
+    sendDisputeReplyEmail(updated).catch(e => console.error('[disputes] reply email failed:', e.message));
+    res.json({ success: true, dispute: updated });
+  } catch (err) {
+    res.status(err.status || 400).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/disputes/:id/resolve', requireAdmin, (req, res) => {
+  const d = disputes.get(req.params.id);
+  if (!d) return res.status(404).json({ error: 'No report with that reference.' });
+  try {
+    const updated = disputes.resolve(d.id, {
+      outcome: req.body.outcome,
+      note: req.body.note,
+      by: (req.user && req.user.email) || 'admin'
+    });
+    sendDisputeResolvedEmail(updated).catch(e => console.error('[disputes] resolved email failed:', e.message));
+    res.json({ success: true, dispute: updated });
+  } catch (err) {
+    res.status(err.status || 400).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/disputes/:id/reopen', requireAdmin, (req, res) => {
+  const d = disputes.get(req.params.id);
+  if (!d) return res.status(404).json({ error: 'No report with that reference.' });
+  res.json({ success: true, dispute: disputes.reopen(d.id, { by: (req.user && req.user.email) || 'admin' }) });
+});
+
+app.post('/api/admin/disputes/:id/read', requireAdmin, (req, res) => {
+  const d = disputes.get(req.params.id);
+  if (!d) return res.status(404).json({ error: 'No report with that reference.' });
+  disputes.markRead(d.id, 'admin');
+  res.json({ success: true });
+});
+
+app.get('/api/admin/disputes/:id/files/:fileId', requireAdmin, (req, res) => {
+  const meta = disputes.fileMeta(req.params.id, req.params.fileId);
+  const buf = meta && disputes.readFile(req.params.id, req.params.fileId);
+  if (!buf) return res.status(404).json({ error: 'No such attachment.' });
+  res.set('Content-Type', meta.mime);
+  res.set('Content-Disposition', 'inline');
+  res.set('Cache-Control', 'private, max-age=3600');
+  res.send(buf);
+});
+
 /* ============================================================
    ADMIN — orders + confirming manual payments
    ============================================================ */
