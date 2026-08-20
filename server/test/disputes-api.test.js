@@ -334,3 +334,130 @@ test('an admin can download an attachment on any thread', async () => {
   assert.equal(img.res.status, 200);
   assert.equal(img.res.headers.get('content-type'), 'image/png');
 });
+
+/* ============================================================
+   WHAT THE CUSTOMER IS ALLOWED TO SEE
+   ============================================================ */
+
+/* The owner's own address is stamped on every admin reply (authorEmail) and
+   on every resolution (resolvedBy). Neither UI renders either field — which
+   is precisely why this has to be asserted on the SERIALIZED response and
+   not field by field: what catches a route added later and not redacted is
+   "the address appears nowhere in the bytes", not a list of the three fields
+   we happen to know about today. */
+test("the admin's own email address never reaches the customer", async () => {
+  const sam = await signUp('sam-d@example.com');
+  placeOrder(sam.user.id, 'ENL-REDACT');
+  const made = await api('/api/disputes', {
+    method: 'POST', token: sam.token,
+    body: { orderId: 'ENL-REDACT', reason: 'billing', message: 'The total looks wrong.' }
+  });
+  const id = made.body.dispute.id;
+
+  const token = await adminToken();
+  await api(`/api/admin/disputes/${id}/messages`, { method: 'POST', token, body: { message: 'Looking into it.' } });
+  await api(`/api/admin/disputes/${id}/resolve`, { method: 'POST', token, body: { outcome: 'refunded', note: 'Refunded the difference.' } });
+
+  const ADMIN = 'boss@evernovalife.com';
+
+  // The detail route, the list, and the create/reply responses — every
+  // customer-facing shape that carries a thread.
+  const detail = await api(`/api/disputes/${id}`, { token: sam.token });
+  assert.equal(detail.status, 200);
+  assert.ok(!JSON.stringify(detail.body).includes(ADMIN),
+    "the customer's own view of the thread must not carry the admin's address");
+  assert.equal(detail.body.dispute.resolvedBy, '');
+  assert.equal(detail.body.dispute.messages[1].authorEmail, '');
+  // …and their own message still names them, or the thread has lost something real.
+  assert.equal(detail.body.dispute.messages[0].authorEmail, 'sam-d@example.com');
+
+  const listed = await api('/api/disputes', { token: sam.token });
+  assert.ok(!JSON.stringify(listed.body).includes(ADMIN), 'nor the summary list');
+
+  // A reopen writes a `system` line stamped with the admin who reopened it.
+  await api(`/api/admin/disputes/${id}/reopen`, { method: 'POST', token });
+  const replied = await api(`/api/disputes/${id}/messages`, {
+    method: 'POST', token: sam.token, body: { message: 'It is still wrong.' }
+  });
+  assert.equal(replied.status, 200);
+  assert.ok(!JSON.stringify(replied.body).includes(ADMIN),
+    'nor the reply response, including the system line the reopen left behind');
+
+  // The owner, meanwhile, legitimately sees who on their side acted.
+  const asAdmin = await api(`/api/admin/disputes/${id}`, { token });
+  assert.ok(JSON.stringify(asAdmin.body).includes(ADMIN),
+    'the admin view is NOT redacted — the owner has to see who replied');
+});
+
+/* disputeOpenLimiter and disputePostLimiter used to key on req.ip. Nothing
+   here calls app.set('trust proxy'), so on Render req.ip is the proxy's
+   address and every customer shared one bucket: the seventh person to report
+   a lost batch was refused because six strangers had already reported it. */
+test('the open-a-report limiter budgets per account, not site-wide', async () => {
+  const tara = await signUp('tara-d@example.com');
+  const uma = await signUp('uma-d@example.com');
+
+  // Tara spends her whole hourly budget (6) and is refused on the 7th.
+  let last;
+  for (let i = 1; i <= 7; i++) {
+    const orderId = `ENL-TARA${i}`;
+    placeOrder(tara.user.id, orderId);
+    last = await api('/api/disputes', {
+      method: 'POST', token: tara.token,
+      body: { orderId, reason: 'other', message: 'Testing the limiter.' }
+    });
+  }
+  assert.equal(last.status, 429);
+
+  // Uma, from the same address, still has her own untouched budget.
+  placeOrder(uma.user.id, 'ENL-UMA1');
+  const hers = await api('/api/disputes', {
+    method: 'POST', token: uma.token,
+    body: { orderId: 'ENL-UMA1', reason: 'other', message: 'Mine is a different problem.' }
+  });
+  assert.equal(hers.status, 201, "one account's spent budget must not refuse another's first report");
+});
+
+/* Express's own 413 is an HTML page carrying the error name and the absolute
+   node_modules path of every frame. Every client here parses JSON, so that
+   page reaches the customer as "Something went wrong. Try again." — with the
+   photos they just attached gone. */
+test('a body over the limit answers JSON, with no stack and no filesystem path', async () => {
+  const vic = await signUp('vic-d@example.com');
+  placeOrder(vic.user.id, 'ENL-TOOBIG');
+  const res = await fetch(base + '/api/disputes', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${vic.token}` },
+    // Comfortably past the 12mb limit, and cheap to build.
+    body: JSON.stringify({ orderId: 'ENL-TOOBIG', reason: 'other', message: 'x'.repeat(13 * 1024 * 1024) })
+  });
+  assert.equal(res.status, 413);
+  const raw = await res.text();
+  assert.ok(!raw.includes('node_modules'), 'no filesystem path in the response');
+  assert.ok(!raw.includes('PayloadTooLargeError'), 'no error class name in the response');
+  assert.ok(!/\bat\s+\w+\s+\(/.test(raw), 'no stack frames in the response');
+  const parsed = JSON.parse(raw);
+  assert.ok(/photo/i.test(parsed.error), 'and a sentence the customer can act on');
+});
+
+/* The advertised allowance has to actually work: three 2 MB images are
+   8,388,612 characters of base64 — over the old 8mb body limit before the
+   message, the filenames or the JSON around them were counted at all. */
+test('the three 2 MB photos support.html advertises fit inside the body limit', async () => {
+  const wes = await signUp('wes-d@example.com');
+  placeOrder(wes.user.id, 'ENL-THREEBIG');
+  // A real PNG header padded out to exactly 2 MB, three times over.
+  const big = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    Buffer.alloc(2 * 1024 * 1024 - 8, 7)
+  ]).toString('base64');
+  const { status, body } = await api('/api/disputes', {
+    method: 'POST', token: wes.token,
+    body: {
+      orderId: 'ENL-THREEBIG', reason: 'damaged', message: 'Three photos of the same crack.',
+      attachments: [1, 2, 3].map(n => ({ name: `p${n}.png`, data: big }))
+    }
+  });
+  assert.equal(status, 201);
+  assert.equal(body.dispute.messages[0].attachments.length, 3);
+});

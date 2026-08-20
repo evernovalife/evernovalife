@@ -282,6 +282,23 @@ function summarize(d) {
   };
 }
 
+/* What the customer is allowed to see. Admin messages are the store speaking,
+   not a named person: the owner's own address has no business travelling to a
+   customer, and neither UI ever renders it. Applied at the source — on every
+   customer-facing response that carries a thread — rather than at the display
+   layer, so a field nobody renders today can't leak through a page written
+   tomorrow. `system` lines stamp the acting admin too, so they are redacted
+   on the same rule: anything that is not the customer's own message. */
+function forCustomer(d) {
+  if (!d) return d;
+  return Object.assign({}, d, {
+    resolvedBy: '',
+    messages: (d.messages || []).map(function (m) {
+      return m.from === 'customer' ? m : Object.assign({}, m, { authorEmail: '' });
+    })
+  });
+}
+
 function deleteUserData(userId) {
   const all = load();
   let removed = 0;
@@ -312,6 +329,35 @@ function deleteUserData(userId) {
         display label only.
    ============================================================ */
 const FILES_DIR = path.join(DATA_DIR, 'dispute-files');
+
+/* A ceiling on every attachment this feature is holding, across all accounts.
+   The per-account caps alone allow 5 threads × 200 messages × 3 images × 2 MB
+   — 6 GB from one customer — and nothing reclaims the bytes, so an image flood
+   here does not fail politely: it fills the Render disk that orders.json,
+   users.json, loyalty.json and subscriptions.json all write through, and the
+   whole store starts failing writes. This bounds the blast radius to "photos
+   are refused" instead. DISPUTE_TOTAL_BYTES_MAX overrides the default on a
+   bigger disk; it is read per call so it can be raised without a redeploy of
+   this file's constants. */
+const TOTAL_BYTES_DEFAULT = 2 * 1024 * 1024 * 1024;   // 2 GB
+function totalBytesMax() {
+  const n = Number(process.env.DISPUTE_TOTAL_BYTES_MAX);
+  return (Number.isFinite(n) && n > 0) ? n : TOTAL_BYTES_DEFAULT;
+}
+
+/* Sum of every stored attachment. The metadata already carries `bytes`, so
+   this is one parse of disputes.json — no directory walk, no stat() per file. */
+function totalAttachmentBytes() {
+  const all = load();
+  let total = 0;
+  for (const id of Object.keys(all)) {
+    const d = all[id];
+    for (const m of (d && d.messages) || []) {
+      for (const a of (m.attachments || [])) total += Number(a.bytes) || 0;
+    }
+  }
+  return total;
+}
 
 const MAGIC = [
   { mime: 'image/png', ext: 'png', test: b => b.length > 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 },
@@ -350,6 +396,10 @@ const attachStore = {
 
     const dir = path.join(FILES_DIR, disputeId);
     const written = [];
+    // Counted up as the batch is read so a single message can't step over the
+    // ceiling in three 2 MB jumps between two checks.
+    const ceiling = totalBytesMax();
+    let used = totalAttachmentBytes();
     try {
       const meta = list.map(item => {
         const raw = String((item && item.data) || '').replace(/^data:[^;,]*;base64,/, '');
@@ -359,6 +409,11 @@ const attachStore = {
         if (buf.length > MAX_FILE_BYTES) throw err('Each image has to be under 2 MB.');
         const mime = sniffImage(buf);
         if (!mime) throw err('Attachments have to be PNG, JPEG or WebP images.');
+
+        used += buf.length;
+        if (used > ceiling) {
+          throw err('We can\'t store any more photos at the moment. Send the report without them and describe what is wrong — we\'ll ask for images if we need them.');
+        }
 
         const id = newFileId();
         const file = path.join(dir, id + '.' + extFor(mime));
@@ -409,6 +464,6 @@ module.exports = {
   MAX_BODY, MAX_NOTE, MAX_MESSAGES, MAX_OPEN_PER_USER, MAX_FILES_PER_MESSAGE, MAX_FILE_BYTES,
   list, listForUser, get, findOpenForOrder,
   create, addMessage, resolve, reopen, markRead,
-  unreadFor, summarize, deleteUserData,
-  sniffImage, fileMeta, readFile
+  unreadFor, summarize, forCustomer, deleteUserData,
+  sniffImage, fileMeta, readFile, totalAttachmentBytes
 };

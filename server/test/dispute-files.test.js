@@ -102,3 +102,35 @@ test('deleting an account removes its attachment folder from disk', () => {
   disputes.deleteUserData('u-purge');
   assert.equal(fs.existsSync(dir), false);
 });
+
+/* A global ceiling, not a per-account one. The per-account caps allow 5
+   threads x 200 messages x 3 images x 2 MB from ONE customer, nothing
+   reclaims the bytes, and every other JSON store on this volume — orders,
+   users, loyalty, subscriptions — starts failing writes when the disk fills.
+   So the ceiling has to refuse the photo while leaving the report itself
+   openable: someone whose parcel never arrived must still be able to tell us
+   so, even on the day the disk is full. */
+test('a global attachment ceiling refuses the photo but not the report', () => {
+  const prev = process.env.DISPUTE_TOTAL_BYTES_MAX;
+  process.env.DISPUTE_TOTAL_BYTES_MAX = '16';   // smaller than any real image
+  try {
+    assert.throws(
+      () => open({ userId: 'u-ceiling', attachments: [{ name: 'p.png', data: b64(PNG) }] }),
+      /can't store any more photos|cannot store any more photos/i
+    );
+    // …and the same report, described in words, still goes through.
+    const d = open({ userId: 'u-ceiling', body: 'The vial arrived cracked. No photo — it would not upload.' });
+    assert.equal(d.messages[0].attachments.length, 0);
+    assert.equal(d.status, 'awaiting_us');
+  } finally {
+    if (prev === undefined) delete process.env.DISPUTE_TOTAL_BYTES_MAX;
+    else process.env.DISPUTE_TOTAL_BYTES_MAX = prev;
+  }
+});
+
+test('the ceiling counts what is already stored, and lifts when it is raised', () => {
+  const before = disputes.totalAttachmentBytes();
+  const d = open({ attachments: [{ name: 'p.png', data: b64(PNG) }] });
+  assert.equal(disputes.totalAttachmentBytes(), before + PNG.length);
+  assert.equal(d.messages[0].attachments.length, 1, 'the default ceiling is nowhere near reached');
+});

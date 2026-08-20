@@ -48,9 +48,14 @@ app.use(cors({
 
 // Keep the raw request body around (needed to verify the BTCPay webhook's
 // HMAC signature, which is computed over the exact bytes BTCPay sent).
-// Limit is generous (8mb) so admins can upload a product image as a data URL.
+// The limit has to clear the largest thing a client legitimately sends, which
+// is now a dispute with the three 2 MB photos support.html advertises: base64
+// expands by 4/3, so those alone are ~8.4 MB before the message body, the
+// filenames and the JSON overhead — 8mb refused the allowance the page was
+// offering. 12mb leaves that room (and still covers an admin uploading a
+// product image as a data URL) without inviting an arbitrarily large body.
 app.use(express.json({
-  limit: '8mb',
+  limit: '12mb',
   verify: (req, _res, buf) => { req.rawBody = buf; }
 }));
 
@@ -2139,16 +2144,27 @@ app.post('/api/zelle/checkout', auth.requireAuth, async (req, res) => {
    docs/superpowers/specs/2026-08-20-customer-disputes-design.md
    ============================================================ */
 
+/* Both of these sit behind requireAuth, so they are keyed on the ACCOUNT and
+   not on the address. Nothing here calls app.set('trust proxy'), so on Render
+   req.ip is the proxy's address — the same string for every customer — and an
+   IP-keyed limiter on these routes would be a single site-wide bucket: a
+   courier losing a batch would mean the seventh customer to report is refused,
+   while one abuser could still spend the whole global budget and the per-disk
+   defence would bound nothing per attacker. */
+function byAccount(req) { return (req.user && req.user.id) ? 'user:' + req.user.id : ''; }
+
 const disputeOpenLimiter = ratelimit.limit({
   name: 'dispute-open',
   windowMs: 60 * 60 * 1000,
   max: 6,
+  key: byAccount,
   message: 'That is a lot of reports in an hour. Reply on one of the open ones, or email support@evernovalife.com.'
 });
 const disputePostLimiter = ratelimit.limit({
   name: 'dispute-post',
   windowMs: 10 * 60 * 1000,
   max: 30,
+  key: byAccount,
   message: 'Too many messages from this connection. Wait a few minutes and try again.'
 });
 
@@ -2176,8 +2192,15 @@ function ownOrder(userId, orderId) {
   return store.listOrders(userId).find(o => o && o.orderId === orderId) || null;
 }
 
+/* Every customer-facing response that carries a thread goes through
+   disputes.forCustomer() — the store's own addresses (who replied, who
+   resolved) are not the customer's business, and redacting at the display
+   layer would only hold until someone renders a field nobody renders today.
+   The summaries below have no email field to begin with; running them through
+   the same helper keeps the rule "no thread reaches a customer un-redacted"
+   true of every one of these routes rather than of three of them. */
 app.get('/api/disputes', auth.requireAuth, (req, res) => {
-  const mine = disputes.listForUser(req.user.id).map(disputes.summarize);
+  const mine = disputes.listForUser(req.user.id).map(d => disputes.summarize(disputes.forCustomer(d)));
   res.json({ success: true, reasons: disputes.REASONS, disputes: mine });
 });
 
@@ -2198,7 +2221,7 @@ app.post('/api/disputes', auth.requireAuth, disputeOpenLimiter, (req, res) => {
       authorEmail: req.user.email,
       attachments: req.body.attachments
     });
-    res.status(201).json({ success: true, dispute: d, order: disputeOrderView(order) });
+    res.status(201).json({ success: true, dispute: disputes.forCustomer(d), order: disputeOrderView(order) });
   } catch (err) {
     res.status(err.status || 400).json({ error: err.message, disputeId: err.disputeId });
   }
@@ -2216,7 +2239,7 @@ function ownDispute(req) {
 app.get('/api/disputes/:id', auth.requireAuth, (req, res) => {
   const d = ownDispute(req);
   if (!d) return res.status(404).json({ error: 'No report with that reference.' });
-  res.json({ success: true, dispute: d, order: disputeOrderView(ownOrder(req.user.id, d.orderId)) });
+  res.json({ success: true, dispute: disputes.forCustomer(d), order: disputeOrderView(ownOrder(req.user.id, d.orderId)) });
 });
 
 app.post('/api/disputes/:id/messages', auth.requireAuth, disputePostLimiter, (req, res) => {
@@ -2229,7 +2252,7 @@ app.post('/api/disputes/:id/messages', auth.requireAuth, disputePostLimiter, (re
       body: req.body.message,
       attachments: req.body.attachments
     });
-    res.json({ success: true, dispute: updated });
+    res.json({ success: true, dispute: disputes.forCustomer(updated) });
   } catch (err) {
     res.status(err.status || 400).json({ error: err.message });
   }
@@ -3838,6 +3861,35 @@ if (fs.existsSync(path.join(ROOT, 'index.html'))) {
   // API-only: a friendly root response so hitting the base URL isn't a bare 404.
   app.get('/', (_req, res) => res.json({ ok: true, service: 'Ever Nova Life API' }));
 }
+
+/* ============================================================
+   LAST RESORT — anything that threw and nothing caught
+   Without this, Express answers with its own HTML page, and that
+   page carries the error name and the absolute node_modules paths
+   of every frame. Two things go wrong at once: a caller learns the
+   server's directory layout, and every client here parses JSON —
+   so an HTML body reaches the customer as the useless "Something
+   went wrong. Try again." while whatever they had typed or
+   attached is lost.
+
+   So: JSON always, a plain sentence where we have one, and never
+   a stack or a path in the response. The detail goes to the log,
+   which is where the owner can actually act on it.
+   ============================================================ */
+app.use((err, req, res, _next) => {
+  // A body over express.json's limit — in practice, photos on a report.
+  const tooLarge = err && (err.type === 'entity.too.large' || err.status === 413);
+  const status = tooLarge ? 413 : (Number(err && err.status) || 500);
+
+  console.error('[error]', req.method, req.path, '→', status, (err && err.stack) || err);
+
+  if (res.headersSent) return;   // a response already started; adding to it would corrupt it
+  res.status(status).json({
+    error: tooLarge
+      ? 'Those photos are too big to send together. Attach fewer or smaller images — up to 3, under 2 MB each — and send it again.'
+      : 'Something went wrong on our side. Try again, and email support@evernovalife.com if it keeps happening.'
+  });
+});
 
 // Only start listening when run directly (`node server.js`). When the app is
 // require()'d — e.g. by the authorization tests — it's exported without binding
