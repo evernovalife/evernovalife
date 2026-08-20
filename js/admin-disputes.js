@@ -86,17 +86,87 @@
     }).join('') + '</div>';
   }
 
-  function messageHtml(disputeId, m) {
-    if (m.from === 'system') {
-      return '<div class="dsp-msg system">' + A.esc(m.body) +
-        ' <span class="dsp-when">' + A.esc(A.date(m.createdAt)) + '</span></div>';
-    }
-    return '<div class="dsp-msg ' + (m.from === 'admin' ? 'ours' : 'theirs') + '">' +
-      '<div class="dsp-msg-head">' + A.esc(m.from === 'admin' ? 'Us' : (m.authorEmail || 'Customer')) +
-        ' <span class="dsp-when">' + A.esc(A.date(m.createdAt)) + '</span></div>' +
+  /* ---- the conversation ----
+     Grouped rather than a flat list. Consecutive messages from one side share
+     a header, so a three-line answer reads as one answer instead of three
+     identical "Us" stamps; the time appears once per group, and the date only
+     when the day changes. That is the difference between a log and a
+     conversation, and this screen is read while talking to a person. */
+
+  function dayKey(iso) {
+    var d = new Date(iso);
+    return isNaN(d) ? '' : d.getFullYear() + '-' + d.getMonth() + '-' + d.getDate();
+  }
+  function dayLabel(iso) {
+    var d = new Date(iso);
+    if (isNaN(d)) return '';
+    var today = new Date(), y = new Date();
+    y.setDate(today.getDate() - 1);
+    if (dayKey(iso) === dayKey(today.toISOString())) return 'Today';
+    if (dayKey(iso) === dayKey(y.toISOString())) return 'Yesterday';
+    return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  }
+  function clockTime(iso) {
+    var d = new Date(iso);
+    return isNaN(d) ? '' : d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  }
+  /* One letter is enough to tell the two sides apart at a glance, and it
+     cannot leak an address the way a full label would. */
+  function initial(m) {
+    if (m.from === 'admin') return 'E';
+    var who = String(m.authorEmail || 'C').trim();
+    return (who.charAt(0) || 'C').toUpperCase();
+  }
+
+  function bubbleHtml(disputeId, m) {
+    return '<div class="dsp-bubble">' +
       '<div class="dsp-msg-body">' + A.esc(m.body).replace(/\n/g, '<br>') + '</div>' +
       attachmentsHtml(disputeId, m.attachments) +
       '</div>';
+  }
+
+  function streamHtml(disputeId, messages) {
+    var out = [];
+    var lastDay = null;
+    var i = 0;
+    while (i < messages.length) {
+      var m = messages[i];
+
+      if (dayKey(m.createdAt) !== lastDay) {
+        lastDay = dayKey(m.createdAt);
+        out.push('<div class="dsp-day"><span>' + A.esc(dayLabel(m.createdAt)) + '</span></div>');
+      }
+
+      if (m.from === 'system') {
+        out.push('<div class="dsp-msg system">' + A.esc(m.body) + '</div>');
+        i++;
+        continue;
+      }
+
+      /* Gather the run of consecutive messages from this side on this day. */
+      var side = m.from, group = [];
+      while (i < messages.length &&
+             messages[i].from === side &&
+             dayKey(messages[i].createdAt) === lastDay) {
+        group.push(messages[i]);
+        i++;
+      }
+
+      var last = group[group.length - 1];
+      out.push(
+        '<div class="dsp-group ' + (side === 'admin' ? 'ours' : 'theirs') + '">' +
+          '<div class="dsp-avatar" aria-hidden="true">' + A.esc(initial(m)) + '</div>' +
+          '<div class="dsp-group-body">' +
+            '<div class="dsp-msg-head">' +
+              A.esc(side === 'admin' ? 'Us' : (m.authorEmail || 'Customer')) +
+            '</div>' +
+            group.map(function (g) { return bubbleHtml(disputeId, g); }).join('') +
+            '<div class="dsp-when">' + A.esc(clockTime(last.createdAt)) + '</div>' +
+          '</div>' +
+        '</div>'
+      );
+    }
+    return out.join('');
   }
 
   function mb(n) {
@@ -165,7 +235,8 @@
             '<button type="button" class="btn btn-ghost btn-sm act-dsp-strip" data-id="' + A.esc(d.id) + '">Remove photos</button>' +
           '</div>'
         : '') +
-      '<div class="dsp-stream">' + d.messages.map(function (m) { return messageHtml(d.id, m); }).join('') + '</div>' +
+      '<div class="dsp-stream" role="log" aria-live="polite" aria-relevant="additions">' +
+        streamHtml(d.id, d.messages) + '</div>' +
       (d.status === 'resolved'
         ? '<p class="muted">This report is closed. Reopen it to reply.</p>'
         : '<div class="dsp-composer">' +
@@ -208,5 +279,8 @@
       '</div>';
   }
 
-  window.AdminDisputes = { render: render };
+  /* streamHtml is exposed so the grouping can be exercised directly — a check
+   that greps for a class name proves the string exists, not that three
+   consecutive replies actually collapse into one group. */
+  window.AdminDisputes = { render: render, streamHtml: streamHtml };
 })(window, document);

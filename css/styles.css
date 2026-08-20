@@ -3010,26 +3010,75 @@ body.pd-modal-open { overflow: hidden; }
 .dsp-resolve, .dsp-resolved { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
 .dsp-resolve input { flex: 1 1 12rem; min-width: 0; }
 
-.dsp-stream { display: flex; flex-direction: column; gap: .6rem; max-height: 60vh; overflow-y: auto; padding-right: .25rem; }
-.dsp-msg { max-width: 42rem; border-radius: 12px; padding: .6rem .75rem; border: 1px solid rgba(255,255,255,.08); }
-.dsp-msg.theirs { background: rgba(255,255,255,.04); align-self: flex-start; }
-.dsp-msg.ours { background: rgba(124,58,237,.15); border-color: rgba(124,58,237,.35); align-self: flex-end; }
-.dsp-msg.system { align-self: center; font-size: .8rem; opacity: .7; border: 0; background: none; }
-.dsp-msg-head { font-size: .78rem; opacity: .7; margin-bottom: .25rem; }
+.dsp-stream { display: flex; flex-direction: column; gap: .15rem; max-height: 58vh; overflow-y: auto;
+  padding: .75rem .5rem .75rem .25rem; border: 1px solid rgba(255,255,255,.07); border-radius: 12px;
+  background: linear-gradient(180deg, rgba(124,58,237,.05), transparent 40%); }
+
+/* A day heading, not a stamp on every line — the date only earns space when
+   it changes. */
+.dsp-day { display: flex; align-items: center; gap: .6rem; margin: .8rem 0 .5rem; }
+.dsp-day::before, .dsp-day::after { content: ""; flex: 1; height: 1px; background: rgba(255,255,255,.08); }
+.dsp-day span { font-size: .72rem; letter-spacing: .06em; text-transform: uppercase; opacity: .55; }
+
+/* One run of consecutive messages from one side. */
+.dsp-group { display: flex; gap: .5rem; align-items: flex-end; margin-bottom: .7rem; max-width: 46rem; }
+.dsp-group.ours { flex-direction: row-reverse; margin-left: auto; }
+.dsp-group-body { display: flex; flex-direction: column; gap: .2rem; min-width: 0; }
+.dsp-group.ours .dsp-group-body { align-items: flex-end; }
+
+.dsp-avatar { flex: 0 0 auto; width: 28px; height: 28px; border-radius: 50%; display: grid;
+  place-items: center; font-size: .78rem; font-weight: 700; letter-spacing: .01em;
+  background: rgba(255,255,255,.07); color: #cbd5e1; border: 1px solid rgba(255,255,255,.1); }
+.dsp-group.ours .dsp-avatar { background: rgba(124,58,237,.28); color: #ede9fe; border-color: rgba(124,58,237,.45); }
+
+.dsp-msg-head { font-size: .74rem; opacity: .6; padding: 0 .3rem; }
+.dsp-when { font-size: .7rem; opacity: .45; padding: 0 .3rem; }
+
+.dsp-bubble { border-radius: 14px; padding: .55rem .8rem; border: 1px solid rgba(255,255,255,.09);
+  background: rgba(255,255,255,.045); font-size: .92rem; line-height: 1.5; overflow-wrap: anywhere; }
+.dsp-group.theirs .dsp-bubble:first-of-type { border-top-left-radius: 5px; }
+.dsp-group.ours .dsp-bubble { background: rgba(124,58,237,.18); border-color: rgba(124,58,237,.38); }
+.dsp-group.ours .dsp-bubble:first-of-type { border-top-right-radius: 5px; }
+
+.dsp-msg.system { align-self: center; font-size: .78rem; opacity: .6; font-style: italic;
+  padding: .3rem .7rem; margin: .3rem 0; }
 .dsp-msg-body { white-space: normal; overflow-wrap: anywhere; }
 .dsp-atts { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .5rem; }
 .dsp-att { display: inline-flex; align-items: center; gap: .3rem; font-size: .8rem; padding: .25rem .5rem;
-  border-radius: 8px; border: 1px solid rgba(255,255,255,.15); background: none; color: inherit; cursor: pointer; }
+  border-radius: 8px; border: 1px solid rgba(255,255,255,.15); background: none; color: inherit;
+  cursor: pointer; transition: border-color 160ms ease, background 160ms ease; }
+.dsp-att:hover { border-color: rgba(124,58,237,.6); background: rgba(124,58,237,.12); }
 .dsp-att svg { width: 14px; height: 14px; }
-.dsp-composer { display: flex; gap: .5rem; align-items: flex-end; }
-.dsp-composer textarea { flex: 1; min-width: 0; resize: vertical; }
+.dsp-composer { display: flex; gap: .5rem; align-items: flex-end; padding: .6rem;
+  border: 1px solid rgba(255,255,255,.09); border-radius: 12px; background: rgba(255,255,255,.02); }
+.dsp-composer textarea { flex: 1; min-width: 0; resize: vertical; background: transparent;
+  border: 0; color: inherit; font: inherit; padding: .35rem .4rem; }
+.dsp-composer textarea:focus { outline: none; }
+.dsp-composer:focus-within { border-color: rgba(124,58,237,.55); }
+
+/* These were unstyled selects and inputs sitting on a dark ground, which is
+   why the resolve row read as raw browser chrome. */
+.dsp-resolve, .dsp-resolved, .dsp-strip { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center;
+  padding: .55rem .7rem; border: 1px solid rgba(255,255,255,.08); border-radius: 10px;
+  background: rgba(255,255,255,.02); font-size: .88rem; }
+.dsp-resolve select, .dsp-resolve input { background: rgba(255,255,255,.05); color: inherit;
+  border: 1px solid rgba(255,255,255,.14); border-radius: 8px; padding: .4rem .55rem;
+  font: inherit; font-size: .86rem; }
+.dsp-resolve select:focus, .dsp-resolve input:focus { outline: none; border-color: rgba(124,58,237,.6); }
+.dsp-resolve input { flex: 1 1 12rem; min-width: 0; }
+.dsp-resolve .btn, .dsp-resolved .btn, .dsp-strip .btn { margin-left: auto; }
+.dsp-resolved { border-color: rgba(34,197,94,.3); background: rgba(34,197,94,.07); }
+
+@media (prefers-reduced-motion: reduce) {
+  .dsp-att, .dsp-composer, .dsp-row { transition: none; }
+}
 
 /* Phones: the queue stacks above the thread. Per the mobile pass, nothing
    here may be wider than its column. */
 @media (max-width: 860px) {
   .dsp-wrap { grid-template-columns: 1fr; }
   .dsp-stream { max-height: none; }
-  .dsp-msg { max-width: 100%; }
+  .dsp-group { max-width: 100%; }
 }
 
 /* ===== SUPPORT — CUSTOMER DISPUTE THREAD ===== */
@@ -3086,3 +3135,13 @@ body.adminalert-open { overflow: hidden; }
    only its body text needs its own rules. */
 .supdialog-panel p { margin: 0 0 .8rem; font-size: .93rem; line-height: 1.5; }
 .supdialog-panel .btn { width: 100%; }
+
+/* The "they replied" banner on a customer's report. Gold rather than violet:
+   violet is the action colour here and this is news, not a control. */
+.sup-new { display: flex; align-items: center; gap: .5rem; width: 100%; margin: 0 0 .6rem;
+  padding: .6rem .8rem; border-radius: 10px; cursor: pointer; text-align: left;
+  border: 1px solid rgba(212,175,55,.45); background: rgba(212,175,55,.12); color: #f0d98a;
+  font-size: .9rem; font-weight: 600; transition: background 180ms ease, border-color 180ms ease; }
+.sup-new:hover { background: rgba(212,175,55,.2); border-color: rgba(212,175,55,.7); }
+.sup-new svg { width: 17px; height: 17px; flex: 0 0 auto; }
+@media (prefers-reduced-motion: reduce) { .sup-new { transition: none; } }

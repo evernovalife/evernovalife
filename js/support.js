@@ -180,12 +180,59 @@
       '</div>';
   }
 
+  /* ---- "they replied" ----
+     The thread already refreshes on its own every 20 seconds, but a silent
+     refresh is not an announcement: a customer waiting on a missing parcel is
+     usually on another tab. So a new reply raises a banner they can click, and
+     changes the document title, which is the only part of this that reaches a
+     tab nobody is looking at. */
+  var lastSeenId = null;          // newest message id the reader has been shown
+  var baseTitle = document.title;
+
+  function newestRealId(d) {
+    for (var i = d.messages.length - 1; i >= 0; i--) {
+      var m = d.messages[i];
+      if (m.from === 'customer' || m.from === 'admin') return m.id;
+    }
+    return null;
+  }
+  function newestIsTheirs(d) {
+    for (var i = d.messages.length - 1; i >= 0; i--) {
+      var m = d.messages[i];
+      if (m.from === 'customer' || m.from === 'admin') return m.from === 'admin';
+    }
+    return false;
+  }
+
+  function markRead() {
+    document.title = baseTitle;
+    var b = $('supNew');
+    if (b) b.hidden = true;
+  }
+
+  function announceReply() {
+    var b = $('supNew');
+    if (b) b.hidden = false;
+    /* The count is deliberately not tracked across replies — "they replied" is
+       the whole message, and a growing number would only be read as noise. */
+    document.title = '(1) ' + baseTitle;
+  }
+
   function renderThread() {
     var d = state.dispute;
     $('supOpenForm').hidden = true;
     $('supThread').hidden = false;
     $('supStream').innerHTML = d.messages.map(function (m) { return messageHtml(d, m); }).join('');
     $('supStream').scrollTop = $('supStream').scrollHeight;
+
+    /* First render just establishes where we are; only a LATER change counts as
+       news, or opening the page would announce a reply the reader is looking at. */
+    var newest = newestRealId(d);
+    if (lastSeenId !== null && newest !== lastSeenId && newestIsTheirs(d)) {
+      if (document.hidden) announceReply();
+      else markRead();       // they are looking straight at it
+    }
+    lastSeenId = newest;
 
     var closed = d.status === 'resolved';
     if (!closed) state.startingNew = false;
@@ -469,8 +516,21 @@
       }
     });
     document.addEventListener('visibilitychange', function () {
-      if (document.hidden) stopPolling(); else { load(true); startPolling(); }
+      if (document.hidden) { stopPolling(); return; }
+      /* Back on the tab: the title has done its job, so stop shouting. The
+         banner stays until clicked — it is what scrolls them to the reply. */
+      document.title = baseTitle;
+      load(true);
+      startPolling();
     });
+    var newBanner = $('supNew');
+    if (newBanner) {
+      newBanner.addEventListener('click', function () {
+        markRead();
+        var stream = $('supStream');
+        if (stream) stream.scrollTop = stream.scrollHeight;
+      });
+    }
 
     load().then(startPolling);
   }
