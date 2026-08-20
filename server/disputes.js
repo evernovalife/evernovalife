@@ -15,6 +15,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const DISPUTES_FILE = path.join(DATA_DIR, 'disputes.json');
@@ -68,7 +69,14 @@ function save(obj) {
 
 /* Ids follow the ENL- order convention: short, sortable, sayable. */
 let seq = 0;
-function newDisputeId() { return 'DSP-' + Date.now().toString(36).toUpperCase(); }
+// The timestamp alone repeats inside the same millisecond under load, and
+// this id is the key the whole store is filed under — a repeat here would
+// silently overwrite another customer's thread, not just look odd. A few
+// random hex bytes make that vanishingly unlikely; create() below closes
+// the gap the rest of the way by regenerating on an actual collision.
+function newDisputeId() {
+  return 'DSP-' + Date.now().toString(36).toUpperCase() + crypto.randomBytes(2).toString('hex').toUpperCase();
+}
 function newMessageId() { return 'm' + Date.now().toString(36) + (seq++).toString(36); }
 
 /* Status is derived from the stream, never typed by a human, so the
@@ -113,18 +121,25 @@ function create({ userId, orderId, reason, body, authorEmail, attachments }) {
   if (!isReason(reason)) throw err('Choose a reason for the report.');
   const text = cleanBody(body);
 
-  if (findOpenForOrder(orderId)) {
+  const openOnOrder = findOpenForOrder(orderId);
+  if (openOnOrder) {
     throw Object.assign(err('There is already an open report on that order.', 409),
-      { disputeId: findOpenForOrder(orderId).id });
+      { disputeId: openOnOrder.id });
   }
   const openMine = listForUser(userId).filter(d => !d.resolvedAt).length;
   if (openMine >= MAX_OPEN_PER_USER) {
     throw err(`You already have ${MAX_OPEN_PER_USER} open reports. We'll answer those first — reply on one of them instead.`);
   }
 
+  const all = load();
+  // Belt and braces: newDisputeId() is already collision-resistant, but the
+  // map is keyed by this id, so regenerate rather than merely trust it.
+  let id = newDisputeId();
+  while (all[id]) id = newDisputeId();
+
   const now = new Date().toISOString();
   const d = {
-    id: newDisputeId(),
+    id,
     orderId: String(orderId),
     userId: String(userId),
     reason,
@@ -142,15 +157,15 @@ function create({ userId, orderId, reason, body, authorEmail, attachments }) {
       from: 'customer',
       authorEmail: String(authorEmail || ''),
       body: text,
-      attachments: attachStore.attach(null, attachments),
+      attachments: [],
       createdAt: now
     }]
   };
-  // The attachment ids need the dispute id to land in the right folder, so
-  // the files are written once the record has one.
+  // Attachments are Task 2; this call is real (attachStore.attach() below
+  // is a stub returning []), kept as its own statement so a throw here —
+  // once it does something — happens before anything is saved.
   d.messages[0].attachments = attachStore.attach(d.id, attachments);
 
-  const all = load();
   all[d.id] = d;
   save(all);
   return stamp(d);

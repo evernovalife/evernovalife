@@ -124,6 +124,29 @@ test('a sixth open thread for one account is refused', () => {
   );
 });
 
+test('a tight loop of creates never collides on id, and every thread survives', () => {
+  // Same-millisecond ids used to repeat, and the store is keyed by id — a
+  // repeat silently overwrites another thread rather than duplicating one,
+  // so the count of surviving records is the assertion that actually
+  // catches that, not just the count of distinct ids returned.
+  const made = [];
+  for (let i = 0; i < 25; i++) {
+    made.push(disputes.create({
+      userId: 'u-idtest' + i,
+      orderId: 'ENL-ID' + i,
+      reason: 'other',
+      body: 'x',
+      authorEmail: 'idtest@example.com'
+    }));
+  }
+  const ids = made.map(d => d.id);
+  assert.equal(new Set(ids).size, ids.length, 'every created thread must have a distinct id');
+  const listed = new Set(disputes.list().map(d => d.id));
+  for (const id of ids) {
+    assert.ok(listed.has(id), `created thread ${id} is missing from list() — a collision would have overwritten it`);
+  }
+});
+
 test('an over-long message body is refused, and nothing is written', () => {
   const d = open({ orderId: 'ENL-LONG' });
   const before = disputes.get(d.id).messages.length;
