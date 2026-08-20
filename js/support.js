@@ -509,6 +509,17 @@
   }
 
   /* ---- boot ---- */
+  /* The shell's height is the viewport minus whatever the sticky header
+     actually occupies. Measured rather than hardcoded: the announcement bar
+     above the nav wraps at some widths, and a guessed constant would put the
+     composer under the header on exactly those. */
+  function measureHeader() {
+    var h = document.querySelector('.site-header');
+    if (!h) return;
+    var box = h.getBoundingClientRect();
+    document.documentElement.style.setProperty('--enl-hdr', Math.round(box.bottom) + 'px');
+  }
+
   function init() {
     var params = new URLSearchParams(window.location.search);
     state.orderId = (params.get('order') || '').trim();
@@ -554,6 +565,19 @@
         markRead();
         var stream = $('supStream');
         if (stream) stream.scrollTop = stream.scrollHeight;
+      });
+    }
+
+    measureHeader();
+    window.addEventListener('resize', measureHeader);
+
+    /* One row until it needs more, so the composer stays the size of what is
+       actually being written. */
+    var reply = $('supReply');
+    if (reply) {
+      reply.addEventListener('input', function () {
+        reply.style.height = 'auto';
+        reply.style.height = Math.min(reply.scrollHeight, 128) + 'px';
       });
     }
 

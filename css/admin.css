@@ -472,3 +472,22 @@ body.adm {
   border-radius: 8px;
 }
 .promo-sku-list .form-check { margin: 0; white-space: nowrap; }
+
+/* ---- the dispute thread as a conversation shell ----
+   The queue and the thread each scroll on their own, so picking a report does
+   not move the list and reading a long thread does not move the console. */
+.dsp-wrap { height: calc(100dvh - 8.5rem); min-height: 26rem; align-items: stretch; }
+.dsp-queue { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-right: .25rem; }
+.dsp-pane { min-height: 0; display: grid; grid-template-rows: auto auto 1fr auto; gap: .75rem; }
+/* min-height:0 again: without it a grid child refuses to shrink, the stream
+   grows to fit its content and the console scrolls instead of the thread. */
+.dsp-pane .dsp-stream { min-height: 0; max-height: none; overscroll-behavior: contain; }
+.dsp-pane.empty { display: block; }
+
+@media (max-width: 860px) {
+  /* Phones: back to ordinary flow, per the mobile pass. */
+  .dsp-wrap { height: auto; min-height: 0; }
+  .dsp-queue { overflow: visible; }
+  .dsp-pane { display: flex; flex-direction: column; }
+  .dsp-pane .dsp-stream { max-height: 60vh; }
+}

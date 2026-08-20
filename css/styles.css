@@ -3082,7 +3082,42 @@ body.pd-modal-open { overflow: hidden; }
 }
 
 /* ===== SUPPORT — CUSTOMER DISPUTE THREAD ===== */
-.sup-stream { display: flex; flex-direction: column; gap: .6rem; margin: 1rem 0; max-height: 60vh; overflow-y: auto; }
+/* ---- the conversation shell ----
+   Three rows: what is fixed, what scrolls, what stays reachable. The header is
+   measured at runtime into --enl-hdr because it is sticky and its height moves
+   with the announcement bar. dvh rather than vh: on a phone vh ignores the
+   collapsing address bar, so a 100vh shell hides its own composer. */
+.sup-shell { display: grid; grid-template-rows: 1fr auto; gap: .75rem;
+  height: calc(100dvh - var(--enl-hdr, 140px) - 7rem); min-height: 22rem; }
+.sup-shell .sup-closed { grid-row: 2; }
+
+.sup-stream { display: flex; flex-direction: column; gap: .6rem; padding: .25rem;
+  /* min-height:0 is what makes this scroll at all — a grid child defaults to
+     min-height:auto, so without it the content pushes the row taller and the
+     PAGE scrolls instead of the stream. */
+  min-height: 0; overflow-y: auto;
+  /* Stops the scroll handing off to the page when the stream hits an end. */
+  overscroll-behavior: contain; }
+
+/* A composer that is one row, not a form. It was a full form-card with its own
+   labels and a file field, which is why the Send button sat below the fold. */
+.sup-composer { display: flex; flex-direction: column; gap: .4rem; }
+.sup-composer-row { display: flex; align-items: flex-end; gap: .5rem; padding: .5rem;
+  border: 1px solid rgba(255,255,255,.1); border-radius: 12px; background: rgba(255,255,255,.03); }
+.sup-composer-row:focus-within { border-color: rgba(124,58,237,.55); }
+.sup-composer textarea { flex: 1; min-width: 0; resize: none; max-height: 8rem;
+  background: transparent; border: 0; color: inherit; font: inherit; padding: .45rem .35rem; }
+.sup-composer textarea:focus { outline: none; }
+.sup-attach { display: grid; place-items: center; width: 38px; height: 38px; flex: 0 0 auto;
+  border-radius: 9px; cursor: pointer; color: #cbd5e1; border: 1px solid transparent;
+  transition: background 160ms ease, color 160ms ease; }
+.sup-attach:hover { background: rgba(124,58,237,.16); color: #ede9fe; }
+.sup-attach svg { width: 18px; height: 18px; }
+.sup-attach:focus-within { border-color: rgba(124,58,237,.6); }
+.sup-send { flex: 0 0 auto; }
+
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .sup-msg { max-width: 90%; border-radius: 12px; padding: .65rem .8rem; border: 1px solid rgba(255,255,255,.08); }
 .sup-msg.mine { background: rgba(124,58,237,.15); border-color: rgba(124,58,237,.35); align-self: flex-end; }
 .sup-msg.theirs { background: rgba(255,255,255,.04); align-self: flex-start; }
@@ -3175,3 +3210,13 @@ body.adminalert-open { overflow: hidden; }
 
 @media (max-width: 600px) { .reply-toast { left: .7rem; right: .7rem; width: auto; bottom: .7rem; } }
 @media (prefers-reduced-motion: reduce) { .reply-toast { animation: none; } }
+
+/* Phones: the shell is dropped entirely. A pinned composer competing with an
+   on-screen keyboard is worse than ordinary scrolling, and the mobile pass's
+   rule is that nothing may be taller than its column. */
+@media (max-width: 700px) {
+  .sup-shell { display: block; height: auto; min-height: 0; }
+  .sup-stream { max-height: 60vh; }
+  .sup-composer { margin-top: .75rem; }
+}
+@media (prefers-reduced-motion: reduce) { .sup-attach { transition: none; } }
