@@ -598,7 +598,9 @@ Storage (admin)
   POST   /api/admin/disputes/sweep              expire photos on reports resolved past the window
   DELETE /api/admin/disputes/:id/attachments    drop one report's photos now
 
-  GET /api/admin/disputes also returns storage: { usedBytes, ceilingBytes, pct }.
+  All three return the same storage object: { usedBytes, ceilingBytes, pct, alertPct }.
+  alertPct is DISPUTE_STORAGE_ALERT_PCT, sent so the admin console's amber line turns at
+  exactly the percentage that sends the warning email.
 
 Tunables (all read per request, so Render can change them without a redeploy):
   DISPUTE_TOTAL_BYTES_MAX        total photo allowance in bytes (default 2 GB — set
@@ -608,8 +610,10 @@ Tunables (all read per request, so Render can change them without a redeploy):
   DISPUTE_STORAGE_ALERT_PCT      percentage that triggers the warning email (default 80)
 
 Expiry drops the bytes and keeps the record, so a cleared thread still reads honestly.
-The sweep runs on the existing /api/outreach/run cron — if that ping is not armed,
-nothing expires and the warning never sends.
+The sweep itself only runs when an admin clicks Run cleanup in the console (which calls
+POST /api/admin/disputes/sweep) — nothing expires photos on its own schedule. It is the
+storage warning EMAIL that rides the existing /api/outreach/run cron: if that ping is not
+armed, the figure keeps climbing but the warning never sends.
 ```
 
 ## Notes & next steps
