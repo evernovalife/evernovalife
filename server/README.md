@@ -99,6 +99,19 @@ The server also serves the static site, so open **http://localhost:4242/checkout
 | POST   | `/api/auth/register`   | Create an account (bcrypt) → returns a JWT       |
 | POST   | `/api/auth/login`      | Verify email + password → returns a JWT          |
 | GET    | `/api/auth/me`         | Current user (needs `Authorization: Bearer …`)   |
+| GET    | `/api/disputes`        | This account's dispute threads, as summaries     |
+| POST   | `/api/disputes`        | Open one `{ orderId, reason, message, attachments[] }` |
+| GET    | `/api/disputes/:id`    | The full thread + the order it's about           |
+| POST   | `/api/disputes/:id/messages` | Reply `{ message, attachments[] }`         |
+| POST   | `/api/disputes/:id/read` | Mark a dispute thread read                     |
+| GET    | `/api/disputes/:id/files/:fileId` | An attached image                     |
+| GET    | `/api/admin/disputes`  | Admin: the dispute queue, with the customer and order attached |
+| GET    | `/api/admin/disputes/:id` | Admin: one dispute thread                     |
+| POST   | `/api/admin/disputes/:id/messages` | Admin: reply (emails the customer)   |
+| POST   | `/api/admin/disputes/:id/resolve` | Admin: close it `{ outcome, note }` (emails the customer) |
+| POST   | `/api/admin/disputes/:id/reopen` | Admin: reopen a closed dispute                |
+| POST   | `/api/admin/disputes/:id/read` | Admin: mark a dispute thread read               |
+| GET    | `/api/admin/disputes/:id/files/:fileId` | Admin: an attached image           |
 | GET    | `/api/health`          | Liveness + which methods are configured          |
 
 ## Crypto payments — Bitcoin / Lightning (BTCPay Server)
@@ -566,6 +579,19 @@ the customer is charged normally instead of being refused at checkout.
 
 `GET /api/promotions` is public but returns only what is running — a campaign
 scheduled for Friday is not readable on Tuesday.
+
+## Disputes
+
+A dispute is a threaded conversation between one customer and admin, tied to
+an order, with image attachments on either side. Customer routes require a
+signed-in account and only ever see that account's own threads; admin routes
+see the whole queue with the customer and order attached, and a reply or a
+resolution emails the customer (no message body goes in the email — just a
+notice to come look).
+
+Stored in `DATA_DIR/disputes.json` and `DATA_DIR/dispute-files/`. Resolving
+records an outcome — it never refunds or reships. Neither is seeded; neither
+is in git.
 
 ## Notes & next steps
 
