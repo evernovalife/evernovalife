@@ -2500,11 +2500,18 @@
     try {
       var data = await A.api('/api/admin/disputes/' + encodeURIComponent(id) + '/messages',
         { method: 'POST', body: { message: message } });
+      // The owner may have opened a different thread while this was in
+      // flight — a response for `id` must not write into (or re-render) a
+      // pane that has since moved on to a different one.
+      if (state.disputeId !== id) return;
       state.disputeThread = Object.assign({}, state.disputeThread, { dispute: data.dispute });
       A.toast('Sent. The customer has been emailed a link to it.', 'success');
       await loadAll({ quiet: true });
       render();
-    } catch (e) { A.toast(e.message, 'error'); btn.disabled = false; }
+    } catch (e) {
+      A.toast(e.message, 'error');
+      if (state.disputeId === id) btn.disabled = false;
+    }
   }
 
   async function resolveDispute(id, btn) {
@@ -2518,21 +2525,29 @@
     try {
       var data = await A.api('/api/admin/disputes/' + encodeURIComponent(id) + '/resolve',
         { method: 'POST', body: { outcome: outcome, note: note ? note.value : '' } });
+      if (state.disputeId !== id) return;
       state.disputeThread = Object.assign({}, state.disputeThread, { dispute: data.dispute });
       A.toast('Closed, and the customer has been told.', 'success');
       await loadAll({ quiet: true });
       render();
-    } catch (e) { A.toast(e.message, 'error'); btn.disabled = false; }
+    } catch (e) {
+      A.toast(e.message, 'error');
+      if (state.disputeId === id) btn.disabled = false;
+    }
   }
 
   async function reopenDispute(id, btn) {
     btn.disabled = true;
     try {
       var data = await A.api('/api/admin/disputes/' + encodeURIComponent(id) + '/reopen', { method: 'POST' });
+      if (state.disputeId !== id) return;
       state.disputeThread = Object.assign({}, state.disputeThread, { dispute: data.dispute });
       await loadAll({ quiet: true });
       render();
-    } catch (e) { A.toast(e.message, 'error'); btn.disabled = false; }
+    } catch (e) {
+      A.toast(e.message, 'error');
+      if (state.disputeId === id) btn.disabled = false;
+    }
   }
 
   /* An <img> can't send the bearer token, so the bytes are fetched with it
