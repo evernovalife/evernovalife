@@ -30,6 +30,7 @@ const labelDesign = require('./label-design.js');
 const mailer = require('./email.js');
 const outreach = require('./outreach.js');
 const ratelimit = require('./ratelimit.js');
+const disputes = require('./disputes.js');
 
 const app = express();
 const PORT = process.env.PORT || 4242;
@@ -47,9 +48,14 @@ app.use(cors({
 
 // Keep the raw request body around (needed to verify the BTCPay webhook's
 // HMAC signature, which is computed over the exact bytes BTCPay sent).
-// Limit is generous (8mb) so admins can upload a product image as a data URL.
+// The limit has to clear the largest thing a client legitimately sends, which
+// is now a dispute with the three 2 MB photos support.html advertises: base64
+// expands by 4/3, so those alone are ~8.4 MB before the message body, the
+// filenames and the JSON overhead — 8mb refused the allowance the page was
+// offering. 12mb leaves that room (and still covers an admin uploading a
+// product image as a data URL) without inviting an arbitrarily large body.
 app.use(express.json({
-  limit: '8mb',
+  limit: '12mb',
   verify: (req, _res, buf) => { req.rawBody = buf; }
 }));
 
@@ -77,7 +83,8 @@ app.get('/api/health', (req, res) => res.json({
   features: {
     stockCounts: true,            // PATCH /api/products/:id/stock exists
     orderLookup: true,            // POST /api/orders/lookup exists (guest order status)
-    outreach: true                // POST /api/outreach/run exists (nudges + stock alerts)
+    outreach: true,               // POST /api/outreach/run exists (nudges + stock alerts)
+    disputes: true                // customer dispute threads exist (support.html)
   }
 }));
 
@@ -744,6 +751,9 @@ app.delete('/api/admin/users/:id', requireAdmin, (req, res) => {
   // Critical: drop their auto-ship plans too, or the scheduler would keep
   // invoicing an account that no longer exists.
   try { subscriptions.deleteUserData(id); } catch (e) { console.error('[admin delete] autoship cleanup failed:', e.message); }
+  // Threads AND the images on disk — this is the only cascade that leaves
+  // bytes behind if it is missed.
+  try { disputes.deleteUserData(id); } catch (e) { console.error('[admin delete] dispute cleanup failed:', e.message); }
   res.json({ success: true, deleted: removed });
 });
 
@@ -2123,6 +2133,306 @@ app.post('/api/zelle/checkout', auth.requireAuth, async (req, res) => {
     console.error('[zelle checkout] failed:', err.message);
     res.status(err.status === 409 ? 409 : 400).json({ error: err.message });
   }
+});
+
+/* ============================================================
+   CUSTOMER DISPUTES
+   A thread about one order, opened by the account that placed it.
+   Deliberately narrow: no guest path (an account is required to
+   order, so almost every order has one), and resolving records an
+   outcome — it never moves money or stock. See
+   docs/superpowers/specs/2026-08-20-customer-disputes-design.md
+   ============================================================ */
+
+/* Both of these sit behind requireAuth, so they are keyed on the ACCOUNT and
+   not on the address. Nothing here calls app.set('trust proxy'), so on Render
+   req.ip is the proxy's address — the same string for every customer — and an
+   IP-keyed limiter on these routes would be a single site-wide bucket: a
+   courier losing a batch would mean the seventh customer to report is refused,
+   while one abuser could still spend the whole global budget and the per-disk
+   defence would bound nothing per attacker. */
+function byAccount(req) { return (req.user && req.user.id) ? 'user:' + req.user.id : ''; }
+
+const disputeOpenLimiter = ratelimit.limit({
+  name: 'dispute-open',
+  windowMs: 60 * 60 * 1000,
+  max: 6,
+  key: byAccount,
+  message: 'That is a lot of reports in an hour. Reply on one of the open ones, or email support@evernovalife.com.'
+});
+const disputePostLimiter = ratelimit.limit({
+  name: 'dispute-post',
+  windowMs: 10 * 60 * 1000,
+  max: 30,
+  key: byAccount,
+  message: 'Too many messages from this connection. Wait a few minutes and try again.'
+});
+
+/* The slice of an order a dispute page needs: enough to talk about the
+   parcel without opening another tab, and nothing the thread has no use
+   for (no address, no payment ledger). */
+function disputeOrderView(order) {
+  if (!order) return null;
+  return {
+    orderId: order.orderId,
+    status: order.status,
+    total: order.total,
+    createdAt: order.createdAt,
+    carrier: order.carrier || '',
+    tracking: order.tracking || '',
+    items: (order.items || []).map(i => ({
+      name: i.name, quantity: i.quantity, paidQuantity: i.paidQuantity, price: i.price
+    }))
+  };
+}
+
+/* The caller's own order, or null. Every dispute route that names an order
+   goes through this — it is the ownership check. */
+function ownOrder(userId, orderId) {
+  return store.listOrders(userId).find(o => o && o.orderId === orderId) || null;
+}
+
+/* Every customer-facing response that carries a thread goes through
+   disputes.forCustomer() — the store's own addresses (who replied, who
+   resolved) are not the customer's business, and redacting at the display
+   layer would only hold until someone renders a field nobody renders today.
+   The summaries below have no email field to begin with; running them through
+   the same helper keeps the rule "no thread reaches a customer un-redacted"
+   true of every one of these routes rather than of three of them. */
+app.get('/api/disputes', auth.requireAuth, (req, res) => {
+  const mine = disputes.listForUser(req.user.id).map(d => disputes.summarize(disputes.forCustomer(d)));
+  res.json({ success: true, reasons: disputes.REASONS, disputes: mine });
+});
+
+app.post('/api/disputes', auth.requireAuth, disputeOpenLimiter, (req, res) => {
+  const orderId = String(req.body.orderId || '').trim();
+  const order = ownOrder(req.user.id, orderId);
+  // 404, not 403: a 403 would confirm that the reference belongs to someone.
+  if (!order) return res.status(404).json({ error: 'No order of yours with that reference.' });
+  if (order.status === 'cancelled') {
+    return res.status(400).json({ error: 'That order was cancelled. If something is still wrong, email support@evernovalife.com.' });
+  }
+  try {
+    const d = disputes.create({
+      userId: req.user.id,
+      orderId,
+      reason: req.body.reason,
+      body: req.body.message,
+      authorEmail: req.user.email,
+      attachments: req.body.attachments
+    });
+    res.status(201).json({ success: true, dispute: disputes.forCustomer(d), order: disputeOrderView(order) });
+  } catch (err) {
+    res.status(err.status || 400).json({ error: err.message, disputeId: err.disputeId });
+  }
+});
+
+/* One helper for the three routes that read a thread: it returns the thread
+   only to its owner, and answers 404 for everything else — a wrong id and
+   someone else's id are indistinguishable from outside. */
+function ownDispute(req) {
+  const d = disputes.get(req.params.id);
+  if (!d || d.userId !== req.user.id) return null;
+  return d;
+}
+
+app.get('/api/disputes/:id', auth.requireAuth, (req, res) => {
+  const d = ownDispute(req);
+  if (!d) return res.status(404).json({ error: 'No report with that reference.' });
+  res.json({ success: true, dispute: disputes.forCustomer(d), order: disputeOrderView(ownOrder(req.user.id, d.orderId)) });
+});
+
+app.post('/api/disputes/:id/messages', auth.requireAuth, disputePostLimiter, (req, res) => {
+  const d = ownDispute(req);
+  if (!d) return res.status(404).json({ error: 'No report with that reference.' });
+  try {
+    const updated = disputes.addMessage(d.id, {
+      from: 'customer',
+      authorEmail: req.user.email,
+      body: req.body.message,
+      attachments: req.body.attachments
+    });
+    res.json({ success: true, dispute: disputes.forCustomer(updated) });
+  } catch (err) {
+    res.status(err.status || 400).json({ error: err.message });
+  }
+});
+
+app.post('/api/disputes/:id/read', auth.requireAuth, (req, res) => {
+  const d = ownDispute(req);
+  if (!d) return res.status(404).json({ error: 'No report with that reference.' });
+  disputes.markRead(d.id, 'customer');
+  res.json({ success: true });
+});
+
+app.get('/api/disputes/:id/files/:fileId', auth.requireAuth, (req, res) => {
+  const d = ownDispute(req);
+  if (!d) return res.status(404).json({ error: 'No report with that reference.' });
+  const meta = disputes.fileMeta(d.id, req.params.fileId);
+  const buf = meta && disputes.readFile(d.id, req.params.fileId);
+  if (!buf) return res.status(404).json({ error: 'No such attachment.' });
+  res.set('Content-Type', meta.mime);
+  res.set('Content-Disposition', 'inline');
+  res.set('Cache-Control', 'private, max-age=3600');
+  res.send(buf);
+});
+
+/* ============================================================
+   DISPUTE NOTIFICATIONS
+   A doorbell, not a transcript: the mail says a reply is waiting
+   and links to the thread. The message body is deliberately NOT
+   included — a dispute can carry an address or a courier claim,
+   and once that is in a mail body it lives in whatever chain the
+   mail gets forwarded into.
+   ============================================================ */
+function disputeLink(d) {
+  const site = (process.env.SITE_URL || 'https://evernovalife.com').replace(/\/+$/, '');
+  return `${site}/support.html?order=${encodeURIComponent(d.orderId)}`;
+}
+
+function buildDisputeReplyMail(d, email, name) {
+  const link = disputeLink(d);
+  const who = name || 'there';
+  const subject = `We've replied about your report on order ${d.orderId}`;
+  const text = `Hi ${who},\n\n` +
+    `There's a reply waiting on your report about order ${d.orderId}.\n\n` +
+    `Read it and answer here:\n${link}\n\n` +
+    `We keep the conversation on the site rather than in email so everything about the order stays in one place.\n\n` +
+    `— The Ever Nova Life team`;
+  const html = `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;color:#1f2937">
+    <h2 style="color:#6d28d9;margin-bottom:4px">We've replied</h2>
+    <p>Hi ${escapeHtmlSrv(who)}, there's a reply waiting on your report about order <strong>${escapeHtmlSrv(d.orderId)}</strong>.</p>
+    <p><a href="${link}" style="display:inline-block;background:#6d28d9;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600">Read the reply</a></p>
+    <p style="color:#9ca3af;font-size:12px;margin-top:24px">We keep the conversation on the site rather than in email so everything about the order stays in one place.</p>
+  </div>`;
+  return { to: email, subject, text, html };
+}
+
+function buildDisputeResolvedMail(d, email, name) {
+  const link = disputeLink(d);
+  const who = name || 'there';
+  const label = (disputes.OUTCOMES.find(o => o.code === d.outcome) || {}).label || 'Closed';
+  const note = String(d.outcomeNote || '').trim();
+  const subject = `Your report on order ${d.orderId} is resolved`;
+  const text = `Hi ${who},\n\n` +
+    `We've closed your report about order ${d.orderId}.\n\n` +
+    `Outcome: ${label}\n` +
+    (note ? `Note: ${note}\n` : '') +
+    `\nThe full conversation stays here:\n${link}\n\n` +
+    `If this isn't settled, open a new report from the order and we'll pick it up.\n\n` +
+    `— The Ever Nova Life team`;
+  const html = `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;color:#1f2937">
+    <h2 style="color:#6d28d9;margin-bottom:4px">Report resolved</h2>
+    <p>Hi ${escapeHtmlSrv(who)}, we've closed your report about order <strong>${escapeHtmlSrv(d.orderId)}</strong>.</p>
+    <p><strong>Outcome:</strong> ${escapeHtmlSrv(label)}</p>
+    ${note ? `<p><strong>Note:</strong> ${escapeHtmlSrv(note)}</p>` : ''}
+    <p><a href="${link}" style="display:inline-block;background:#6d28d9;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600">See the conversation</a></p>
+    <p style="color:#9ca3af;font-size:12px;margin-top:24px">If this isn't settled, open a new report from the order and we'll pick it up.</p>
+  </div>`;
+  return { to: email, subject, text, html };
+}
+
+/* Nothing emails the owner: the rail tally in the admin console is that
+   notification, and a second channel for the same event is just noise. */
+async function sendDisputeReplyEmail(d) {
+  if (!mailer.CONFIGURED) return;
+  const user = auth.getUserById(d.userId);
+  if (!user || !user.email) return;
+  return mailer.sendMail(buildDisputeReplyMail(d, user.email, user.firstName));
+}
+
+async function sendDisputeResolvedEmail(d) {
+  if (!mailer.CONFIGURED) return;
+  const user = auth.getUserById(d.userId);
+  if (!user || !user.email) return;
+  return mailer.sendMail(buildDisputeResolvedMail(d, user.email, user.firstName));
+}
+
+/* ---- ADMIN: the dispute queue ----
+   The owner works from this: every thread, newest activity first, each with
+   the order and the customer already attached so the queue answers "what is
+   this about?" without a second request. */
+app.get('/api/admin/disputes', requireAdmin, (req, res) => {
+  const rows = disputes.list().map(d => {
+    const user = auth.getUserById(d.userId);
+    const order = store.listOrders(d.userId).find(o => o && o.orderId === d.orderId) || null;
+    return {
+      ...disputes.summarize(d),
+      customerEmail: user ? user.email : '',
+      customerName: user ? [user.firstName, user.lastName].filter(Boolean).join(' ') : '',
+      order: disputeOrderView(order)
+    };
+  });
+  res.json({ success: true, reasons: disputes.REASONS, outcomes: disputes.OUTCOMES, disputes: rows });
+});
+
+app.get('/api/admin/disputes/:id', requireAdmin, (req, res) => {
+  const d = disputes.get(req.params.id);
+  if (!d) return res.status(404).json({ error: 'No report with that reference.' });
+  const user = auth.getUserById(d.userId);
+  const order = store.listOrders(d.userId).find(o => o && o.orderId === d.orderId) || null;
+  res.json({
+    success: true,
+    dispute: d,
+    order: disputeOrderView(order),
+    customer: user ? { id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName } : null
+  });
+});
+
+app.post('/api/admin/disputes/:id/messages', requireAdmin, async (req, res) => {
+  const d = disputes.get(req.params.id);
+  if (!d) return res.status(404).json({ error: 'No report with that reference.' });
+  try {
+    const updated = disputes.addMessage(d.id, {
+      from: 'admin',
+      authorEmail: (req.user && req.user.email) || 'admin',
+      body: req.body.message,
+      attachments: req.body.attachments
+    });
+    sendDisputeReplyEmail(updated).catch(e => console.error('[disputes] reply email failed:', e.message));
+    res.json({ success: true, dispute: updated });
+  } catch (err) {
+    res.status(err.status || 400).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/disputes/:id/resolve', requireAdmin, (req, res) => {
+  const d = disputes.get(req.params.id);
+  if (!d) return res.status(404).json({ error: 'No report with that reference.' });
+  try {
+    const updated = disputes.resolve(d.id, {
+      outcome: req.body.outcome,
+      note: req.body.note,
+      by: (req.user && req.user.email) || 'admin'
+    });
+    sendDisputeResolvedEmail(updated).catch(e => console.error('[disputes] resolved email failed:', e.message));
+    res.json({ success: true, dispute: updated });
+  } catch (err) {
+    res.status(err.status || 400).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/disputes/:id/reopen', requireAdmin, (req, res) => {
+  const d = disputes.get(req.params.id);
+  if (!d) return res.status(404).json({ error: 'No report with that reference.' });
+  res.json({ success: true, dispute: disputes.reopen(d.id, { by: (req.user && req.user.email) || 'admin' }) });
+});
+
+app.post('/api/admin/disputes/:id/read', requireAdmin, (req, res) => {
+  const d = disputes.get(req.params.id);
+  if (!d) return res.status(404).json({ error: 'No report with that reference.' });
+  disputes.markRead(d.id, 'admin');
+  res.json({ success: true });
+});
+
+app.get('/api/admin/disputes/:id/files/:fileId', requireAdmin, (req, res) => {
+  const meta = disputes.fileMeta(req.params.id, req.params.fileId);
+  const buf = meta && disputes.readFile(req.params.id, req.params.fileId);
+  if (!buf) return res.status(404).json({ error: 'No such attachment.' });
+  res.set('Content-Type', meta.mime);
+  res.set('Content-Disposition', 'inline');
+  res.set('Cache-Control', 'private, max-age=3600');
+  res.send(buf);
 });
 
 /* ============================================================
@@ -3552,6 +3862,35 @@ if (fs.existsSync(path.join(ROOT, 'index.html'))) {
   app.get('/', (_req, res) => res.json({ ok: true, service: 'Ever Nova Life API' }));
 }
 
+/* ============================================================
+   LAST RESORT — anything that threw and nothing caught
+   Without this, Express answers with its own HTML page, and that
+   page carries the error name and the absolute node_modules paths
+   of every frame. Two things go wrong at once: a caller learns the
+   server's directory layout, and every client here parses JSON —
+   so an HTML body reaches the customer as the useless "Something
+   went wrong. Try again." while whatever they had typed or
+   attached is lost.
+
+   So: JSON always, a plain sentence where we have one, and never
+   a stack or a path in the response. The detail goes to the log,
+   which is where the owner can actually act on it.
+   ============================================================ */
+app.use((err, req, res, _next) => {
+  // A body over express.json's limit — in practice, photos on a report.
+  const tooLarge = err && (err.type === 'entity.too.large' || err.status === 413);
+  const status = tooLarge ? 413 : (Number(err && err.status) || 500);
+
+  console.error('[error]', req.method, req.path, '→', status, (err && err.stack) || err);
+
+  if (res.headersSent) return;   // a response already started; adding to it would corrupt it
+  res.status(status).json({
+    error: tooLarge
+      ? 'Those photos are too big to send together. Attach fewer or smaller images — up to 3, under 2 MB each — and send it again.'
+      : 'Something went wrong on our side. Try again, and email support@evernovalife.com if it keeps happening.'
+  });
+});
+
 // Only start listening when run directly (`node server.js`). When the app is
 // require()'d — e.g. by the authorization tests — it's exported without binding
 // a port, so tests can start it on an ephemeral port of their choosing.
@@ -3592,4 +3931,6 @@ if (require.main === module) {
   }
 }
 
+app.buildDisputeReplyMail = buildDisputeReplyMail;
+app.buildDisputeResolvedMail = buildDisputeResolvedMail;
 module.exports = app;

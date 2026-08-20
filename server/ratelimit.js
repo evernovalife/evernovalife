@@ -1,7 +1,8 @@
 /* ============================================================
    EVER NOVA LIFE — tiny in-memory rate limiter
    No new dependency: a fixed-window counter kept in a Map, keyed
-   by client IP + whatever the caller names the bucket.
+   by client IP (or whatever the caller's `key` function returns)
+   + whatever the caller names the bucket.
 
    Deliberately small and honest about its limits:
      · the counts live in this process, so two instances count
@@ -33,11 +34,20 @@ function sweep(now) {
 }
 
 /* Build an Express middleware. `max` requests per `windowMs` per IP.
-   `name` separates buckets so two limited routes don't share a budget. */
-function limit({ name = 'default', windowMs = 60000, max = 10, message } = {}) {
+   `name` separates buckets so two limited routes don't share a budget.
+
+   `key` is an optional function(req) naming the bucket instead of the IP —
+   for a route behind requireAuth, the account is the honest unit. It has to
+   be: this server never calls app.set('trust proxy'), so behind Render's
+   proxy req.ip is the PROXY's address, identical for every visitor, and an
+   IP-keyed limiter on an authenticated route is really one site-wide bucket.
+   A falsy return falls back to the IP, so a route that somehow has no user
+   is still limited rather than unlimited. */
+function limit({ name = 'default', windowMs = 60000, max = 10, message, key: keyFor } = {}) {
   return function rateLimiter(req, res, next) {
     const now = Date.now();
-    const key = name + '|' + clientKey(req);
+    const who = (typeof keyFor === 'function' && keyFor(req)) || clientKey(req);
+    const key = name + '|' + who;
     let entry = buckets.get(key);
 
     if (!entry || entry.resetAt <= now) {

@@ -4,19 +4,19 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="robots" content="noindex, nofollow">
-  <title>Wishlist — Ever Nova Life</title>
-  <meta name="description" content="Your saved research peptides at Ever Nova Life. Keep track of compounds you want for later and add them to your cart anytime.">
-  <link rel="canonical" href="https://evernovalife.com/wishlist.html">
+  <title>Report a Problem — Ever Nova Life</title>
+  <meta name="description" content="Report a problem with an Ever Nova Life order and message our team about it.">
+  <link rel="canonical" href="https://evernovalife.com/support.html">
   <meta name="theme-color" content="#07040f">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Ever Nova Life">
-  <meta property="og:title" content="Wishlist — Ever Nova Life">
-  <meta property="og:description" content="Your saved research peptides at Ever Nova Life. Keep track of compounds you want for later and add them to your cart anytime.">
-  <meta property="og:url" content="https://evernovalife.com/wishlist.html">
+  <meta property="og:title" content="Report a Problem — Ever Nova Life">
+  <meta property="og:description" content="Report a problem with an Ever Nova Life order and message our team about it.">
+  <meta property="og:url" content="https://evernovalife.com/support.html">
   <meta property="og:image" content="https://evernovalife.com/og-image.svg">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="Wishlist — Ever Nova Life">
-  <meta name="twitter:description" content="Your saved research peptides at Ever Nova Life. Keep track of compounds you want for later and add them to your cart anytime.">
+  <meta name="twitter:title" content="Report a Problem — Ever Nova Life">
+  <meta name="twitter:description" content="Report a problem with an Ever Nova Life order and message our team about it.">
   <meta name="twitter:image" content="https://evernovalife.com/og-image.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -81,23 +81,66 @@
     </form>
   </div>
 
-  <section class="page-head">
-    <div class="container">
-      <div class="breadcrumb"><a href="index.html">Home</a> <span>/</span> <span>Wishlist</span></div>
-      <h1>Your <span class="gradient-text">Wishlist</span></h1>
-      <p>Compounds you’ve saved for later. Add them to your cart whenever you’re ready.</p>
-    </div>
-  </section>
+    <section class="section">
+      <div class="container narrow">
+        <h1>Report a problem</h1>
+        <p class="text-muted" id="supIntro">Loading…</p>
 
-  <section class="section" style="padding-top:0">
-    <div class="container">
-      <div id="wishlistRoot"></div>
-    </div>
-  </section>
+        <div id="supGate" hidden>
+          <p>Sign in to open or read a report about an order.</p>
+          <!-- js/support.js rewrites this to carry ?order=… through the sign-in,
+               so the customer lands back on the order they came to report. -->
+          <p><a class="btn btn-primary" id="supGateLink" href="login.html?next=support.html">Sign in</a></p>
+        </div>
 
-  <!-- ===== FOOTER ===== -->
+        <!-- The order this is about, so nobody has to open another tab. -->
+        <div class="glass card" id="supOrder" hidden></div>
+
+        <!-- Path A: no thread on this order yet -->
+        <form class="form-card glass" id="supOpenForm" hidden>
+          <div class="form-field full">
+            <label for="supReason">What went wrong?</label>
+            <select id="supReason" required></select>
+          </div>
+          <div class="form-field full">
+            <label for="supMessage">Tell us what happened</label>
+            <textarea id="supMessage" rows="5" maxlength="4000" required
+              placeholder="What arrived, what you expected, and anything on the parcel or paperwork that looks wrong."></textarea>
+          </div>
+          <div class="form-field full">
+            <label for="supFiles">Photos (optional — up to 3, PNG/JPEG/WebP, 2 MB each)</label>
+            <input type="file" id="supFiles" accept="image/png,image/jpeg,image/webp" multiple>
+            <div class="sup-previews" id="supPreviews"></div>
+          </div>
+          <div class="form-msg" id="supOpenMsg" role="status"></div>
+          <button class="btn btn-primary" type="submit">Send the report</button>
+        </form>
+
+        <!-- Path B: a thread already exists -->
+        <div id="supThread" hidden>
+          <div class="sup-stream" id="supStream"></div>
+          <div class="sup-closed" id="supClosed" hidden></div>
+          <form class="form-card glass" id="supReplyForm">
+            <div class="form-field full">
+              <label for="supReply">Reply</label>
+              <textarea id="supReply" rows="3" maxlength="4000" required placeholder="Write a reply…"></textarea>
+            </div>
+            <div class="form-field full">
+              <label for="supReplyFiles">Photos (optional — up to 3)</label>
+              <input type="file" id="supReplyFiles" accept="image/png,image/jpeg,image/webp" multiple>
+              <div class="sup-previews" id="supReplyPreviews"></div>
+            </div>
+            <div class="form-msg" id="supReplyMsg" role="status"></div>
+            <button class="btn btn-primary" type="submit">Send</button>
+          </form>
+        </div>
+
+        <p class="text-muted"><a href="account.html">← Back to your orders</a></p>
+      </div>
+    </section>
   </main>
 
+  <!-- ===== FOOTER ===== -->
   <footer class="site-footer">
     <div class="container footer-grid">
       <div class="footer-brand">
@@ -152,10 +195,12 @@
     </div>
   </footer>
 
-  <script src="js/products-data.js?v=71"></script>
   <script src="js/config.js?v=71"></script>
+  <script src="js/products-data.js?v=71"></script>
   <script src="js/cart.js?v=71"></script>
   <script src="js/promos.js?v=71"></script>
   <script src="js/main.js?v=71"></script>
+  <script src="js/auth.js?v=71"></script>
+  <script src="js/support.js?v=71"></script>
 </body>
 </html>
