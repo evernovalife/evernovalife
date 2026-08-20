@@ -2594,6 +2594,9 @@
       var data = await A.api('/api/admin/disputes/' + encodeURIComponent(id) + '/attachments', { method: 'DELETE' });
       if (state.disputeId !== id) return;      // the owner moved on mid-request
       state.storage = data.storage || state.storage;
+      /* Zero files here means there were none — a delete that FAILED comes
+         back as an error and lands in the catch below, so this toast can
+         never claim there was nothing there while the pane still counts. */
       A.toast(data.files ? 'Removed ' + A.plural(data.files, 'photo') + '.' : 'There were no photos to remove.', 'success');
       await openDispute(id);                   // reload the thread so the labels update
     } catch (e) {

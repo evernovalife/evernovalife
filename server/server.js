@@ -71,6 +71,12 @@ app.get('/api/health', (req, res) => res.json({
      ADMIN_EMAIL those are built and then dropped, which looks identical to a
      store nobody is buying from. Boolean only — the address stays private. */
   ownerAlerts: Boolean(process.env.ADMIN_EMAIL),
+  /* Has the dispute photo ceiling been sized to this disk? Its default is
+     larger than the production disk, so without DISPUTE_TOTAL_BYTES_MAX the
+     ceiling never engages and the 80% warning never sends — the disk fills
+     while the admin console reports a comfortable single-digit percentage.
+     Boolean only — the figure itself stays private, this route is public. */
+  disputeCeilingSet: Boolean(process.env.DISPUTE_TOTAL_BYTES_MAX),
   // Auto-ship re-invoices through BTCPay, so it rides on the same config —
   // and on email, which is how the customer receives each pay link.
   autoship: btcpay.CONFIGURED,
@@ -2401,11 +2407,23 @@ app.post('/api/admin/disputes/sweep', requireAdmin, (req, res) => {
 app.delete('/api/admin/disputes/:id/attachments', requireAdmin, (req, res) => {
   const out = disputes.stripAttachments(req.params.id, Date.now());
   if (!out) return res.status(404).json({ error: 'No report with that reference.' });
+  /* A delete that failed used to answer exactly like a thread that had no
+     photos in the first place — so the console cheerfully said there was
+     nothing to remove while the pane beside it still counted the photos and
+     the bytes were still on the disk. An honest failure instead: nothing was
+     stamped, so the owner can retry, and the log has the reason. */
+  if (out.ok === false) {
+    console.error(`[disputes] could not remove the photos on ${req.params.id} — nothing was changed`);
+    return res.status(500).json({
+      error: 'Those photos could not be removed. Nothing was changed — try again, and check the server log if it keeps failing.',
+      storage: storageView()
+    });
+  }
   if (out.files) {
     console.log(`[disputes] ${(req.user && req.user.email) || 'admin'} removed ` +
       `${out.files} photo(s) from ${req.params.id}`);
   }
-  res.json({ success: true, ...out, storage: storageView() });
+  res.json({ success: true, files: out.files, bytes: out.bytes, storage: storageView() });
 });
 
 app.get('/api/admin/disputes/:id', requireAdmin, (req, res) => {
@@ -3911,18 +3929,20 @@ async function sendLowStockAlert({ product, level, previousLevel, threshold }) {
   });
 }
 
-/* The owner's copy of the storage figure. Same recipient and guard as the
-   low-stock alert: without ADMIN_EMAIL this is built and dropped, which is
-   why /api/health reports whether that inbox exists at all. */
-async function sendDisputeStorageAlert({ pct, usedBytes, ceilingBytes, threshold }) {
+/* The owner's copy of the storage figure. Split builder-from-sender like the
+   two dispute notices above, for the same reason: the message is the part
+   worth asserting, and asserting it must not need SMTP. Nothing here reads a
+   thread, so no customer address, reference or path can reach the mail — the
+   test holds that shut. */
+function buildDisputeStorageMail({ pct, usedBytes, ceilingBytes, threshold }) {
   const to = process.env.ADMIN_EMAIL || '';
-  if (!mailer.CONFIGURED || !to) return;
   const mb = n => (Number(n) / (1024 * 1024)).toFixed(0) + ' MB';
   const full = pct >= 100;
   // Read per send, not frozen at module load — retention is env-driven and
   // Render can change it without a redeploy.
   const retentionNote = `${disputes.retentionDays()} days after a report is resolved`;
-  return mailer.sendMail({
+  const disputesLink = `${SITE()}/admin.html#disputes`;
+  return {
     to,
     subject: full
       ? 'Dispute photo storage is FULL — photos are being refused'
@@ -3931,16 +3951,30 @@ async function sendDisputeStorageAlert({ pct, usedBytes, ceilingBytes, threshold
       ? `Customers can no longer attach photos to a report. Their reports still go through, and they are told to describe the problem instead — but the evidence is not reaching you.\n\n`
       : `Dispute photos are using ${mb(usedBytes)} of the ${mb(ceilingBytes)} allowance (${pct}%, warning at ${threshold}%).\n\n`) +
       `Photos expire on their own ${retentionNote}, and you can reclaim space now from the Disputes screen:\n` +
-      `${SITE()}/admin.html#disputes\n\n` +
+      `${disputesLink}\n\n` +
       `If the disk itself has room, raise DISPUTE_TOTAL_BYTES_MAX on the server instead.\n`,
+    /* The HTML part carried the figure and a button and neither of the two
+       facts that tell the owner what to do — and most clients render the HTML,
+       so most readings of this email were the poorer half. Both facts belong
+       here as well as in the text. */
     html: orderEmailHtml({
       heading: full ? 'Photo storage is full' : 'Photo storage is filling up',
       intro: full
         ? 'Customers can no longer attach photos to a report. Their reports still go through — but the evidence is not reaching you.'
-        : `Dispute photos are using <strong>${escapeHtmlSrv(mb(usedBytes))}</strong> of the ${escapeHtmlSrv(mb(ceilingBytes))} allowance (<strong>${escapeHtmlSrv(String(pct))}%</strong>).`,
-      extraHtml: `<p><a href="${SITE()}/admin.html#disputes" style="display:inline-block;background:#6d28d9;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600">Open Disputes</a></p>`
+        : `Dispute photos are using <strong>${escapeHtmlSrv(mb(usedBytes))}</strong> of the ${escapeHtmlSrv(mb(ceilingBytes))} allowance (<strong>${escapeHtmlSrv(String(pct))}%</strong>, warning at ${escapeHtmlSrv(String(threshold))}%).`,
+      extraHtml: `<p><a href="${escapeHtmlSrv(disputesLink)}" style="display:inline-block;background:#6d28d9;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600">Open Disputes</a></p>
+        <p style="color:#6b7280;font-size:14px">Photos expire on their own <strong>${escapeHtmlSrv(retentionNote)}</strong> — the button above simply does it now, for everything already past that window.</p>
+        <p style="color:#6b7280;font-size:14px">If the disk itself has room, raise <strong>DISPUTE_TOTAL_BYTES_MAX</strong> on the server instead.</p>`
     })
-  });
+  };
+}
+
+async function sendDisputeStorageAlert(due) {
+  const mail = buildDisputeStorageMail(due);
+  /* Same guard as the low-stock alert: without ADMIN_EMAIL this is built and
+     dropped, which is why /api/health reports whether that inbox exists. */
+  if (!mailer.CONFIGURED || !mail.to) return;
+  return mailer.sendMail(mail);
 }
 
 /* ---- serve the static site from the same origin — only when it's actually here ----
@@ -4005,6 +4039,14 @@ if (require.main === module) {
     console.log(`  zelle:  ${zelle.CONFIGURED ? 'ready → ' + zelle.RECIPIENT + ' (manual confirmation in admin.html)' : 'not configured (set ZELLE_RECIPIENT + ZELLE_NAME in .env)'}`);
     console.log(`  auth:   accounts ready${auth.CONFIGURED ? '' : ' (JWT_SECRET not set — set it in .env for production)'}`);
     console.log(`  ship:   auto-ship ${CRON_KEY ? 'ready (CRON_KEY set)' : 'WITHOUT a CRON_KEY — set one so the scheduled trigger can be secured'}`);
+    /* The one tunable on this server whose default is WRONG everywhere it is
+       deployed: 2 GB of photos on a 1 GB disk. Unset, the ceiling and the 80%
+       warning both sit above the disk and never fire, so the only symptom is
+       the whole store failing writes one day. Say it out loud at boot. */
+    const photoCeilingMb = Math.round(disputes.totalBytesMax() / (1024 * 1024));
+    console.log(`  photos: ${process.env.DISPUTE_TOTAL_BYTES_MAX
+      ? `dispute photo ceiling ${photoCeilingMb} MB (DISPUTE_TOTAL_BYTES_MAX set)`
+      : `dispute photo ceiling defaulting to ${photoCeilingMb} MB — set DISPUTE_TOTAL_BYTES_MAX BELOW the disk size (a 1 GB disk wants 536870912) or neither the ceiling nor the storage warning ever engages`}`);
     console.log(`  api:    http://localhost:${PORT}/api`);
     console.log(`  site:   http://localhost:${PORT}/  (serving ${ROOT})\n`);
   });
@@ -4037,4 +4079,5 @@ if (require.main === module) {
 
 app.buildDisputeReplyMail = buildDisputeReplyMail;
 app.buildDisputeResolvedMail = buildDisputeResolvedMail;
+app.buildDisputeStorageMail = buildDisputeStorageMail;
 module.exports = app;

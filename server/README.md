@@ -605,15 +605,29 @@ Storage (admin)
 Tunables (all read per request, so Render can change them without a redeploy):
   DISPUTE_TOTAL_BYTES_MAX        total photo allowance in bytes (default 2 GB — set
                                  this to about half the actual disk; the production
-                                 disk is 1 GB, so 536870912)
-  DISPUTE_PHOTO_RETENTION_DAYS   days after resolution before photos expire (default 90)
+                                 disk is 1 GB, so 536870912). The default is LARGER
+                                 than that disk, so unset, the ceiling never engages
+                                 and the 80% warning never sends — the disk just
+                                 fills. The boot log says so on every start, and
+                                 /api/health reports `disputeCeilingSet` (a boolean,
+                                 never the value) so it can be checked from outside.
+  DISPUTE_PHOTO_RETENTION_DAYS   days after resolution before photos expire (default 90).
+                                 The 90 is written out in the customer copy on
+                                 purpose, so changing it here means editing it in
+                                 three places by hand: the hint under the attachment
+                                 field on BOTH support.html forms (open + reply) and
+                                 the retention paragraph in privacy.html. Miss one and
+                                 the site promises a window we do not keep.
   DISPUTE_STORAGE_ALERT_PCT      percentage that triggers the warning email (default 80)
 
 Expiry drops the bytes and keeps the record, so a cleared thread still reads honestly.
 The sweep rides the existing /api/outreach/run cron (it runs before the storage alert is
-even selected, so a threshold email is never a stale one) — if that ping is not armed,
-nothing expires and the warning never sends. An admin can also run it on demand from
-Run cleanup in the console (POST /api/admin/disputes/sweep) without waiting for the cron.
+even selected, so a threshold email is never a stale one). If the external ping is not
+armed, the in-process hourly backstop still runs the whole pass — sweep and warning both —
+for as long as the process is up (OUTREACH_INPROCESS_CRON=0 turns that off, and a host
+that sleeps or restarts runs no timers, which is why the external ping is still the real
+trigger). An admin can also run it on demand from Run cleanup in the console
+(POST /api/admin/disputes/sweep) without waiting for either.
 ```
 
 ## Notes & next steps

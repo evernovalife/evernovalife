@@ -130,3 +130,71 @@ test('a thread resolved inside the window is left alone by the same cron run', a
   // assertion is scoped to THIS thread rather than the summary count.
   void body;
 });
+
+/* ============================================================
+   …and the same run has to actually BUILD AND SEND the warning.
+
+   selectStorageAlert() was tested in isolation and the wiring was
+   "verified by inspection" — which is the exact position that let
+   the sweep ship with no call site at all. So this drives the real
+   cron route with a ceiling low enough to be over the threshold,
+   and catches the message at the mailer.
+
+   The stub is the point: without it, a run with no SMTP configured
+   returns early inside sendDisputeStorageAlert and the summary
+   counter alone would still tick even if the send were deleted.
+   With it, `sent` is empty unless that call is genuinely reached.
+   ============================================================ */
+const mailer = require('../email.js');
+
+test('the same cron run builds and sends the storage warning', async () => {
+  withPhoto();                    // never resolved, so the sweep leaves its bytes alone
+  const used = disputes.totalAttachmentBytes();
+  assert.ok(used > 0, 'there are bytes to be over the threshold with');
+
+  const prevMax = process.env.DISPUTE_TOTAL_BYTES_MAX;
+  const prevAdmin = process.env.ADMIN_EMAIL;
+  const realSend = mailer.sendMail;
+  const realConfigured = mailer.CONFIGURED;
+  const sent = [];
+
+  try {
+    // A ceiling just above what is stored puts the figure at ~90% — over the
+    // 80% default, and short of the separate "full" message.
+    process.env.DISPUTE_TOTAL_BYTES_MAX = String(Math.ceil(used / 0.9));
+    process.env.ADMIN_EMAIL = 'boss@evernovalife.com';
+    mailer.CONFIGURED = true;
+    mailer.sendMail = async (msg) => { sent.push(msg); };
+
+    const { status, body } = await runCron();
+    assert.equal(status, 200);
+    assert.equal(body.storageAlerts, 1, 'the run counted one storage warning');
+
+    const warning = sent.find(m => /photo storage/i.test(m.subject || ''));
+    assert.ok(warning, 'the cron run actually handed a storage warning to the mailer');
+    assert.equal(warning.to, 'boss@evernovalife.com');
+    assert.ok(warning.text.includes('DISPUTE_TOTAL_BYTES_MAX'), 'and it is the real message');
+    assert.ok(warning.html.includes('DISPUTE_TOTAL_BYTES_MAX'), 'in both parts');
+
+    /* And the mark is stamped, or the next hourly tick sends it again. Read
+       from the state file rather than the module, so this checks what was
+       actually written to disk. */
+    const state = JSON.parse(fs.readFileSync(path.join(TMP_DATA, 'outreach.json'), 'utf8'));
+    assert.ok(state.storage, 'the outreach state records that the owner was told');
+    assert.ok(state.storage.pct >= 80, `the mark carries the percentage that sent it (${state.storage.pct})`);
+    assert.ok(state.storage.alertedAt > 0, 'and when');
+
+    // Second run, same condition: said once, not once an hour.
+    sent.length = 0;
+    const again = await runCron();
+    assert.equal(again.body.storageAlerts, 0, 'still filling is not news');
+    assert.equal(sent.length, 0);
+  } finally {
+    mailer.sendMail = realSend;
+    mailer.CONFIGURED = realConfigured;
+    if (prevMax === undefined) delete process.env.DISPUTE_TOTAL_BYTES_MAX;
+    else process.env.DISPUTE_TOTAL_BYTES_MAX = prevMax;
+    if (prevAdmin === undefined) delete process.env.ADMIN_EMAIL;
+    else process.env.ADMIN_EMAIL = prevAdmin;
+  }
+});

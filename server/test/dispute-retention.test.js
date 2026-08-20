@@ -175,6 +175,7 @@ test('stripAttachments frees an open thread and leaves it readable', () => {
   const d = withPhoto();
   const before = disputes.totalAttachmentBytes();
   const out = disputes.stripAttachments(d.id, Date.now());
+  assert.equal(out.ok, true);
   assert.equal(out.files, 1);
   assert.equal(out.bytes, PNG.length);
   assert.equal(disputes.totalAttachmentBytes(), before - PNG.length);
@@ -189,7 +190,36 @@ test('stripAttachments on an unknown thread is null, and on a stripped one is a 
   assert.equal(disputes.stripAttachments('DSP-NOPE', Date.now()), null);
   const d = withPhoto();
   disputes.stripAttachments(d.id, Date.now());
-  assert.deepEqual(disputes.stripAttachments(d.id, Date.now()), { files: 0, bytes: 0 });
+  assert.deepEqual(disputes.stripAttachments(d.id, Date.now()), { ok: true, files: 0, bytes: 0 });
+});
+
+/* Zeros are not zeros. "There was nothing to remove" and "the removal failed"
+   used to be the same answer, which is how the console came to report that a
+   report had no photos while the pane beside it counted one. */
+test('a strip that could not delete the bytes says so, and stamps nothing', () => {
+  const d = withPhoto();
+  const before = disputes.totalAttachmentBytes();
+  const realRm = fs.rmSync;
+  let out;
+  try {
+    fs.rmSync = () => { throw Object.assign(new Error('EBUSY: resource busy'), { code: 'EBUSY' }); };
+    out = disputes.stripAttachments(d.id, Date.now());
+  } finally {
+    fs.rmSync = realRm;
+  }
+  assert.equal(out.ok, false, 'a failure is distinguishable from a no-op');
+  assert.equal(out.files, 0);
+  assert.equal(out.bytes, 0);
+
+  const after = disputes.get(d.id);
+  assert.equal(after.messages[0].attachments[0].expiredAt, undefined,
+    'nothing was stamped, so the record still agrees with the disk');
+  assert.equal(disputes.totalAttachmentBytes(), before, 'and the bytes are still counted');
+
+  // And it is retryable: the same call succeeds once the disk cooperates.
+  const retry = disputes.stripAttachments(d.id, Date.now());
+  assert.equal(retry.ok, true);
+  assert.equal(retry.files, 1);
 });
 
 test('storageStatus reports used, ceiling and a whole-number percentage', () => {

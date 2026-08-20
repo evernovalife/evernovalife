@@ -589,3 +589,62 @@ test('the strip response carries the alert threshold, not just the queue', async
     else process.env.DISPUTE_STORAGE_ALERT_PCT = prev;
   }
 });
+
+/* A delete that FAILS must not answer like a thread that had no photos. The
+   route used to hand back the same zeros for both, and the console said
+   "there were no photos to remove" above a pane still counting one. */
+test('a strip the disk refuses is a 500, and the photo is still there afterwards', async () => {
+  const vera = await signUp('vera-stripfail@example.com');
+  placeOrder(vera.user.id, 'ENL-STRIPFAIL');
+  const made = await api('/api/disputes', {
+    method: 'POST', token: vera.token,
+    body: { orderId: 'ENL-STRIPFAIL', reason: 'damaged', message: 'See photo.', attachments: [{ name: 'p.png', data: PNG }] }
+  });
+  const id = made.body.dispute.id;
+  const fileId = made.body.dispute.messages[0].attachments[0].id;
+  const token = await adminToken();
+
+  const realRm = fs.rmSync;
+  let out;
+  try {
+    fs.rmSync = () => { throw Object.assign(new Error('EBUSY: resource busy'), { code: 'EBUSY' }); };
+    out = await api(`/api/admin/disputes/${id}/attachments`, { method: 'DELETE', token });
+  } finally {
+    fs.rmSync = realRm;
+  }
+  assert.equal(out.status, 500, 'a failed removal is not a success with zeros');
+  assert.match(out.body.error, /could not be removed/);
+  assert.ok(!out.body.success, 'and it never claims success');
+
+  // Still downloadable, still unstamped — the pane and the disk agree.
+  assert.equal((await api(`/api/admin/disputes/${id}/files/${fileId}`, { token })).status, 200);
+  const seen = await api(`/api/admin/disputes/${id}`, { token });
+  assert.equal(seen.body.dispute.messages[0].attachments[0].expiredAt, undefined);
+
+  // And retrying once the disk cooperates works normally.
+  const retry = await api(`/api/admin/disputes/${id}/attachments`, { method: 'DELETE', token });
+  assert.equal(retry.status, 200);
+  assert.equal(retry.body.files, 1);
+});
+
+/* ---- the ceiling has to be visible from outside ----
+   Its default is bigger than the production disk, so unset it never engages
+   and the 80% warning never sends — with no symptom until the disk is full.
+   The boot log says so on every start; this is the half a monitor can read. */
+test('/api/health reports whether the dispute photo ceiling was configured', async () => {
+  const prev = process.env.DISPUTE_TOTAL_BYTES_MAX;
+  try {
+    delete process.env.DISPUTE_TOTAL_BYTES_MAX;
+    const unset = await api('/api/health');
+    assert.equal(unset.body.disputeCeilingSet, false, 'unset is reported as unset');
+
+    process.env.DISPUTE_TOTAL_BYTES_MAX = '536870912';
+    const set = await api('/api/health');
+    assert.equal(set.body.disputeCeilingSet, true, 'and set as set');
+    // Public route: the flag says whether, never how much.
+    assert.ok(!JSON.stringify(set.body).includes('536870912'), 'the value itself stays private');
+  } finally {
+    if (prev === undefined) delete process.env.DISPUTE_TOTAL_BYTES_MAX;
+    else process.env.DISPUTE_TOTAL_BYTES_MAX = prev;
+  }
+});

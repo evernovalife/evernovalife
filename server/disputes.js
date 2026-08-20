@@ -338,7 +338,14 @@ const FILES_DIR = path.join(DATA_DIR, 'dispute-files');
    whole store starts failing writes. This bounds the blast radius to "photos
    are refused" instead. DISPUTE_TOTAL_BYTES_MAX overrides the default on a
    bigger disk; it is read per call so it can be raised without a redeploy of
-   this file's constants. */
+   this file's constants.
+
+   THE DEFAULT IS BIGGER THAN THE PRODUCTION DISK (2 GB against 1 GB), so left
+   unset this ceiling never engages before the disk itself fills — and the 80%
+   warning never sends either, because usage tops out around 50% of a number
+   that isn't real. Setting the var is a deployment step, so the two places
+   that can notice it is missing say so: the boot block and /api/health's
+   `disputeCeilingSet`, both in server.js. */
 const TOTAL_BYTES_DEFAULT = 2 * 1024 * 1024 * 1024;   // 2 GB
 function totalBytesMax() {
   const n = Number(process.env.DISPUTE_TOTAL_BYTES_MAX);
@@ -367,7 +374,19 @@ function totalAttachmentBytes() {
 /* How long a resolved report keeps its photos. Read per call, like the
    ceiling, so it can be changed on Render without a redeploy. The clock is
    keyed to `resolvedAt` and not to message age, so an active conversation
-   never loses evidence in the middle of itself. */
+   never loses evidence in the middle of itself.
+
+   THE NUMBER IS WRITTEN OUT IN THE CUSTOMER COPY, deliberately — templating
+   it would let the promise drift from the practice with nobody noticing. So
+   changing DISPUTE_PHOTO_RETENTION_DAYS on the server means editing all
+   three of these by hand, or the site promises a window we do not keep:
+
+     · support.html   — the hint under the attachment field on the OPEN form
+     · support.html   — the same hint again on the REPLY form (two, not one)
+     · privacy.html   — "Photographs you attach to a problem report…"
+
+   The default below is also quoted in server/README.md's tunables block,
+   which makes four places in all, one of them not customer-facing. */
 const RETENTION_DAYS_DEFAULT = 90;
 function retentionDays() {
   const n = Number(process.env.DISPUTE_PHOTO_RETENTION_DAYS);
@@ -390,19 +409,28 @@ function stampExpired(d, stamp) {
 }
 
 /* Drop one thread's photos now, whatever its age or status. The admin's
-   "Remove photos" control — for the report that is eating the disk today. */
+   "Remove photos" control — for the report that is eating the disk today.
+
+   Three answers, and the caller has to be able to tell them apart:
+     · null                            — no thread with that id (a 404)
+     · { ok: true,  files: 0, … }      — nothing was there to remove
+     · { ok: false, files: 0, … }      — the bytes are STILL THERE; the
+                                         delete failed and nothing was stamped
+   The last two used to be the same `{ files: 0, bytes: 0 }`, which is how the
+   console came to say "there were no photos to remove" directly above a pane
+   still counting them. */
 function stripAttachments(disputeId, now) {
   const all = load();
   const d = all[disputeId];
   if (!d) return null;
 
   const live = liveAttachments(d);
-  if (!live.length) return { files: 0, bytes: 0 };
-  if (!attachStore.removeAll(disputeId)) return { files: 0, bytes: 0 };
+  if (!live.length) return { ok: true, files: 0, bytes: 0 };
+  if (!attachStore.removeAll(disputeId)) return { ok: false, files: 0, bytes: 0 };
 
   stampExpired(d, new Date(now || Date.now()).toISOString());
   save(all);
-  return { files: live.length, bytes: live.reduce((n, a) => n + (Number(a.bytes) || 0), 0) };
+  return { ok: true, files: live.length, bytes: live.reduce((n, a) => n + (Number(a.bytes) || 0), 0) };
 }
 
 /* The scheduled pass: every thread resolved longer ago than the window loses
@@ -569,5 +597,5 @@ module.exports = {
   create, addMessage, resolve, reopen, markRead,
   unreadFor, summarize, forCustomer, deleteUserData,
   sniffImage, fileMeta, readFile, totalAttachmentBytes,
-  retentionDays, sweepExpiredAttachments, stripAttachments, storageStatus
+  retentionDays, totalBytesMax, sweepExpiredAttachments, stripAttachments, storageStatus
 };
