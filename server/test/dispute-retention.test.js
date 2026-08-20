@@ -112,9 +112,15 @@ test('the byte total excludes what the sweep deleted', () => {
   const before = disputes.totalAttachmentBytes();
   assert.ok(before >= PNG.length);
   resolveDaysAgo(d.id, 120);
-  disputes.sweepExpiredAttachments(Date.now());
-  assert.equal(disputes.totalAttachmentBytes(), before - PNG.length,
+  const out = disputes.sweepExpiredAttachments(Date.now());
+  assert.equal(before - disputes.totalAttachmentBytes(), out.bytes,
     'counting deleted bytes would keep the ceiling shut after a sweep');
+  // The line above proves the arithmetic is self-consistent, but it would
+  // hold just as well if the sweep collected nothing (0 == 0). This proves
+  // it specifically was this thread's photo that left the total, which is
+  // the "what the sweep deleted" the test is named for.
+  assert.ok(disputes.get(d.id).messages[0].attachments[0].expiredAt,
+    'this thread is the one whose bytes left the total');
 });
 
 test('freeing space lets an attachment through that was refused before', () => {
