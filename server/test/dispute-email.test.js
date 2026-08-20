@@ -123,3 +123,63 @@ test('the retention figure in the warning is read per send, not frozen', () => {
     else process.env.DISPUTE_PHOTO_RETENTION_DAYS = prev;
   }
 });
+
+/* ============================================================
+   THE ACKNOWLEDGEMENT
+   Opening a report used to notify nobody: close the tab and nothing
+   anywhere said you had contacted the shop. This is the customer's
+   proof, and — like the other two — it carries no message body.
+   ============================================================ */
+
+const OPENED = {
+  id: 'DSP-ACK',
+  orderId: 'ENL-ACK1',
+  reason: 'damaged',
+  status: 'awaiting_us',
+  messages: [
+    { from: 'customer', body: SECRET, createdAt: '2026-08-20T09:00:00.000Z',
+      attachments: [{ id: 'f1', name: 'cracked vial.png', mime: 'image/png', bytes: 2048 },
+                    { id: 'f2', name: 'box.png', mime: 'image/png', bytes: 1024 }] }
+  ]
+};
+
+test('the acknowledgement names the order and the reason, and links to the thread', () => {
+  const mail = app.buildDisputeOpenedMail(OPENED, 'alice@example.com', 'Alice');
+  assert.match(mail.subject, /ENL-ACK1/);
+  assert.ok(mail.text.includes('support.html?order=ENL-ACK1'), 'links to the thread');
+  assert.ok(mail.html.includes('support.html?order=ENL-ACK1'));
+  assert.ok(/Something arrived damaged/.test(mail.text), 'says what they reported');
+  assert.ok(/Something arrived damaged/.test(mail.html));
+});
+
+test('the acknowledgement counts the photos so the sender knows they arrived', () => {
+  const mail = app.buildDisputeOpenedMail(OPENED, 'alice@example.com', 'Alice');
+  assert.ok(/2 photos/.test(mail.text), 'plural count in the text part');
+  assert.ok(/2 photos/.test(mail.html), 'and in the HTML part, which most clients render');
+
+  const noPhotos = { ...OPENED, messages: [{ ...OPENED.messages[0], attachments: [] }] };
+  const bare = app.buildDisputeOpenedMail(noPhotos, 'alice@example.com', 'Alice');
+  assert.ok(!/photo/i.test(bare.text), 'and says nothing about photos when none were sent');
+
+  const one = { ...OPENED, messages: [{ ...OPENED.messages[0], attachments: [OPENED.messages[0].attachments[0]] }] };
+  assert.ok(/1 photo\b/.test(app.buildDisputeOpenedMail(one, 'a@b.c', 'A').text), 'singular reads correctly');
+});
+
+test('the acknowledgement carries no message body and no filename', () => {
+  const mail = app.buildDisputeOpenedMail(OPENED, 'alice@example.com', 'Alice');
+  /* Same rule as the reply and resolution notices: a dispute can hold an
+     address or a courier claim, and a forwarded chain outlives the tab.
+     The filename is the customer's own text and has no business here either. */
+  assert.ok(!mail.text.includes(SECRET), 'no message body in the plain text');
+  assert.ok(!mail.html.includes(SECRET), 'no message body in the HTML');
+  assert.ok(!mail.text.includes('cracked vial.png'), 'no attachment filename');
+  assert.ok(!mail.html.includes('cracked vial.png'));
+});
+
+test('an unknown reason code degrades to something readable', () => {
+  const odd = { ...OPENED, reason: 'nonsense' };
+  const mail = app.buildDisputeOpenedMail(odd, 'alice@example.com', 'Alice');
+  assert.ok(mail.text.length > 0);
+  assert.ok(!mail.text.includes('undefined'), 'never the word undefined');
+  assert.ok(!mail.html.includes('undefined'));
+});

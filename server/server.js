@@ -2227,6 +2227,9 @@ app.post('/api/disputes', auth.requireAuth, disputeOpenLimiter, (req, res) => {
       authorEmail: req.user.email,
       attachments: req.body.attachments
     });
+    /* Their receipt. Unawaited with a catch, like every other dispute mail:
+       a broken SMTP must not fail the report the customer just wrote. */
+    sendDisputeOpenedEmail(d).catch(e => console.error('[disputes] acknowledgement email failed:', e.message));
     res.status(201).json({ success: true, dispute: disputes.forCustomer(d), order: disputeOrderView(order) });
   } catch (err) {
     res.status(err.status || 400).json({ error: err.message, disputeId: err.disputeId });
@@ -2314,6 +2317,45 @@ function buildDisputeReplyMail(d, email, name) {
   return { to: email, subject, text, html };
 }
 
+/* The customer's receipt. Until this existed, opening a report notified
+   nobody — close the tab and nothing anywhere said you had contacted the
+   shop, which is a poor thing to discover when a parcel is missing.
+
+   No message body, for the same reason as the other two: a dispute can
+   carry an address or a courier claim, and a forwarded chain outlives the
+   tab. The photo count IS included, because a sender who attached evidence
+   deserves to see that it arrived — that is precisely what used to vanish
+   silently when a report was sent before its images finished reading. */
+function buildDisputeOpenedMail(d, email, name) {
+  const link = disputeLink(d);
+  const who = name || 'there';
+  const reason = (disputes.REASONS.find(r => r.code === d.reason) || {}).label || 'A problem with the order';
+  const first = (d.messages || [])[0] || {};
+  const photos = ((first.attachments || []).length);
+  const photoLine = photos
+    ? `${photos} photo${photos === 1 ? '' : 's'} arrived with it.`
+    : '';
+
+  const subject = `We've got your report on order ${d.orderId}`;
+  const text = `Hi ${who},\n\n` +
+    `Your report about order ${d.orderId} has reached us.\n\n` +
+    `What you told us: ${reason}\n` +
+    (photoLine ? photoLine + '\n' : '') +
+    `\nWe'll reply on the report itself, and email you when there's an answer:\n${link}\n\n` +
+    `Nothing else is needed from you for now.\n\n` +
+    `— The Ever Nova Life team`;
+  const html = `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;color:#1f2937">
+    <h2 style="color:#6d28d9;margin-bottom:4px">We've got your report</h2>
+    <p>Hi ${escapeHtmlSrv(who)}, your report about order <strong>${escapeHtmlSrv(d.orderId)}</strong> has reached us.</p>
+    <p><strong>What you told us:</strong> ${escapeHtmlSrv(reason)}</p>
+    ${photoLine ? `<p>${escapeHtmlSrv(photoLine)}</p>` : ''}
+    <p>We'll reply on the report itself, and email you when there's an answer.</p>
+    <p><a href="${link}" style="display:inline-block;background:#6d28d9;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600">See your report</a></p>
+    <p style="color:#9ca3af;font-size:12px;margin-top:24px">Nothing else is needed from you for now.</p>
+  </div>`;
+  return { to: email, subject, text, html };
+}
+
 function buildDisputeResolvedMail(d, email, name) {
   const link = disputeLink(d);
   const who = name || 'there';
@@ -2340,6 +2382,13 @@ function buildDisputeResolvedMail(d, email, name) {
 
 /* Nothing emails the owner: the rail tally in the admin console is that
    notification, and a second channel for the same event is just noise. */
+async function sendDisputeOpenedEmail(d) {
+  if (!mailer.CONFIGURED) return;
+  const user = auth.getUserById(d.userId);
+  if (!user || !user.email) return;
+  return mailer.sendMail(buildDisputeOpenedMail(d, user.email, user.firstName));
+}
+
 async function sendDisputeReplyEmail(d) {
   if (!mailer.CONFIGURED) return;
   const user = auth.getUserById(d.userId);
@@ -4154,6 +4203,7 @@ if (require.main === module) {
   }
 }
 
+app.buildDisputeOpenedMail = buildDisputeOpenedMail;
 app.buildDisputeReplyMail = buildDisputeReplyMail;
 app.buildDisputeResolvedMail = buildDisputeResolvedMail;
 app.buildDisputeStorageMail = buildDisputeStorageMail;

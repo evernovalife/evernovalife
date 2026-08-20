@@ -267,6 +267,73 @@
   function stopPolling() { if (state.timer) { window.clearInterval(state.timer); state.timer = null; } }
 
   /* ---- actions ---- */
+  /* ---- "we've got it" ----
+     Sending a report used to just swap the form for the thread, with no
+     acknowledgement at all. This is the moment a worried customer most needs
+     to be told something definite: it arrived, this is what it is about, and
+     here is where the answer will appear.
+
+     The photo count is deliberate. A report whose images silently failed to
+     attach is the worst outcome this page has, and seeing "2 photos" is the
+     customer's own proof that the evidence went with it. */
+  var sentRestoreFocus = null;
+
+  function closeSent() {
+    var box = document.querySelector('.supdialog');
+    if (!box) return;
+    document.removeEventListener('keydown', sentKey);
+    document.body.classList.remove('adminalert-open');
+    box.remove();
+    if (sentRestoreFocus && sentRestoreFocus.focus) { try { sentRestoreFocus.focus(); } catch (e) {} }
+  }
+
+  function sentKey(e) {
+    if (e.key === 'Escape') { closeSent(); return; }
+    if (e.key !== 'Tab') return;
+    /* aria-modal marks the rest of the page inert for assistive tech but does
+       nothing to the tab order — without this, tabbing off the last control
+       lands behind the backdrop on a page the reader cannot see. */
+    var box = document.querySelector('.supdialog');
+    if (!box) return;
+    var f = Array.prototype.slice.call(box.querySelectorAll('a[href], button:not([disabled])'));
+    if (!f.length) return;
+    var first = f[0], last = f[f.length - 1];
+    if (!box.contains(document.activeElement)) { e.preventDefault(); first.focus(); return; }
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  }
+
+  function showSent(orderId, photos) {
+    sentRestoreFocus = document.activeElement;
+    var box = document.createElement('div');
+    box.className = 'supdialog';
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
+    box.setAttribute('aria-label', 'Your report has been sent');
+    /* The ORDER reference, never the DSP- id: the customer knows the order
+       they placed and has no reason to learn an internal thread id. */
+    box.innerHTML =
+      '<div class="supdialog-panel">' +
+        '<h2>Your report has been sent</h2>' +
+        '<p>We have your report about order <strong>' + esc(orderId) + '</strong>.' +
+          (photos ? ' ' + photos + ' photo' + (photos === 1 ? '' : 's') + ' went with it.' : '') + '</p>' +
+        '<p>We will reply on this page, and email you when there is an answer. ' +
+          'Nothing else is needed from you for now.</p>' +
+        '<button type="button" class="btn btn-primary supdialog-ok">See your report</button>' +
+      '</div>';
+
+    box.addEventListener('click', function (e) {
+      if (e.target === box) closeSent();
+      if (e.target.closest && e.target.closest('.supdialog-ok')) closeSent();
+    });
+
+    document.body.appendChild(box);
+    document.body.classList.add('adminalert-open');
+    document.addEventListener('keydown', sentKey);
+    var ok = box.querySelector('.supdialog-ok');
+    if (ok) ok.focus();
+  }
+
   async function submitOpen(e) {
     e.preventDefault();
     var msg = $('supOpenMsg');
@@ -296,6 +363,10 @@
       $('supPreviews').innerHTML = '';
       renderThread();
       startPolling();
+      /* Counted from what the server stored, not from what we tried to send —
+         so the number the customer reads is the number that actually arrived. */
+      var stored = (data.dispute.messages[0] || {}).attachments || [];
+      showSent(data.dispute.orderId, stored.length);
     } catch (e2) {
       msg.textContent = e2.message;
       btn.disabled = false;

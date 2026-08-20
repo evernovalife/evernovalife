@@ -3059,13 +3059,13 @@ body.pd-modal-open { overflow: hidden; }
   border: 1px dashed rgba(255,255,255,.2); font-size: .8rem; }
 
 /* ===== ADMIN — "waiting for you" sign-in dialog ===== */
-.adminalert { position: fixed; inset: 0; z-index: 1200; display: flex; align-items: center;
+.adminalert, .supdialog { position: fixed; inset: 0; z-index: 1200; display: flex; align-items: center;
   justify-content: center; padding: 1.25rem; background: rgba(7,4,15,.72); backdrop-filter: blur(3px); }
 body.adminalert-open { overflow: hidden; }
-.adminalert-panel { width: min(26rem, 100%); background: #0f0a1d; color: #f5f3ff;
+.adminalert-panel, .supdialog-panel { width: min(26rem, 100%); background: #0f0a1d; color: #f5f3ff;
   border: 1px solid rgba(212,175,55,.35); border-radius: 14px; padding: 1.25rem 1.35rem;
   box-shadow: 0 24px 60px rgba(0,0,0,.55); }
-.adminalert-panel h2 { margin: 0 0 .85rem; font-size: 1.05rem; letter-spacing: .02em; color: #d4af37; }
+.adminalert-panel h2, .supdialog-panel h2 { margin: 0 0 .85rem; font-size: 1.05rem; letter-spacing: .02em; color: #d4af37; }
 .adminalert-list { list-style: none; margin: 0 0 1rem; padding: 0; display: flex; flex-direction: column; gap: .4rem; }
 .adminalert-list a { display: flex; align-items: center; gap: .6rem; padding: .6rem .7rem;
   border-radius: 10px; border: 1px solid rgba(255,255,255,.1); background: rgba(255,255,255,.03);
@@ -3080,4 +3080,9 @@ body.adminalert-open { overflow: hidden; }
   padding: 0 5px; border-radius: 999px; background: #d4af37; color: #07040f;
   font-size: .7rem; font-style: normal; font-weight: 700; line-height: 18px; text-align: center; }
 
-@media (max-width: 600px) { .adminalert-panel { width: 100%; } }
+@media (max-width: 600px) { .adminalert-panel, .supdialog-panel { width: 100%; } }
+
+/* The customer's "we've got it" panel shares the admin dialog's chrome above;
+   only its body text needs its own rules. */
+.supdialog-panel p { margin: 0 0 .8rem; font-size: .93rem; line-height: 1.5; }
+.supdialog-panel .btn { width: 100%; }
