@@ -425,6 +425,17 @@
     A.bindGate(body, function () { loadAll(); });
   }
 
+  /* Can this backend actually send mail? /api/health reports it as `email`
+     (mailer.CONFIGURED). Every "the customer has been told" line in here has
+     to ask first: the senders return silently when SMTP is unconfigured, and
+     the customer page only polls — nothing pushes them back — so a reply
+     nobody was notified about is a reply nobody reads. Unknown health is
+     treated as working, because the alternative is crying wolf every time
+     the health call happens to have failed. */
+  function emailWorks() {
+    return !state.health || state.health.email !== false;
+  }
+
   /* A store that can't email is a store where orders arrive in silence: the
      buyer gets no pay link and no receipt, and nobody is told to ship. That
      failure is invisible from the outside — the dashboard just looks quiet —
@@ -2505,7 +2516,8 @@
       // pane that has since moved on to a different one.
       if (state.disputeId !== id) return;
       state.disputeThread = Object.assign({}, state.disputeThread, { dispute: data.dispute });
-      A.toast('Sent. The customer has been emailed a link to it.', 'success');
+      if (emailWorks()) A.toast('Sent. The customer has been emailed a link to it.', 'success');
+      else A.toast('Saved — but email is not configured, so nothing was sent. Tell them another way, or they will not know it is here.');
       await loadAll({ quiet: true });
       render();
     } catch (e) {
@@ -2520,14 +2532,18 @@
     var outcome = sel ? sel.value : '';
     if (!outcome) { A.toast('Pick how this ended first.', 'error'); return; }
     if (!window.confirm('Close this report as “' + sel.options[sel.selectedIndex].text + '”?\n\n' +
-        'The customer is emailed the outcome. Nothing is refunded or reshipped by this — do that separately.')) return;
+        (emailWorks()
+          ? 'The customer is emailed the outcome.'
+          : 'Email is not configured, so the customer will NOT be emailed the outcome — tell them another way.') +
+        ' Nothing is refunded or reshipped by this — do that separately.')) return;
     btn.disabled = true;
     try {
       var data = await A.api('/api/admin/disputes/' + encodeURIComponent(id) + '/resolve',
         { method: 'POST', body: { outcome: outcome, note: note ? note.value : '' } });
       if (state.disputeId !== id) return;
       state.disputeThread = Object.assign({}, state.disputeThread, { dispute: data.dispute });
-      A.toast('Closed, and the customer has been told.', 'success');
+      if (emailWorks()) A.toast('Closed, and the customer has been told.', 'success');
+      else A.toast('Closed — but email is not configured, so the customer has not been told. Let them know another way.');
       await loadAll({ quiet: true });
       render();
     } catch (e) {

@@ -88,7 +88,9 @@
 
         <div id="supGate" hidden>
           <p>Sign in to open or read a report about an order.</p>
-          <p><a class="btn btn-primary" href="login.html?next=support.html">Sign in</a></p>
+          <!-- js/support.js rewrites this to carry ?order=… through the sign-in,
+               so the customer lands back on the order they came to report. -->
+          <p><a class="btn btn-primary" id="supGateLink" href="login.html?next=support.html">Sign in</a></p>
         </div>
 
         <!-- The order this is about, so nobody has to open another tab. -->

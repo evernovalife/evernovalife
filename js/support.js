@@ -17,6 +17,9 @@
 
   var state = {
     orderId: '', dispute: null, order: null, reasons: [], pending: [], pendingReply: [], timer: null,
+    // Set once the customer asks to escalate a resolved thread, so the poll
+    // re-rendering that thread leaves the open-report form on screen.
+    startingNew: false,
     // One generation counter + outstanding-read count per file input, so a
     // submit can be blocked while reads are in flight and a read from a
     // superseded selection can be told apart from the current one.
@@ -68,6 +71,19 @@
      report can never be sent with a photo it hasn't finished reading. ---- */
   var MAX_FILES = 3;
   var MAX_BYTES = 2 * 1024 * 1024;
+  /* The whole request has to fit under the server's 12 MB JSON body limit, and
+     base64 is 4/3 of the bytes: the advertised three 2 MB photos are already
+     ~8.4 MB of characters. 9 MB clears that with room for the message and the
+     JSON around it, and refuses the rest HERE — a body the server bounces
+     costs the customer everything they attached and everything they typed. */
+  var MAX_TOTAL_CHARS = 9 * 1024 * 1024;
+
+  function attachedChars(bucket) {
+    var total = 0;
+    for (var i = 0; i < bucket.length; i++) total += String(bucket[i].data || '').length;
+    return total;
+  }
+  var TOO_MUCH = 'Those photos are too big to send together — swap one for a smaller version, or send fewer.';
 
   function readFiles(input, bucket, previewEl, msgEl, submitBtn, info) {
     var files = Array.prototype.slice.call(input.files || []);
@@ -81,8 +97,11 @@
     function render() {
       var parts = notices.slice();
       if (info.busy > 0) parts.push('Attaching ' + info.busy + (info.busy === 1 ? ' photo…' : ' photos…'));
+      // Told at selection time, not after a minute of typing and a rejected send.
+      var overall = info.busy === 0 && attachedChars(bucket) > MAX_TOTAL_CHARS;
+      if (overall) parts.push(TOO_MUCH);
       msgEl.textContent = parts.join(' ');
-      submitBtn.disabled = info.busy > 0;
+      submitBtn.disabled = info.busy > 0 || overall;
     }
 
     if (files.length > MAX_FILES) {
@@ -163,24 +182,47 @@
     $('supStream').scrollTop = $('supStream').scrollHeight;
 
     var closed = d.status === 'resolved';
+    if (!closed) state.startingNew = false;
     $('supReplyForm').hidden = closed;
     $('supClosed').hidden = !closed;
     if (closed) {
+      /* A resolved thread used to be a dead end: the reply form is gone, and
+         the order row on the account page links straight back HERE — so the
+         one path a wrong outcome needs, opening a new report, was unreachable
+         from the page the customer is sent to. The server has always accepted
+         a new thread on a resolved order; this is the control that asks for
+         one, and the closed conversation stays on screen so they can read
+         what was decided while they write the new report. */
       $('supClosed').innerHTML = '<p><strong>This report is closed.</strong> ' +
         (d.outcomeNote ? esc(d.outcomeNote) + ' ' : '') +
-        'If it still isn\'t settled, <a href="account.html">open a new report</a> from the order.</p>';
+        'If it still is not settled, open a new report on this order — this conversation stays here.</p>' +
+        '<p><button type="button" class="btn btn-ghost btn-sm" id="supStartNew">Open a new report on this order</button></p>';
     }
     $('supIntro').textContent = closed
       ? 'This report is resolved.'
       : (d.status === 'awaiting_us' ? 'We have your report and will reply here.' : 'We have replied — your turn.');
+
+    // Last, so it owns the intro line and the form's visibility: a poll that
+    // re-renders the thread must not close a form the customer is typing in.
+    if (closed && state.startingNew) renderOpenForm(true);
   }
 
-  function renderOpenForm() {
-    $('supThread').hidden = true;
+  /* `keepThread` is the escalation path off a resolved thread — the form is
+     revealed alongside the closed conversation rather than replacing it. */
+  function renderOpenForm(keepThread) {
+    if (!keepThread) $('supThread').hidden = true;
     $('supOpenForm').hidden = false;
-    $('supReason').innerHTML = '<option value="">Choose one…</option>' +
+    // On the escalation path this runs again on every 20-second poll, so the
+    // reason the customer picked is carried across the rebuild — rebuilding
+    // the list under them would quietly reset the field they had answered.
+    var sel = $('supReason');
+    var chosen = sel.value;
+    sel.innerHTML = '<option value="">Choose one…</option>' +
       state.reasons.map(function (r) { return '<option value="' + esc(r.code) + '">' + esc(r.label) + '</option>'; }).join('');
-    $('supIntro').textContent = 'Tell us what went wrong and we will answer here.';
+    if (chosen) sel.value = chosen;
+    $('supIntro').textContent = keepThread
+      ? 'Tell us what is still wrong and we will open a new report on this order.'
+      : 'Tell us what went wrong and we will answer here.';
   }
 
   /* ---- loading ---- */
@@ -204,7 +246,7 @@
         renderOpenForm();
       }
     } catch (e) {
-      if (e.status === 401) { $('supGate').hidden = false; $('supIntro').textContent = ''; return; }
+      if (e.status === 401) { showGate(); return; }
       $('supIntro').textContent = e.message;
     }
   }
@@ -226,6 +268,7 @@
     // Belt and braces alongside the disabled button: a photo that is still
     // being read must never be silently missing from what gets sent.
     if (state.pendingAttach.busy > 0) { msg.textContent = 'Still attaching your photos — one moment.'; return; }
+    if (attachedChars(state.pending) > MAX_TOTAL_CHARS) { msg.textContent = TOO_MUCH; return; }
     msg.textContent = '';
     btn.disabled = true;
     try {
@@ -240,6 +283,7 @@
       });
       state.dispute = data.dispute;
       state.order = data.order || state.order;
+      state.startingNew = false;
       $('supOrder').hidden = false;
       $('supOrder').innerHTML = orderCard(state.order);
       state.pending.length = 0;
@@ -259,6 +303,7 @@
     // Belt and braces alongside the disabled button: a photo that is still
     // being read must never be silently missing from what gets sent.
     if (state.pendingReplyAttach.busy > 0) { msg.textContent = 'Still attaching your photos — one moment.'; return; }
+    if (attachedChars(state.pendingReply) > MAX_TOTAL_CHARS) { msg.textContent = TOO_MUCH; return; }
     msg.textContent = '';
     btn.disabled = true;
     try {
@@ -298,6 +343,22 @@
     }
   }
 
+  /* The gate's Sign in button, built here so it carries the order back.
+     login.html?next=support.html alone drops the ?order=…, and signing in
+     lands the customer on the empty state with nothing to report against.
+     js/auth.js reads `next` through URLSearchParams (so one layer of
+     encoding is undone for it) and only honours a bare same-site page name
+     with an optional query — which "support.html?order=ENL-…" is. */
+  function showGate() {
+    var link = $('supGateLink');
+    if (link && state.orderId) {
+      link.href = 'login.html?next=' +
+        encodeURIComponent('support.html?order=' + encodeURIComponent(state.orderId));
+    }
+    $('supGate').hidden = false;
+    $('supIntro').textContent = '';
+  }
+
   /* ---- boot ---- */
   function init() {
     var params = new URLSearchParams(window.location.search);
@@ -307,7 +368,7 @@
       return;
     }
     if (!window.Auth || !window.Auth.isLoggedIn || !window.Auth.isLoggedIn()) {
-      $('supGate').hidden = false; $('supIntro').textContent = ''; return;
+      showGate(); return;
     }
 
     $('supOpenForm').addEventListener('submit', submitOpen);
@@ -321,8 +382,14 @@
         $('supReplyForm').querySelector('button[type=submit]'), state.pendingReplyAttach);
     });
     document.addEventListener('click', function (e) {
-      var b = e.target.closest && e.target.closest('.sup-att');
-      if (b) openAttachment(b.getAttribute('data-file'));
+      if (!e.target.closest) return;
+      var b = e.target.closest('.sup-att');
+      if (b) { openAttachment(b.getAttribute('data-file')); return; }
+      if (e.target.closest('#supStartNew')) {
+        state.startingNew = true;
+        renderOpenForm(true);
+        $('supReason').focus();
+      }
     });
     document.addEventListener('visibilitychange', function () {
       if (document.hidden) stopPolling(); else { load(true); startPolling(); }

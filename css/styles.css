@@ -105,6 +105,13 @@ h1, h2, h3, h4 { line-height: 1.2; font-weight: 700; letter-spacing: -0.02em; }
   color: transparent;
 }
 .text-muted { color: var(--dark-text-muted); }
+/* Same intent, shorter name. The admin console has always written .muted and
+   only ever styled it inside .adm-table — everywhere else it rendered at full
+   body colour, so "quieter than the line above it" was said in markup and not
+   on screen. The dispute pane leans on it for the one line that says an order
+   is no longer in the books. The .adm-table rule is more specific and still
+   wins where it applies. */
+.muted { color: var(--dark-text-muted); }
 .text-center { text-align: center; }
 .section { padding: 5rem 0; position: relative; }
 .section-sm { padding: 3rem 0; }

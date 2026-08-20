@@ -270,10 +270,13 @@
         ? `<div><a class="btn btn-primary btn-sm" href="${esc(o.payUrl)}">Pay the remaining ${esc(money(o.amountDue))}</a></div>`
         : '';
       /* A problem with an order is reported from the order — it is the only
-         place the customer has the reference in front of them. Cancelled
-         orders have nothing to report against. */
+         place the customer has the reference in front of them. A cancelled
+         order has nothing to report against, so it gets no button — UNLESS a
+         thread is already running on it: an order cancelled mid-dispute would
+         otherwise take the customer's only in-site link to the conversation
+         down with it, exactly when they most need to reach us. */
       const t = threadFor(o.orderId);
-      const report = o.status === 'cancelled' ? '' :
+      const report = (o.status === 'cancelled' && !t) ? '' :
         `<div><a class="btn btn-sm btn-ghost" href="support.html?order=${encodeURIComponent(o.orderId)}">${
           t ? (t.status === 'resolved' ? 'See the closed report' : 'View your report') : 'Report a problem'
         }</a></div>`;
