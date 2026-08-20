@@ -593,6 +593,25 @@ Stored in `DATA_DIR/disputes.json` and `DATA_DIR/dispute-files/`. Resolving
 records an outcome — it never refunds or reships. Neither is seeded; neither
 is in git.
 
+```
+Storage (admin)
+  POST   /api/admin/disputes/sweep              expire photos on reports resolved past the window
+  DELETE /api/admin/disputes/:id/attachments    drop one report's photos now
+
+  GET /api/admin/disputes also returns storage: { usedBytes, ceilingBytes, pct }.
+
+Tunables (all read per request, so Render can change them without a redeploy):
+  DISPUTE_TOTAL_BYTES_MAX        total photo allowance in bytes (default 2 GB — set
+                                 this to about half the actual disk; the production
+                                 disk is 1 GB, so 536870912)
+  DISPUTE_PHOTO_RETENTION_DAYS   days after resolution before photos expire (default 90)
+  DISPUTE_STORAGE_ALERT_PCT      percentage that triggers the warning email (default 80)
+
+Expiry drops the bytes and keeps the record, so a cleared thread still reads honestly.
+The sweep runs on the existing /api/outreach/run cron — if that ping is not armed,
+nothing expires and the warning never sends.
+```
+
 ## Notes & next steps
 
 - **Pricing source of truth:** `pricing.js` + `../js/products-data.js`. Update
