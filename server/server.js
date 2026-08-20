@@ -2254,10 +2254,76 @@ app.get('/api/disputes/:id/files/:fileId', auth.requireAuth, (req, res) => {
   res.send(buf);
 });
 
-/* Filled in by the notification task; declared here so the routes below have
-   something to call. */
-async function sendDisputeReplyEmail() { }
-async function sendDisputeResolvedEmail() { }
+/* ============================================================
+   DISPUTE NOTIFICATIONS
+   A doorbell, not a transcript: the mail says a reply is waiting
+   and links to the thread. The message body is deliberately NOT
+   included — a dispute can carry an address or a courier claim,
+   and once that is in a mail body it lives in whatever chain the
+   mail gets forwarded into.
+   ============================================================ */
+function disputeLink(d) {
+  const site = (process.env.SITE_URL || 'https://evernovalife.com').replace(/\/+$/, '');
+  return `${site}/support.html?order=${encodeURIComponent(d.orderId)}`;
+}
+
+function buildDisputeReplyMail(d, email, name) {
+  const link = disputeLink(d);
+  const who = name || 'there';
+  const subject = `We've replied about your report on order ${d.orderId}`;
+  const text = `Hi ${who},\n\n` +
+    `There's a reply waiting on your report about order ${d.orderId}.\n\n` +
+    `Read it and answer here:\n${link}\n\n` +
+    `We keep the conversation on the site rather than in email so everything about the order stays in one place.\n\n` +
+    `— The Ever Nova Life team`;
+  const html = `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;color:#1f2937">
+    <h2 style="color:#6d28d9;margin-bottom:4px">We've replied</h2>
+    <p>Hi ${escapeHtmlSrv(who)}, there's a reply waiting on your report about order <strong>${escapeHtmlSrv(d.orderId)}</strong>.</p>
+    <p><a href="${link}" style="display:inline-block;background:#6d28d9;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600">Read the reply</a></p>
+    <p style="color:#9ca3af;font-size:12px;margin-top:24px">We keep the conversation on the site rather than in email so everything about the order stays in one place.</p>
+  </div>`;
+  return { to: email, subject, text, html };
+}
+
+function buildDisputeResolvedMail(d, email, name) {
+  const link = disputeLink(d);
+  const who = name || 'there';
+  const label = (disputes.OUTCOMES.find(o => o.code === d.outcome) || {}).label || 'Closed';
+  const note = String(d.outcomeNote || '').trim();
+  const subject = `Your report on order ${d.orderId} is resolved`;
+  const text = `Hi ${who},\n\n` +
+    `We've closed your report about order ${d.orderId}.\n\n` +
+    `Outcome: ${label}\n` +
+    (note ? `Note: ${note}\n` : '') +
+    `\nThe full conversation stays here:\n${link}\n\n` +
+    `If this isn't settled, open a new report from the order and we'll pick it up.\n\n` +
+    `— The Ever Nova Life team`;
+  const html = `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;color:#1f2937">
+    <h2 style="color:#6d28d9;margin-bottom:4px">Report resolved</h2>
+    <p>Hi ${escapeHtmlSrv(who)}, we've closed your report about order <strong>${escapeHtmlSrv(d.orderId)}</strong>.</p>
+    <p><strong>Outcome:</strong> ${escapeHtmlSrv(label)}</p>
+    ${note ? `<p><strong>Note:</strong> ${escapeHtmlSrv(note)}</p>` : ''}
+    <p><a href="${link}" style="display:inline-block;background:#6d28d9;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600">See the conversation</a></p>
+    <p style="color:#9ca3af;font-size:12px;margin-top:24px">If this isn't settled, open a new report from the order and we'll pick it up.</p>
+  </div>`;
+  return { to: email, subject, text, html };
+}
+
+/* Nothing emails the owner: the rail tally in the admin console is that
+   notification, and a second channel for the same event is just noise. */
+async function sendDisputeReplyEmail(d) {
+  if (!mailer.CONFIGURED) return;
+  const user = auth.getUserById(d.userId);
+  if (!user || !user.email) return;
+  return mailer.sendMail(buildDisputeReplyMail(d, user.email, user.firstName));
+}
+
+async function sendDisputeResolvedEmail(d) {
+  if (!mailer.CONFIGURED) return;
+  const user = auth.getUserById(d.userId);
+  if (!user || !user.email) return;
+  return mailer.sendMail(buildDisputeResolvedMail(d, user.email, user.firstName));
+}
 
 /* ---- ADMIN: the dispute queue ----
    The owner works from this: every thread, newest activity first, each with
@@ -3813,4 +3879,6 @@ if (require.main === module) {
   }
 }
 
+app.buildDisputeReplyMail = buildDisputeReplyMail;
+app.buildDisputeResolvedMail = buildDisputeResolvedMail;
 module.exports = app;
