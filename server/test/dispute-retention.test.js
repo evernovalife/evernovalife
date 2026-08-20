@@ -53,8 +53,10 @@ function resolveDaysAgo(id, days) {
 test('a thread resolved inside the window keeps its photos', () => {
   const d = withPhoto();
   resolveDaysAgo(d.id, 10);
-  const out = disputes.sweepExpiredAttachments(Date.now());
-  assert.equal(out.threads, 0);
+  disputes.sweepExpiredAttachments(Date.now());
+  // Asserted on this thread, not on the sweep's global count: the suite
+  // shares one DATA_DIR, and what else the sweep did or didn't touch is not
+  // this test's claim.
   const after = disputes.get(d.id);
   assert.equal(after.messages[0].attachments[0].expiredAt, undefined);
 });
@@ -67,7 +69,9 @@ test('a thread resolved outside the window loses the bytes and keeps the record'
 
   resolveDaysAgo(d.id, 120);
   const out = disputes.sweepExpiredAttachments(Date.now());
-  assert.equal(out.threads, 1);
+  // Not asserting out.threads: whether this run swept exactly one thread
+  // depends on what else was due elsewhere in the shared DATA_DIR — not
+  // this test's claim. The record checks below are.
   assert.equal(out.files, 1);
   assert.equal(out.bytes, PNG.length);
 
@@ -85,8 +89,9 @@ test('a reopened thread is never swept, however old its last resolution', () => 
   const d = withPhoto();
   resolveDaysAgo(d.id, 400);
   disputes.reopen(d.id, { by: 'boss@evernovalife.com' });
-  const out = disputes.sweepExpiredAttachments(Date.now());
-  assert.equal(out.threads, 0);
+  disputes.sweepExpiredAttachments(Date.now());
+  // Asserted on this thread, not on the sweep's global count — see the note
+  // on the first test above.
   assert.equal(disputes.get(d.id).messages[0].attachments[0].expiredAt, undefined);
 });
 
@@ -95,7 +100,9 @@ test('resolving a second time restarts the clock', () => {
   resolveDaysAgo(d.id, 400);
   disputes.reopen(d.id, { by: 'boss@evernovalife.com' });
   disputes.resolve(d.id, { outcome: 'replaced', by: 'boss@evernovalife.com' });
-  assert.equal(disputes.sweepExpiredAttachments(Date.now()).threads, 0);
+  disputes.sweepExpiredAttachments(Date.now());
+  assert.equal(disputes.get(d.id).messages[0].attachments[0].expiredAt, undefined,
+    'the fresh resolution restarts the clock, so the sweep leaves it alone');
 });
 
 test('the byte total excludes what the sweep deleted', () => {
@@ -129,19 +136,31 @@ test('freeing space lets an attachment through that was refused before', () => {
 test('the sweep is idempotent', () => {
   const d = withPhoto();
   resolveDaysAgo(d.id, 120);
-  const first = disputes.sweepExpiredAttachments(Date.now());
-  assert.equal(first.threads, 1);
+  disputes.sweepExpiredAttachments(Date.now());
+  assert.ok(disputes.get(d.id).messages[0].attachments[0].expiredAt, 'the first sweep caught this thread');
+
+  // The second call IS a genuinely global claim, and it is safe regardless of
+  // the shared DATA_DIR: run twice back-to-back, with no time passing and no
+  // new thread created in between, there is nothing left for ANY thread to
+  // lose, not just this one — that is what idempotent means here.
   const second = disputes.sweepExpiredAttachments(Date.now());
   assert.deepEqual(second, { threads: 0, files: 0, bytes: 0 });
 });
 
 test('a thread with no attachments is left alone', () => {
+  // This thread has no attachments, so there is nothing on its own record to
+  // assert against afterwards — the claim can only be checked through the
+  // sweep's count. Sweeping first clears anything else already due in the
+  // shared DATA_DIR, so the zero below is guaranteed by this thread alone,
+  // not by what earlier tests happened to leave behind.
+  disputes.sweepExpiredAttachments(Date.now());
   const d = disputes.create({
     userId: 'u-none', orderId: 'ENL-NONE', reason: 'other',
     body: 'No photo.', authorEmail: 'n@example.com'
   });
   resolveDaysAgo(d.id, 120);
-  assert.equal(disputes.sweepExpiredAttachments(Date.now()).threads, 0);
+  assert.equal(disputes.sweepExpiredAttachments(Date.now()).threads, 0,
+    'no live attachments means nothing to reclaim, however overdue the thread');
 });
 
 test('stripAttachments frees an open thread and leaves it readable', () => {
