@@ -75,6 +75,12 @@
   function attachmentsHtml(disputeId, list) {
     if (!list || !list.length) return '';
     return '<div class="dsp-atts">' + list.map(function (a) {
+      // The record outlives the file. Rendering a button here would send the
+      // owner to a 404 for something that expired exactly as intended.
+      if (a.expiredAt) {
+        return '<span class="dsp-att expired" title="Removed ' + A.esc(A.date(a.expiredAt)) + '">' +
+          A.esc(a.name) + ' — photo removed</span>';
+      }
       return '<button type="button" class="dsp-att act-dsp-att" data-dsp="' + A.esc(disputeId) +
         '" data-file="' + A.esc(a.id) + '">' + A.icon('download') + A.esc(a.name) + '</button>';
     }).join('') + '</div>';
@@ -91,6 +97,35 @@
       '<div class="dsp-msg-body">' + A.esc(m.body).replace(/\n/g, '<br>') + '</div>' +
       attachmentsHtml(disputeId, m.attachments) +
       '</div>';
+  }
+
+  function mb(n) {
+    var v = Number(n) || 0;
+    return v >= 1024 * 1024
+      ? (v / (1024 * 1024)).toFixed(0) + ' MB'
+      : Math.max(1, Math.round(v / 1024)) + ' KB';
+  }
+
+  /* How full the photo allowance is, with the control that frees it. Amber at
+     the same threshold that sends the email, so the screen and the inbox never
+     disagree about whether this is a problem yet. */
+  function storageLine(state) {
+    var s = state.storage;
+    if (!s) return '';
+    var warn = s.pct >= ((s.alertPct) || 80);
+    return '<div class="dsp-storage' + (warn ? ' warn' : '') + '">' +
+      '<span>' + A.esc(mb(s.usedBytes)) + ' of ' + A.esc(mb(s.ceilingBytes)) +
+        ' · ' + A.esc(String(s.pct)) + '%</span>' +
+      '<button type="button" class="btn btn-ghost btn-sm act-dsp-sweep">Run cleanup</button>' +
+      '</div>';
+  }
+
+  function liveAttachmentCount(d) {
+    var n = 0;
+    (d.messages || []).forEach(function (m) {
+      (m.attachments || []).forEach(function (a) { if (!a.expiredAt) n++; });
+    });
+    return n;
   }
 
   function resolveBox(d, outcomes) {
@@ -124,6 +159,12 @@
     return '<div class="dsp-pane">' +
       orderCard(t.order) +
       resolveBox(d, outcomes) +
+      (liveAttachmentCount(d)
+        ? '<div class="dsp-strip">' +
+            '<span class="muted">' + A.esc(String(liveAttachmentCount(d))) + ' photo(s) stored on this report</span>' +
+            '<button type="button" class="btn btn-ghost btn-sm act-dsp-strip" data-id="' + A.esc(d.id) + '">Remove photos</button>' +
+          '</div>'
+        : '') +
       '<div class="dsp-stream">' + d.messages.map(function (m) { return messageHtml(d.id, m); }).join('') + '</div>' +
       (d.status === 'resolved'
         ? '<p class="muted">This report is closed. Reopen it to reply.</p>'
@@ -145,6 +186,7 @@
     var rows = filtered(list, state.disputeTab);
     body.innerHTML =
       '<div class="dsp-wrap">' +
+        storageLine(state) +
         '<div class="dsp-queue">' +
           '<div class="seg dsp-tabs" role="group" aria-label="Filter reports">' +
             TABS.map(function (t) {

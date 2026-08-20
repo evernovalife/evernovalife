@@ -3047,3 +3047,13 @@ body.pd-modal-open { overflow: hidden; }
 .sup-previews img { width: 76px; height: 76px; object-fit: cover; border-radius: 8px; border: 1px solid rgba(255,255,255,.15); }
 .sup-closed { border: 1px solid rgba(212,175,55,.35); background: rgba(212,175,55,.08); border-radius: 10px; padding: .75rem 1rem; }
 @media (max-width: 600px) { .sup-msg { max-width: 100%; } }
+
+/* ===== ADMIN — DISPUTE STORAGE ===== */
+.dsp-storage { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: .75rem;
+  padding: .5rem .75rem; border: 1px solid rgba(255,255,255,.1); border-radius: 10px;
+  background: rgba(255,255,255,.03); font-size: .85rem; }
+.dsp-storage.warn { border-color: rgba(212,175,55,.5); background: rgba(212,175,55,.1); color: #f0d98a; }
+.dsp-strip { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; }
+.dsp-att.expired, .sup-att.expired { opacity: .65; font-style: italic; cursor: default;
+  border-style: dashed; display: inline-block; padding: .25rem .5rem; border-radius: 8px;
+  border: 1px dashed rgba(255,255,255,.2); font-size: .8rem; }

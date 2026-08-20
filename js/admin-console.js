@@ -65,6 +65,7 @@
     disputeThread: null,   // the full thread, loaded when one is opened
     disputeOutcomes: [],   // how a report can be closed, from the list response
     disputeTab: 'awaiting_us',
+    storage: null,         // dispute photo usage against the ceiling (includes alertPct, from the server)
     range: 30,            // days; 0 = all time
     view: 'dashboard',
     loading: false
@@ -116,7 +117,10 @@
     state.design = results[6].status === 'fulfilled' ? (results[6].value.design || null) : (state.design || null);
     state.promos = results[7].status === 'fulfilled' ? (results[7].value.promotions || []) : (state.promos || null);
     state.disputes = results[8].status === 'fulfilled' ? (results[8].value.disputes || []) : (state.disputes || []);
-    if (results[8].status === 'fulfilled') state.disputeOutcomes = results[8].value.outcomes || [];
+    if (results[8].status === 'fulfilled') {
+      state.disputeOutcomes = results[8].value.outcomes || [];
+      state.storage = results[8].value.storage || null;
+    }
 
     results.forEach(function (r, i) {
       if (r.status === 'rejected' && r.reason.status !== 0) {
@@ -2566,6 +2570,38 @@
     }
   }
 
+  async function sweepDisputes(btn) {
+    if (!window.confirm('Remove photos from every report resolved more than the retention window ago?\n\n' +
+        'The conversations stay. The photos are deleted from the server and cannot be recovered.')) return;
+    btn.disabled = true;
+    try {
+      var data = await A.api('/api/admin/disputes/sweep', { method: 'POST' });
+      state.storage = data.storage || state.storage;
+      A.toast(data.files
+        ? 'Removed ' + A.plural(data.files, 'photo') + ' from ' + A.plural(data.threads, 'report') + '.'
+        : 'Nothing was old enough to remove.', 'success');
+      await loadAll({ quiet: true });
+      render();
+    } catch (e) { A.toast(e.message, 'error'); btn.disabled = false; }
+  }
+
+  async function stripDisputePhotos(id, btn) {
+    if (!window.confirm('Remove every photo on this report?\n\n' +
+        'The conversation stays and still shows that photos were sent. The images themselves are ' +
+        'deleted from the server and cannot be recovered.')) return;
+    btn.disabled = true;
+    try {
+      var data = await A.api('/api/admin/disputes/' + encodeURIComponent(id) + '/attachments', { method: 'DELETE' });
+      if (state.disputeId !== id) return;      // the owner moved on mid-request
+      state.storage = data.storage || state.storage;
+      A.toast(data.files ? 'Removed ' + A.plural(data.files, 'photo') + '.' : 'There were no photos to remove.', 'success');
+      await openDispute(id);                   // reload the thread so the labels update
+    } catch (e) {
+      A.toast(e.message, 'error');
+      if (state.disputeId === id) btn.disabled = false;
+    }
+  }
+
   /* An <img> can't send the bearer token, so the bytes are fetched with it
      and handed to the browser as a blob URL. A.headers() already attaches
      both the bearer token and the admin key — the same auth every other
@@ -2630,6 +2666,8 @@
       else if (t.classList.contains('act-dsp-resolve')) resolveDispute(t.getAttribute('data-id'), t);
       else if (t.classList.contains('act-dsp-reopen')) reopenDispute(t.getAttribute('data-id'), t);
       else if (t.classList.contains('act-dsp-att')) openDisputeAttachment(t.getAttribute('data-dsp'), t.getAttribute('data-file'));
+      else if (t.classList.contains('act-dsp-sweep')) sweepDisputes(t);
+      else if (t.classList.contains('act-dsp-strip')) stripDisputePhotos(t.getAttribute('data-id'), t);
     });
 
     /* The designer previews live: every keystroke redraws the label from the

@@ -164,6 +164,12 @@
       return '<div class="sup-msg system">' + esc(m.body) + '</div>';
     }
     var atts = (m.attachments || []).map(function (a) {
+      // Expired photos keep their place in the conversation so it still reads
+      // honestly — a message saying "see the photo" above nothing would leave
+      // the customer wondering whether it ever sent.
+      if (a.expiredAt) {
+        return '<span class="sup-att expired">' + esc(a.name) + ' — photo removed</span>';
+      }
       return '<button type="button" class="sup-att" data-file="' + esc(a.id) + '">' + esc(a.name) + '</button>';
     }).join('');
     return '<div class="sup-msg ' + (m.from === 'admin' ? 'theirs' : 'mine') + '">' +
