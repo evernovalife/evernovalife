@@ -178,9 +178,14 @@
   function render(state, body) {
     var list = state.disputes;
     if (!list) { body.innerHTML = A.skeleton(6); return; }
+    /* The storage figure belongs above the empty state, not inside the queue:
+       an empty queue is exactly when photos left behind by deleted or
+       long-resolved reports are the only thing on the disk, and the line was
+       unreachable there. */
     if (!list.length) {
-      body.innerHTML = A.empty('No reports yet',
-        'When a customer reports a problem with an order, the thread lands here.');
+      body.innerHTML = storageLine(state) +
+        A.empty('No reports yet',
+          'When a customer reports a problem with an order, the thread lands here.');
       return;
     }
     var rows = filtered(list, state.disputeTab);
