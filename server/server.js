@@ -2368,8 +2368,11 @@ app.get('/api/admin/disputes', requireAdmin, (req, res) => {
     reasons: disputes.REASONS,
     outcomes: disputes.OUTCOMES,
     /* The figure rides on the queue the console already loads, so the
-       storage line costs no extra request. */
-    storage: disputes.storageStatus(),
+       storage line costs no extra request.
+       alertPct rides along so the console's amber line turns at exactly the
+       percentage that sends the email — the screen and the inbox must never
+       disagree about whether this is a problem yet. */
+    storage: { ...disputes.storageStatus(), alertPct: outreach.config().storageAlertPct },
     disputes: rows
   });
 });
@@ -3644,7 +3647,7 @@ function cartCandidates() {
 /* The whole tick. Never throws: each kind is isolated so a failure in one
    still lets the other two run. */
 async function runOutreach(now = Date.now()) {
-  const summary = { cartsNudged: 0, ordersNudged: 0, stockAlerts: 0, errors: 0 };
+  const summary = { cartsNudged: 0, ordersNudged: 0, stockAlerts: 0, storageAlerts: 0, errors: 0 };
 
   /* ---- 1. unpaid orders ---- */
   try {
@@ -3702,9 +3705,29 @@ async function runOutreach(now = Date.now()) {
     console.error('[outreach] stock pass failed:', e.message);
   }
 
-  if (summary.cartsNudged || summary.ordersNudged || summary.stockAlerts || summary.errors) {
+  /* ---- 4. dispute photo storage ---- */
+  try {
+    const due = outreach.selectStorageAlert(disputes.storageStatus(), now);
+    if (due) {
+      try {
+        await sendDisputeStorageAlert(due);
+        summary.storageAlerts++;
+      } catch (e) {
+        summary.errors++;
+        console.error('[outreach] storage alert failed:', e.message);
+      }
+      /* Stamped either way — a broken SMTP must turn one missed warning into
+         one missed warning, not an hourly retry. */
+      outreach.markStorageAlerted(due.pct, now);
+    }
+  } catch (e) {
+    summary.errors++;
+    console.error('[outreach] storage pass failed:', e.message);
+  }
+
+  if (summary.cartsNudged || summary.ordersNudged || summary.stockAlerts || summary.storageAlerts || summary.errors) {
     console.log(`[outreach] orders ${summary.ordersNudged} · carts ${summary.cartsNudged} · ` +
-                `stock ${summary.stockAlerts} · errors ${summary.errors}`);
+                `stock ${summary.stockAlerts} · storage ${summary.storageAlerts} · errors ${summary.errors}`);
   }
   return summary;
 }
@@ -3866,6 +3889,38 @@ async function sendLowStockAlert({ product, level, previousLevel, threshold }) {
       </table>`,
       extraHtml: `<p><a href="${SITE()}/admin-products.html" style="display:inline-block;background:#6d28d9;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600">Update the stock count</a></p>
         <p style="color:#6b7280;font-size:14px">You'll only hear about this SKU again if it runs to zero, or after you restock it above ${escapeHtmlSrv(String(threshold))}.</p>`
+    })
+  });
+}
+
+/* The owner's copy of the storage figure. Same recipient and guard as the
+   low-stock alert: without ADMIN_EMAIL this is built and dropped, which is
+   why /api/health reports whether that inbox exists at all. */
+async function sendDisputeStorageAlert({ pct, usedBytes, ceilingBytes, threshold }) {
+  const to = process.env.ADMIN_EMAIL || '';
+  if (!mailer.CONFIGURED || !to) return;
+  const mb = n => (Number(n) / (1024 * 1024)).toFixed(0) + ' MB';
+  const full = pct >= 100;
+  // Read per send, not frozen at module load — retention is env-driven and
+  // Render can change it without a redeploy.
+  const retentionNote = `${disputes.retentionDays()} days after a report is resolved`;
+  return mailer.sendMail({
+    to,
+    subject: full
+      ? 'Dispute photo storage is FULL — photos are being refused'
+      : `Dispute photo storage at ${pct}%`,
+    text: (full
+      ? `Customers can no longer attach photos to a report. Their reports still go through, and they are told to describe the problem instead — but the evidence is not reaching you.\n\n`
+      : `Dispute photos are using ${mb(usedBytes)} of the ${mb(ceilingBytes)} allowance (${pct}%, warning at ${threshold}%).\n\n`) +
+      `Photos expire on their own ${retentionNote}, and you can reclaim space now from the Disputes screen:\n` +
+      `${SITE()}/admin.html#disputes\n\n` +
+      `If the disk itself has room, raise DISPUTE_TOTAL_BYTES_MAX on the server instead.\n`,
+    html: orderEmailHtml({
+      heading: full ? 'Photo storage is full' : 'Photo storage is filling up',
+      intro: full
+        ? 'Customers can no longer attach photos to a report. Their reports still go through — but the evidence is not reaching you.'
+        : `Dispute photos are using <strong>${escapeHtmlSrv(mb(usedBytes))}</strong> of the ${escapeHtmlSrv(mb(ceilingBytes))} allowance (<strong>${escapeHtmlSrv(String(pct))}%</strong>).`,
+      extraHtml: `<p><a href="${SITE()}/admin.html#disputes" style="display:inline-block;background:#6d28d9;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600">Open Disputes</a></p>`
     })
   });
 }

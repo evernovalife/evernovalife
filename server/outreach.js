@@ -75,7 +75,10 @@ function load() {
   return {
     carts: obj.carts && typeof obj.carts === 'object' ? obj.carts : {},
     orders: obj.orders && typeof obj.orders === 'object' ? obj.orders : {},
-    stock: obj.stock && typeof obj.stock === 'object' ? obj.stock : {}
+    stock: obj.stock && typeof obj.stock === 'object' ? obj.stock : {},
+    /* One record, not a map: there is only one disk. `null` = nothing
+       outstanding, which is what makes the re-arm below readable. */
+    storage: obj.storage && typeof obj.storage === 'object' ? obj.storage : null
   };
 }
 function save(state) {
@@ -257,13 +260,61 @@ function markStockAlerted(productId, level, now = Date.now()) {
   return state.stock[String(productId)];
 }
 
+/* ============================================================
+   DISPUTE PHOTO STORAGE
+   Dispute photos share the disk with every other JSON store here, so the
+   allowance filling up is worth an email before it stops accepting them.
+   Same shape as the stock alert: due once on the crossing, silent while it
+   stays there, and the mark is DELETED when usage falls back under — so a
+   sweep re-arms the warning for next time. The exception mirrors the
+   run-to-zero rule: reaching 100% says something the 80% email did not,
+   namely that photos are being refused right now.
+   ============================================================ */
+function storageAlertPct() {
+  return num(process.env.DISPUTE_STORAGE_ALERT_PCT, 80);
+}
+
+function selectStorageAlert(status, now = Date.now()) {
+  const pct = Number(status && status.pct);
+  if (!Number.isFinite(pct)) return null;
+
+  const threshold = storageAlertPct();
+  const state = load();
+
+  if (pct < threshold) {
+    if (state.storage) { state.storage = null; save(state); }   // re-arm
+    return null;
+  }
+
+  const prev = state.storage;
+  const firstCrossing = !prev;
+  const hitFull = prev && pct >= 100 && Number(prev.pct) < 100;
+  if (!firstCrossing && !hitFull) return null;
+
+  return {
+    pct,
+    usedBytes: Number(status.usedBytes) || 0,
+    ceilingBytes: Number(status.ceilingBytes) || 0,
+    threshold,
+    previousPct: prev ? Number(prev.pct) : null
+  };
+}
+
+function markStorageAlerted(pct, now = Date.now()) {
+  const state = load();
+  state.storage = { pct: Number(pct) || 0, alertedAt: now };
+  save(state);
+  return state.storage;
+}
+
 /* Non-secret summary for the admin diagnostics panel. */
 function config() {
   return {
     cartNudgeHours: CART_NUDGE_HOURS,
     cartCooldownDays: CART_COOLDOWN_DAYS,
     orderNudgeHours: nudgeStages(),
-    lowStockThreshold: LOW_STOCK_THRESHOLD
+    lowStockThreshold: LOW_STOCK_THRESHOLD,
+    storageAlertPct: storageAlertPct()
   };
 }
 
@@ -275,6 +326,8 @@ module.exports = {
   markOrderNudged,
   selectStockAlerts,
   markStockAlerted,
+  selectStorageAlert,
+  markStorageAlerted,
   config,
   CHASEABLE,
   LOW_STOCK_THRESHOLD,

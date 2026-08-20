@@ -476,6 +476,21 @@ test('the admin queue carries the storage figure', async () => {
   assert.equal(typeof body.storage.pct, 'number');
 });
 
+test('the admin queue reports the alert threshold alongside the figure, so the console and the email agree', async () => {
+  const prev = process.env.DISPUTE_STORAGE_ALERT_PCT;
+  try {
+    process.env.DISPUTE_STORAGE_ALERT_PCT = '73';
+    const token = await adminToken();
+    const { status, body } = await api('/api/admin/disputes', { token });
+    assert.equal(status, 200);
+    assert.equal(typeof body.storage.alertPct, 'number');
+    assert.equal(body.storage.alertPct, 73);
+  } finally {
+    if (prev === undefined) delete process.env.DISPUTE_STORAGE_ALERT_PCT;
+    else process.env.DISPUTE_STORAGE_ALERT_PCT = prev;
+  }
+});
+
 test('an ordinary account is refused the storage controls', async () => {
   const mal = await signUp('mal-storage@example.com');
   for (const [method, pathname] of [
