@@ -15,7 +15,14 @@
   var API = (window.PEPTIDE_API_BASE || '');
   var POLL_MS = 20000;
 
-  var state = { orderId: '', dispute: null, order: null, reasons: [], pending: [], pendingReply: [], timer: null };
+  var state = {
+    orderId: '', dispute: null, order: null, reasons: [], pending: [], pendingReply: [], timer: null,
+    // One generation counter + outstanding-read count per file input, so a
+    // submit can be blocked while reads are in flight and a read from a
+    // superseded selection can be told apart from the current one.
+    pendingAttach: { gen: 0, busy: 0 },
+    pendingReplyAttach: { gen: 0, busy: 0 }
+  };
 
   function $(id) { return document.getElementById(id); }
   function esc(s) {
@@ -47,30 +54,72 @@
   }
 
   /* ---- attachments: read to base64 in the browser, capped before we ask
-     the server to refuse them ---- */
+     the server to refuse them.
+
+     Reading is async and the customer can submit before it finishes, so
+     each selection is stamped with its own generation number on `info`
+     (either state.pendingAttach or state.pendingReplyAttach). A read whose
+     generation no longer matches `info.gen` by the time it lands — because
+     the customer picked a different set of files before the first set
+     finished reading — is a stale read and is dropped instead of landing
+     in the (by then unrelated) bucket. While any read for the CURRENT
+     generation is still outstanding, `info.busy` is > 0, the matching
+     submit button is disabled, and the message element says so — so a
+     report can never be sent with a photo it hasn't finished reading. ---- */
   var MAX_FILES = 3;
   var MAX_BYTES = 2 * 1024 * 1024;
 
-  function readFiles(input, bucket, previewEl, msgEl) {
+  function readFiles(input, bucket, previewEl, msgEl, submitBtn, info) {
     var files = Array.prototype.slice.call(input.files || []);
+    var gen = ++info.gen;      // supersedes any reads still in flight from the previous selection
+    info.busy = 0;
     bucket.length = 0;
     previewEl.innerHTML = '';
-    msgEl.textContent = '';
+    submitBtn.disabled = false;
+
+    var notices = [];
+    function render() {
+      var parts = notices.slice();
+      if (info.busy > 0) parts.push('Attaching ' + info.busy + (info.busy === 1 ? ' photo…' : ' photos…'));
+      msgEl.textContent = parts.join(' ');
+      submitBtn.disabled = info.busy > 0;
+    }
+
     if (files.length > MAX_FILES) {
-      msgEl.textContent = 'Attach at most ' + MAX_FILES + ' photos.';
+      notices.push('Attach at most ' + MAX_FILES + ' photos.');
       input.value = '';
+      render();
       return;
     }
-    files.forEach(function (f) {
-      if (f.size > MAX_BYTES) { msgEl.textContent = 'Each photo has to be under 2 MB — ' + f.name + ' is bigger.'; return; }
+
+    var toRead = files.filter(function (f) {
+      if (f.size > MAX_BYTES) {
+        notices.push('Each photo has to be under 2 MB — ' + f.name + ' is bigger.');
+        return false;
+      }
+      return true;
+    });
+
+    info.busy = toRead.length;
+    render();
+
+    toRead.forEach(function (f) {
       var reader = new FileReader();
       reader.onload = function () {
-        var data = String(reader.result || '');
-        bucket.push({ name: f.name, data: data });
+        if (gen !== info.gen) return;   // a later selection replaced this one — discard
+        bucket.push({ name: f.name, data: String(reader.result || '') });
         var img = document.createElement('img');
-        img.src = data;
+        img.src = String(reader.result || '');
         img.alt = f.name;
         previewEl.appendChild(img);
+        info.busy--;
+        render();
+      };
+      reader.onerror = function () {
+        if (gen !== info.gen) return;   // superseded — nothing to surface any more
+        notices.push('Could not read ' + f.name + ' — try a different photo.');
+        info.busy--;
+        render();
       };
       reader.readAsDataURL(f);
     });
@@ -174,6 +223,9 @@
     e.preventDefault();
     var msg = $('supOpenMsg');
     var btn = e.target.querySelector('button[type=submit]');
+    // Belt and braces alongside the disabled button: a photo that is still
+    // being read must never be silently missing from what gets sent.
+    if (state.pendingAttach.busy > 0) { msg.textContent = 'Still attaching your photos — one moment.'; return; }
     msg.textContent = '';
     btn.disabled = true;
     try {
@@ -204,6 +256,9 @@
     e.preventDefault();
     var msg = $('supReplyMsg');
     var btn = e.target.querySelector('button[type=submit]');
+    // Belt and braces alongside the disabled button: a photo that is still
+    // being read must never be silently missing from what gets sent.
+    if (state.pendingReplyAttach.busy > 0) { msg.textContent = 'Still attaching your photos — one moment.'; return; }
     msg.textContent = '';
     btn.disabled = true;
     try {
@@ -233,7 +288,14 @@
         '/files/' + encodeURIComponent(fileId), { headers: headers });
       if (!res.ok) throw new Error('That photo could not be loaded.');
       window.open(URL.createObjectURL(await res.blob()), '_blank', 'noopener');
-    } catch (e) { $('supReplyMsg').textContent = e.message; }
+    } catch (e) {
+      // supReplyMsg lives inside the reply form, which is hidden on a
+      // resolved thread — writing a failure there would be invisible on
+      // exactly the threads a customer is most likely to be re-reading.
+      // supIntro is on-screen in both states.
+      var closed = state.dispute && state.dispute.status === 'resolved';
+      $(closed ? 'supIntro' : 'supReplyMsg').textContent = e.message;
+    }
   }
 
   /* ---- boot ---- */
@@ -251,10 +313,12 @@
     $('supOpenForm').addEventListener('submit', submitOpen);
     $('supReplyForm').addEventListener('submit', submitReply);
     $('supFiles').addEventListener('change', function () {
-      readFiles(this, state.pending, $('supPreviews'), $('supOpenMsg'));
+      readFiles(this, state.pending, $('supPreviews'), $('supOpenMsg'),
+        $('supOpenForm').querySelector('button[type=submit]'), state.pendingAttach);
     });
     $('supReplyFiles').addEventListener('change', function () {
-      readFiles(this, state.pendingReply, $('supReplyPreviews'), $('supReplyMsg'));
+      readFiles(this, state.pendingReply, $('supReplyPreviews'), $('supReplyMsg'),
+        $('supReplyForm').querySelector('button[type=submit]'), state.pendingReplyAttach);
     });
     document.addEventListener('click', function (e) {
       var b = e.target.closest && e.target.closest('.sup-att');
