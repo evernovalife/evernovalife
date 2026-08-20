@@ -353,10 +353,100 @@ function totalAttachmentBytes() {
   for (const id of Object.keys(all)) {
     const d = all[id];
     for (const m of (d && d.messages) || []) {
-      for (const a of (m.attachments || [])) total += Number(a.bytes) || 0;
+      for (const a of (m.attachments || [])) {
+        // The file is gone; only the record remains. Counting it would keep
+        // the ceiling shut against space that has already been reclaimed.
+        if (a.expiredAt) continue;
+        total += Number(a.bytes) || 0;
+      }
     }
   }
   return total;
+}
+
+/* How long a resolved report keeps its photos. Read per call, like the
+   ceiling, so it can be changed on Render without a redeploy. The clock is
+   keyed to `resolvedAt` and not to message age, so an active conversation
+   never loses evidence in the middle of itself. */
+const RETENTION_DAYS_DEFAULT = 90;
+function retentionDays() {
+  const n = Number(process.env.DISPUTE_PHOTO_RETENTION_DAYS);
+  return (Number.isFinite(n) && n > 0) ? n : RETENTION_DAYS_DEFAULT;
+}
+
+/* Every attachment on one thread that still has bytes behind it. */
+function liveAttachments(d) {
+  const live = [];
+  for (const m of (d && d.messages) || []) {
+    for (const a of (m.attachments || [])) if (!a.expiredAt) live.push(a);
+  }
+  return live;
+}
+
+function stampExpired(d, stamp) {
+  for (const m of d.messages) {
+    for (const a of (m.attachments || [])) if (!a.expiredAt) a.expiredAt = stamp;
+  }
+}
+
+/* Drop one thread's photos now, whatever its age or status. The admin's
+   "Remove photos" control — for the report that is eating the disk today. */
+function stripAttachments(disputeId, now) {
+  const all = load();
+  const d = all[disputeId];
+  if (!d) return null;
+
+  const live = liveAttachments(d);
+  if (!live.length) return { files: 0, bytes: 0 };
+  if (!attachStore.removeAll(disputeId)) return { files: 0, bytes: 0 };
+
+  stampExpired(d, new Date(now || Date.now()).toISOString());
+  save(all);
+  return { files: live.length, bytes: live.reduce((n, a) => n + (Number(a.bytes) || 0), 0) };
+}
+
+/* The scheduled pass: every thread resolved longer ago than the window loses
+   its photos. A thread that has been reopened has no `resolvedAt`, so it is
+   safe again — and resolving it a second time restarts the clock. One
+   unreadable directory logs and the run continues; stopping would leave every
+   later thread unreclaimed because of one bad one. */
+function sweepExpiredAttachments(now) {
+  const at = now || Date.now();
+  const cutoff = at - retentionDays() * 24 * 60 * 60 * 1000;
+  const stamp = new Date(at).toISOString();
+  const all = load();
+  let threads = 0, files = 0, bytes = 0, dirty = false;
+
+  for (const id of Object.keys(all)) {
+    const d = all[id];
+    if (!d || !d.resolvedAt) continue;
+    const resolvedMs = new Date(d.resolvedAt).getTime();
+    if (!Number.isFinite(resolvedMs) || resolvedMs > cutoff) continue;
+
+    const live = liveAttachments(d);
+    if (!live.length) continue;
+    if (!attachStore.removeAll(id)) continue;   // unstamped → retried next run
+
+    stampExpired(d, stamp);
+    threads++;
+    files += live.length;
+    bytes += live.reduce((n, a) => n + (Number(a.bytes) || 0), 0);
+    dirty = true;
+  }
+
+  if (dirty) save(all);
+  return { threads, files, bytes };
+}
+
+/* One line for the admin: how full is the allowance? */
+function storageStatus() {
+  const usedBytes = totalAttachmentBytes();
+  const ceilingBytes = totalBytesMax();
+  return {
+    usedBytes,
+    ceilingBytes,
+    pct: ceilingBytes > 0 ? Math.round((usedBytes / ceilingBytes) * 100) : 0
+  };
 }
 
 const MAGIC = [
@@ -430,10 +520,20 @@ const attachStore = {
     }
   },
 
+  /* Returns whether the bytes are actually gone. The sweep stamps `expiredAt`
+     only on a true, so a directory that could not be removed is retried on the
+     next run rather than silently recorded as reclaimed. `force: true` means a
+     directory that was never there counts as removed, which is what makes the
+     sweep idempotent. */
   removeAll(disputeId) {
-    if (!disputeId) return;
-    try { fs.rmSync(path.join(FILES_DIR, disputeId), { recursive: true, force: true }); }
-    catch (e) { console.error('[disputes] could not remove attachments:', e.message); }
+    if (!disputeId) return false;
+    try {
+      fs.rmSync(path.join(FILES_DIR, disputeId), { recursive: true, force: true });
+      return true;
+    } catch (e) {
+      console.error('[disputes] could not remove attachments:', e.message);
+      return false;
+    }
   }
 };
 
@@ -446,6 +546,9 @@ function fileMeta(disputeId, fileId) {
   for (const m of d.messages) {
     for (const a of (m.attachments || [])) {
       if (a.id === fileId) {
+        // The record outlives the file. An expired attachment has no bytes to
+        // serve, and the UIs render it as a label rather than a fetch button.
+        if (a.expiredAt) return null;
         return { path: path.join(FILES_DIR, disputeId, a.id + '.' + extFor(a.mime)), mime: a.mime, name: a.name };
       }
     }
@@ -465,5 +568,6 @@ module.exports = {
   list, listForUser, get, findOpenForOrder,
   create, addMessage, resolve, reopen, markRead,
   unreadFor, summarize, forCustomer, deleteUserData,
-  sniffImage, fileMeta, readFile, totalAttachmentBytes
+  sniffImage, fileMeta, readFile, totalAttachmentBytes,
+  retentionDays, sweepExpiredAttachments, stripAttachments, storageStatus
 };
