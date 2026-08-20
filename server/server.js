@@ -2363,7 +2363,34 @@ app.get('/api/admin/disputes', requireAdmin, (req, res) => {
       order: disputeOrderView(order)
     };
   });
-  res.json({ success: true, reasons: disputes.REASONS, outcomes: disputes.OUTCOMES, disputes: rows });
+  res.json({
+    success: true,
+    reasons: disputes.REASONS,
+    outcomes: disputes.OUTCOMES,
+    /* The figure rides on the queue the console already loads, so the
+       storage line costs no extra request. */
+    storage: disputes.storageStatus(),
+    disputes: rows
+  });
+});
+
+/* ---- ADMIN: reclaim attachment space ----
+   Two destructive controls, and the only ones in the console not tied to
+   deleting an account. Both drop bytes and keep the record, so a thread that
+   has been cleared still reads honestly: the message says a photo was sent,
+   and the label says it is gone. */
+app.post('/api/admin/disputes/sweep', requireAdmin, (req, res) => {
+  const out = disputes.sweepExpiredAttachments(Date.now());
+  if (out.threads) {
+    console.log(`[disputes] swept ${out.files} photo(s) from ${out.threads} resolved report(s)`);
+  }
+  res.json({ success: true, ...out, storage: disputes.storageStatus() });
+});
+
+app.delete('/api/admin/disputes/:id/attachments', requireAdmin, (req, res) => {
+  const out = disputes.stripAttachments(req.params.id, Date.now());
+  if (!out) return res.status(404).json({ error: 'No report with that reference.' });
+  res.json({ success: true, ...out, storage: disputes.storageStatus() });
 });
 
 app.get('/api/admin/disputes/:id', requireAdmin, (req, res) => {

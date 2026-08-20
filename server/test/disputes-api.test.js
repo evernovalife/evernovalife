@@ -461,3 +461,68 @@ test('the three 2 MB photos support.html advertises fit inside the body limit', 
   assert.equal(status, 201);
   assert.equal(body.dispute.messages[0].attachments.length, 3);
 });
+
+/* ============================================================
+   STORAGE — the figure, the sweep, the strip
+   ============================================================ */
+
+test('the admin queue carries the storage figure', async () => {
+  const token = await adminToken();
+  const { status, body } = await api('/api/admin/disputes', { token });
+  assert.equal(status, 200);
+  assert.ok(body.storage, 'storage rides on the existing response');
+  assert.equal(typeof body.storage.usedBytes, 'number');
+  assert.equal(typeof body.storage.ceilingBytes, 'number');
+  assert.equal(typeof body.storage.pct, 'number');
+});
+
+test('an ordinary account is refused the storage controls', async () => {
+  const mal = await signUp('mal-storage@example.com');
+  for (const [method, pathname] of [
+    ['POST', '/api/admin/disputes/sweep'],
+    ['DELETE', '/api/admin/disputes/DSP-NOPE/attachments']
+  ]) {
+    const { status } = await api(pathname, { method, token: mal.token, body: method === 'POST' ? {} : undefined });
+    assert.equal(status, 401, `${method} ${pathname} should be 401, got ${status}`);
+  }
+});
+
+test('stripping a thread frees its photos and reports what went', async () => {
+  const vera = await signUp('vera-d@example.com');
+  placeOrder(vera.user.id, 'ENL-STRIP');
+  const made = await api('/api/disputes', {
+    method: 'POST', token: vera.token,
+    body: { orderId: 'ENL-STRIP', reason: 'damaged', message: 'See photo.', attachments: [{ name: 'p.png', data: PNG }] }
+  });
+  const id = made.body.dispute.id;
+  const fileId = made.body.dispute.messages[0].attachments[0].id;
+  const token = await adminToken();
+
+  const before = (await api('/api/admin/disputes', { token })).body.storage.usedBytes;
+  const out = await api(`/api/admin/disputes/${id}/attachments`, { method: 'DELETE', token });
+  assert.equal(out.status, 200);
+  assert.equal(out.body.files, 1);
+  assert.ok(out.body.bytes > 0);
+  assert.equal(out.body.storage.usedBytes, before - out.body.bytes);
+
+  // The bytes are gone for both sides; the conversation is not.
+  assert.equal((await api(`/api/disputes/${id}/files/${fileId}`, { token: vera.token })).status, 404);
+  assert.equal((await api(`/api/admin/disputes/${id}/files/${fileId}`, { token })).status, 404);
+  const seen = await api(`/api/disputes/${id}`, { token: vera.token });
+  assert.equal(seen.body.dispute.messages[0].body, 'See photo.');
+  assert.ok(seen.body.dispute.messages[0].attachments[0].expiredAt);
+});
+
+test('stripping an unknown thread is a 404', async () => {
+  const token = await adminToken();
+  assert.equal((await api('/api/admin/disputes/DSP-NOPE/attachments', { method: 'DELETE', token })).status, 404);
+});
+
+test('the sweep runs on demand and reports zeros when nothing is due', async () => {
+  const token = await adminToken();
+  const { status, body } = await api('/api/admin/disputes/sweep', { method: 'POST', token });
+  assert.equal(status, 200);
+  assert.equal(typeof body.threads, 'number');
+  assert.equal(typeof body.files, 'number');
+  assert.ok(body.storage, 'the caller gets the fresh figure back');
+});
