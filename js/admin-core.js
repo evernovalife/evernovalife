@@ -145,7 +145,8 @@
     home: '<path d="M3 12l9-9 9 9"/><path d="M9 21V12h6v9"/>',
     print: '<path d="M6 9V3h12v6"/><path d="M6 18H4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v7H6z"/>',
     bitcoin: '<path d="M8 6h6a3 3 0 0 1 0 6H8z"/><path d="M8 12h7a3 3 0 0 1 0 6H8z"/><path d="M8 6v12"/><path d="M11 3v3"/><path d="M11 18v3"/><path d="M14.5 3v3"/><path d="M14.5 18v3"/>',
-    external: '<path d="M14 3h7v7"/><path d="M21 3 10 14"/><path d="M20 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5"/>'
+    external: '<path d="M14 3h7v7"/><path d="M21 3 10 14"/><path d="M20 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5"/>',
+    chat: '<path d="M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z"/>'
   };
   function icon(name, cls) {
     var body = ICONS[name];
@@ -229,6 +230,7 @@
     { key: 'labeldesign', href: 'admin.html#labeldesign', label: 'Label designer', icon: 'tag' },
     { key: 'btcpay', href: 'admin.html#btcpay', label: 'BTCPay', icon: 'bitcoin', tally: 'navBtcpay' },
     { key: 'autoship', href: 'admin.html#autoship', label: 'Auto-Ship', icon: 'repeat' },
+    { key: 'disputes', href: 'admin.html#disputes', label: 'Disputes', icon: 'chat', tally: 'navDisputes' },
     { key: 'customers', href: 'admin.html#customers', label: 'Customers', icon: 'users' },
     { key: 'products', href: 'admin-products.html', label: 'Products', icon: 'box' },
     { key: 'labels', href: 'labels.html', label: 'Vial labels', icon: 'print' }

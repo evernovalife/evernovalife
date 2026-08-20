@@ -2977,3 +2977,50 @@ body.pd-modal-open { overflow: hidden; }
   color: #7bd88f;
 }
 .cart-row-free svg { width: 1em; height: 1em; flex: none; }
+
+/* ===== ADMIN — DISPUTE THREADS ===== */
+.dsp-wrap { display: grid; grid-template-columns: minmax(240px, 320px) 1fr; gap: 1rem; align-items: start; }
+.dsp-tabs { margin-bottom: .75rem; }
+.dsp-queue { display: flex; flex-direction: column; gap: .5rem; min-width: 0; }
+.dsp-row { text-align: left; width: 100%; background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.08);
+  border-radius: 10px; padding: .6rem .7rem; color: inherit; cursor: pointer; display: grid; gap: .2rem; }
+.dsp-row:hover { border-color: rgba(124,58,237,.5); }
+.dsp-row.active { border-color: #7c3aed; background: rgba(124,58,237,.12); }
+.dsp-row.unread { border-left: 3px solid #d4af37; }
+.dsp-row-top { display: flex; justify-content: space-between; gap: .5rem; }
+.dsp-row-who, .dsp-row-why { font-size: .82rem; opacity: .75; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dsp-when { font-size: .75rem; opacity: .6; }
+.dsp-chip { display: inline-block; font-size: .7rem; padding: .1rem .45rem; border-radius: 999px;
+  background: rgba(255,255,255,.08); justify-self: start; }
+.dsp-chip.dsp-awaiting_us { background: rgba(212,175,55,.18); color: #f0d98a; }
+.dsp-chip.dsp-awaiting_customer { background: rgba(124,58,237,.2); color: #cdb4fe; }
+.dsp-chip.dsp-resolved { background: rgba(34,197,94,.15); color: #86efac; }
+
+.dsp-pane { min-width: 0; display: flex; flex-direction: column; gap: .85rem; }
+.dsp-order { background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.08); border-radius: 10px; padding: .75rem; }
+.dsp-order-head { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; margin-bottom: .4rem; }
+.dsp-order-items { margin: 0; padding-left: 1.1rem; font-size: .88rem; }
+.dsp-resolve, .dsp-resolved { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+.dsp-resolve input { flex: 1 1 12rem; min-width: 0; }
+
+.dsp-stream { display: flex; flex-direction: column; gap: .6rem; max-height: 60vh; overflow-y: auto; padding-right: .25rem; }
+.dsp-msg { max-width: 42rem; border-radius: 12px; padding: .6rem .75rem; border: 1px solid rgba(255,255,255,.08); }
+.dsp-msg.theirs { background: rgba(255,255,255,.04); align-self: flex-start; }
+.dsp-msg.ours { background: rgba(124,58,237,.15); border-color: rgba(124,58,237,.35); align-self: flex-end; }
+.dsp-msg.system { align-self: center; font-size: .8rem; opacity: .7; border: 0; background: none; }
+.dsp-msg-head { font-size: .78rem; opacity: .7; margin-bottom: .25rem; }
+.dsp-msg-body { white-space: normal; overflow-wrap: anywhere; }
+.dsp-atts { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .5rem; }
+.dsp-att { display: inline-flex; align-items: center; gap: .3rem; font-size: .8rem; padding: .25rem .5rem;
+  border-radius: 8px; border: 1px solid rgba(255,255,255,.15); background: none; color: inherit; cursor: pointer; }
+.dsp-att svg { width: 14px; height: 14px; }
+.dsp-composer { display: flex; gap: .5rem; align-items: flex-end; }
+.dsp-composer textarea { flex: 1; min-width: 0; resize: vertical; }
+
+/* Phones: the queue stacks above the thread. Per the mobile pass, nothing
+   here may be wider than its column. */
+@media (max-width: 860px) {
+  .dsp-wrap { grid-template-columns: 1fr; }
+  .dsp-stream { max-height: none; }
+  .dsp-msg { max-width: 100%; }
+}

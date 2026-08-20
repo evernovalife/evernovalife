@@ -60,6 +60,11 @@
     promos: null,         // promotions (what the shop is discounting right now)
     design: null,         // the shipping-label design (admin-only read)
     previewId: '',        // which order the label designer is previewing
+    disputes: null,        // customer dispute threads (the queue and its tally)
+    disputeId: '',         // which thread the right pane is showing
+    disputeThread: null,   // the full thread, loaded when one is opened
+    disputeOutcomes: [],   // how a report can be closed, from the list response
+    disputeTab: 'awaiting_us',
     range: 30,            // days; 0 = all time
     view: 'dashboard',
     loading: false
@@ -85,7 +90,8 @@
       A.api('/api/health'),
       A.api('/api/shipping'),
       A.api('/api/admin/label-design'),
-      A.api('/api/admin/promotions')
+      A.api('/api/admin/promotions'),
+      A.api('/api/admin/disputes')
     ]);
     state.loading = false;
 
@@ -109,6 +115,8 @@
     state.rates = results[5].status === 'fulfilled' ? (results[5].value.methods || []) : (state.rates || null);
     state.design = results[6].status === 'fulfilled' ? (results[6].value.design || null) : (state.design || null);
     state.promos = results[7].status === 'fulfilled' ? (results[7].value.promotions || []) : (state.promos || null);
+    state.disputes = results[8].status === 'fulfilled' ? (results[8].value.disputes || []) : (state.disputes || []);
+    if (results[8].status === 'fulfilled') state.disputeOutcomes = results[8].value.outcomes || [];
 
     results.forEach(function (r, i) {
       if (r.status === 'rejected' && r.reason.status !== 0) {
@@ -122,8 +130,10 @@
         if (i === 6 && r.reason.status === 404) return;
         // Promotions: a 404 means the backend predates them; the view says so.
         if (i === 7 && r.reason.status === 404) return;
+        // Disputes: a 404 means the backend predates them; the view says so.
+        if (i === 8 && r.reason.status === 404) return;
         A.toast(['Orders', 'Users', 'Auto-ship plans', 'Products', 'Health', 'Shipping rates',
-          'Label design', 'Promotions'][i] + ': ' + r.reason.message, 'error');
+          'Label design', 'Promotions', 'Disputes'][i] + ': ' + r.reason.message, 'error');
       }
     });
 
@@ -338,6 +348,7 @@
     labeldesign: ['Label designer', 'Design the parcel label once — every order fills in its own name and address'],
     btcpay: ['BTCPay', 'What the payment server says, next to what we recorded'],
     autoship: ['Auto-Ship', 'Repeating orders and their next invoice'],
+    disputes: ['Disputes', 'Problems customers have reported, and how they ended'],
     customers: ['Customers', 'Everyone with an account']
   };
 
@@ -366,6 +377,7 @@
     else if (state.view === 'labeldesign') renderLabelDesign();
     else if (state.view === 'btcpay') renderBtcpay();
     else if (state.view === 'autoship') renderAutoship();
+    else if (state.view === 'disputes') renderDisputes();
     else if (state.view === 'customers') renderCustomers();
     else renderDashboard();
 
@@ -399,6 +411,12 @@
     if (s) {
       var n2 = state.orders ? toShip(state.orders).length : 0;
       s.textContent = n2 ? String(n2) : '';
+    }
+    // Threads where the customer spoke last — the queue that is waiting on us.
+    var dq = document.getElementById('navDisputes');
+    if (dq) {
+      var n3 = (state.disputes || []).filter(function (d) { return d.unreadForAdmin; }).length;
+      dq.textContent = n3 ? String(n3) : '';
     }
   }
 
@@ -2424,6 +2442,105 @@
   }
 
   /* ============================================================
+     DISPUTES
+     The queue and thread layout live in js/admin-disputes.js — a message
+     stream with a composer, attachments and a resolve control is a screen,
+     not a section, and this file is already long. This is only the state
+     glue: the handlers the view calls back into, wired through the
+     delegated click handler below.
+     ============================================================ */
+
+  var DSP = window.AdminDisputes;
+
+  function renderDisputes() {
+    if (!DSP) {
+      body.innerHTML = '<div class="adm-card"><p class="adm-note" style="margin:0">' +
+        'The disputes view did not load — check that <code>js/admin-disputes.js</code> is uploaded.</p></div>';
+      return;
+    }
+    DSP.render(state, body, {
+      open: openDispute, reply: replyToDispute, resolve: resolveDispute,
+      reopen: reopenDispute, tab: setDisputeTab
+    });
+  }
+
+  function setDisputeTab(tab) { state.disputeTab = tab; render(); }
+
+  async function openDispute(id) {
+    state.disputeId = id;
+    state.disputeThread = null;
+    render();
+    try {
+      var data = await A.api('/api/admin/disputes/' + encodeURIComponent(id));
+      state.disputeThread = data;
+      state.disputeOutcomes = data.outcomes || state.disputeOutcomes;
+      render();
+      // Opening it IS reading it — mark it and drop the rail tally.
+      await A.api('/api/admin/disputes/' + encodeURIComponent(id) + '/read', { method: 'POST' });
+      await loadAll({ quiet: true });
+      render();
+    } catch (e) { A.toast(e.message, 'error'); }
+  }
+
+  async function replyToDispute(id, btn) {
+    var box = document.getElementById('dspReply');
+    var message = box ? box.value.trim() : '';
+    if (!message) { A.toast('Write a reply first.', 'error'); return; }
+    btn.disabled = true;
+    try {
+      var data = await A.api('/api/admin/disputes/' + encodeURIComponent(id) + '/messages',
+        { method: 'POST', body: { message: message } });
+      state.disputeThread = Object.assign({}, state.disputeThread, { dispute: data.dispute });
+      A.toast('Sent. The customer has been emailed a link to it.', 'success');
+      await loadAll({ quiet: true });
+      render();
+    } catch (e) { A.toast(e.message, 'error'); btn.disabled = false; }
+  }
+
+  async function resolveDispute(id, btn) {
+    var sel = document.getElementById('dspOutcome');
+    var note = document.getElementById('dspNote');
+    var outcome = sel ? sel.value : '';
+    if (!outcome) { A.toast('Pick how this ended first.', 'error'); return; }
+    if (!window.confirm('Close this report as “' + sel.options[sel.selectedIndex].text + '”?\n\n' +
+        'The customer is emailed the outcome. Nothing is refunded or reshipped by this — do that separately.')) return;
+    btn.disabled = true;
+    try {
+      var data = await A.api('/api/admin/disputes/' + encodeURIComponent(id) + '/resolve',
+        { method: 'POST', body: { outcome: outcome, note: note ? note.value : '' } });
+      state.disputeThread = Object.assign({}, state.disputeThread, { dispute: data.dispute });
+      A.toast('Closed, and the customer has been told.', 'success');
+      await loadAll({ quiet: true });
+      render();
+    } catch (e) { A.toast(e.message, 'error'); btn.disabled = false; }
+  }
+
+  async function reopenDispute(id, btn) {
+    btn.disabled = true;
+    try {
+      var data = await A.api('/api/admin/disputes/' + encodeURIComponent(id) + '/reopen', { method: 'POST' });
+      state.disputeThread = Object.assign({}, state.disputeThread, { dispute: data.dispute });
+      await loadAll({ quiet: true });
+      render();
+    } catch (e) { A.toast(e.message, 'error'); btn.disabled = false; }
+  }
+
+  /* An <img> can't send the bearer token, so the bytes are fetched with it
+     and handed to the browser as a blob URL. A.headers() already attaches
+     both the bearer token and the admin key — the same auth every other
+     admin request uses, so this never depends on which one is active. */
+  async function openDisputeAttachment(disputeId, fileId) {
+    try {
+      var url = (window.PEPTIDE_API_BASE || '') + '/api/admin/disputes/' +
+        encodeURIComponent(disputeId) + '/files/' + encodeURIComponent(fileId);
+      var res = await fetch(url, { headers: A.headers() });
+      if (!res.ok) throw new Error('That attachment could not be loaded.');
+      var blob = await res.blob();
+      window.open(URL.createObjectURL(blob), '_blank', 'noopener');
+    } catch (e) { A.toast(e.message, 'error'); }
+  }
+
+  /* ============================================================
      BOOT
      ============================================================ */
   function readHash() {
@@ -2466,6 +2583,12 @@
       else if (t.classList.contains('act-dupe')) removeDuplicate(t.getAttribute('data-id'), t);
       else if (t.classList.contains('act-del-user')) deleteUser(t.getAttribute('data-id'), t.getAttribute('data-name'), t);
       else if (t.classList.contains('act-due')) dueNow(t.getAttribute('data-id'), t);
+      else if (t.hasAttribute('data-dsp-tab')) setDisputeTab(t.getAttribute('data-dsp-tab'));
+      else if (t.hasAttribute('data-dsp-open')) openDispute(t.getAttribute('data-dsp-open'));
+      else if (t.classList.contains('act-dsp-reply')) replyToDispute(t.getAttribute('data-id'), t);
+      else if (t.classList.contains('act-dsp-resolve')) resolveDispute(t.getAttribute('data-id'), t);
+      else if (t.classList.contains('act-dsp-reopen')) reopenDispute(t.getAttribute('data-id'), t);
+      else if (t.classList.contains('act-dsp-att')) openDisputeAttachment(t.getAttribute('data-dsp'), t.getAttribute('data-file'));
     });
 
     /* The designer previews live: every keystroke redraws the label from the
