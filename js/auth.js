@@ -25,7 +25,14 @@
     },
 
     logout() {
-      try { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY); } catch (e) {}
+      try {
+        localStorage.removeItem(TOKEN_KEY);
+        localStorage.removeItem(USER_KEY);
+        /* The admin "waiting for you" dialog shows once per sign-in, and this
+           is what makes that true — without clearing it here, an owner who
+           signs out and back in would never see it again. */
+        sessionStorage.removeItem('enl_admin_alert_seen');
+      } catch (e) {}
     },
 
     async _post(path, body) {

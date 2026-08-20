@@ -2354,6 +2354,83 @@ async function sendDisputeResolvedEmail(d) {
   return mailer.sendMail(buildDisputeResolvedMail(d, user.email, user.firstName));
 }
 
+/* ============================================================
+   ADMIN SIGN-IN SUMMARY
+   "Is anything waiting for me?", answered in one small request.
+
+   The rail tallies inside the admin console only help someone who is
+   already inside it. The owner browsing their own storefront — the most
+   likely place to be — had no way to learn that a customer was waiting,
+   which is how a real dispute sat unseen. This is what the storefront
+   asks at sign-in.
+
+   COUNTS ONLY, deliberately. The page rendering it is a shop page, and
+   handing it orders or customers would put those records on a surface
+   with no reason to hold them. Reusing the console's endpoints would do
+   exactly that, and pull seven requests to render five numbers.
+
+   BTCPay is deliberately absent: its "needs attention" figure means
+   calling out to another host, and the console itself loads BTCPay on
+   demand rather than up front for that reason. A sign-in must never hang
+   on someone else's server.
+   ============================================================ */
+
+/* Which statuses mean what, for this endpoint.
+
+   NOTE: js/admin-console.js carries its own copies of these two sets
+   (OPEN / PAID, and isTestOrder). They must agree, and nothing enforces
+   that — if you change a status here, change it there too. The
+   duplication is deliberate for now: the console computes its tallies
+   from orders it has already loaded, and rewiring it to read this
+   endpoint is a bigger change than this feature warrants. */
+const SUMMARY_OPEN = ['pending', 'awaiting_payment', 'underpaid'];
+const SUMMARY_PAID = 'paid';
+/* method 'card' is the pre-2026-08 gateway that never took real money.
+   Those orders will never be paid and never be packed. */
+const isSandboxOrder = (o) => o && o.method === 'card';
+
+function adminSummary() {
+  const orders = store.listAllOrders().filter(o => !isSandboxOrder(o));
+
+  /* Threads where the customer spoke last. A thread we have already
+     answered is not waiting on us, and neither is a resolved one — the
+     same rule the console's rail tally uses. */
+  const waitingThreads = disputes.list()
+    .filter(d => disputes.summarize(d).status === 'awaiting_us').length;
+
+  let lowStock = 0;
+  const threshold = outreach.config().lowStockThreshold;
+  for (const p of productStore.listProducts()) {
+    const qty = p && p.stockQty;
+    // Absent means untracked, which is not the same as none left.
+    if (qty === null || qty === undefined || !Number.isFinite(Number(qty))) continue;
+    if (Number(qty) <= threshold) lowStock++;
+  }
+
+  const summary = {
+    disputes: waitingThreads,
+    unpaidOrders: orders.filter(o => SUMMARY_OPEN.indexOf(o.status) !== -1).length,
+    toShip: orders.filter(o => o.status === SUMMARY_PAID).length,
+    lowStock,
+    storagePct: disputes.storageStatus().pct,
+    /* The threshold travels with the figure, never hardcoded in the browser —
+       the same rule the admin console's amber line follows, so the pop-up, the
+       console and the warning email all agree about when storage is a problem. */
+    storageAlertPct: outreach.config().storageAlertPct
+  };
+  /* Computed here rather than left to the client: the pop-up shows nothing
+     at all when this is false, and "nothing is waiting" is one decision,
+     not five the browser has to re-derive and keep in step. */
+  summary.anythingWaiting = Boolean(
+    summary.disputes || summary.unpaidOrders || summary.toShip || summary.lowStock
+  );
+  return summary;
+}
+
+app.get('/api/admin/summary', requireAdmin, (req, res) => {
+  res.json({ success: true, ...adminSummary() });
+});
+
 /* ---- ADMIN: the dispute queue ----
    The owner works from this: every thread, newest activity first, each with
    the order and the customer already attached so the queue answers "what is
