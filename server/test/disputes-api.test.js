@@ -545,3 +545,47 @@ test('the sweep runs on demand and reports zeros when nothing is due', async () 
   assert.equal(body.bytes, 0);
   assert.equal(body.storage.usedBytes, before, 'a sweep with nothing due frees nothing');
 });
+
+/* The console replaces its whole `state.storage` object from whichever call
+   answered last — so if the sweep or strip route ever answered without
+   `alertPct`, the amber line would silently fall back to the default the
+   moment either control was used, and 80 is also that default, so a test
+   against the default could pass by coincidence. A non-default threshold
+   here proves the value travelled from the server, not from the fallback. */
+test('the sweep response carries the alert threshold, not just the queue', async () => {
+  const prev = process.env.DISPUTE_STORAGE_ALERT_PCT;
+  try {
+    process.env.DISPUTE_STORAGE_ALERT_PCT = '61';
+    const token = await adminToken();
+    const { status, body } = await api('/api/admin/disputes/sweep', { method: 'POST', token });
+    assert.equal(status, 200);
+    assert.equal(typeof body.storage.alertPct, 'number');
+    assert.equal(body.storage.alertPct, 61);
+  } finally {
+    if (prev === undefined) delete process.env.DISPUTE_STORAGE_ALERT_PCT;
+    else process.env.DISPUTE_STORAGE_ALERT_PCT = prev;
+  }
+});
+
+test('the strip response carries the alert threshold, not just the queue', async () => {
+  const prev = process.env.DISPUTE_STORAGE_ALERT_PCT;
+  try {
+    process.env.DISPUTE_STORAGE_ALERT_PCT = '61';
+    const vera = await signUp('vera-alertpct@example.com');
+    placeOrder(vera.user.id, 'ENL-STRIPPCT');
+    const made = await api('/api/disputes', {
+      method: 'POST', token: vera.token,
+      body: { orderId: 'ENL-STRIPPCT', reason: 'damaged', message: 'See photo.', attachments: [{ name: 'p.png', data: PNG }] }
+    });
+    const id = made.body.dispute.id;
+    const token = await adminToken();
+
+    const out = await api(`/api/admin/disputes/${id}/attachments`, { method: 'DELETE', token });
+    assert.equal(out.status, 200);
+    assert.equal(typeof out.body.storage.alertPct, 'number');
+    assert.equal(out.body.storage.alertPct, 61);
+  } finally {
+    if (prev === undefined) delete process.env.DISPUTE_STORAGE_ALERT_PCT;
+    else process.env.DISPUTE_STORAGE_ALERT_PCT = prev;
+  }
+});

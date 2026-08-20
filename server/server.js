@@ -2352,6 +2352,16 @@ async function sendDisputeResolvedEmail(d) {
    The owner works from this: every thread, newest activity first, each with
    the order and the customer already attached so the queue answers "what is
    this about?" without a second request. */
+/* The one shape every storage response carries. `alertPct` rides with the
+   figure so the console's amber line turns at exactly the percentage that
+   sends the warning email — and it has to ride on EVERY response carrying
+   storage, not just the queue: the console replaces its whole storage object
+   from whichever call answered last, so a sweep returning a figure with no
+   threshold would quietly drop the line back to the default. */
+function storageView() {
+  return { ...disputes.storageStatus(), alertPct: outreach.config().storageAlertPct };
+}
+
 app.get('/api/admin/disputes', requireAdmin, (req, res) => {
   const rows = disputes.list().map(d => {
     const user = auth.getUserById(d.userId);
@@ -2368,11 +2378,9 @@ app.get('/api/admin/disputes', requireAdmin, (req, res) => {
     reasons: disputes.REASONS,
     outcomes: disputes.OUTCOMES,
     /* The figure rides on the queue the console already loads, so the
-       storage line costs no extra request.
-       alertPct rides along so the console's amber line turns at exactly the
-       percentage that sends the email — the screen and the inbox must never
-       disagree about whether this is a problem yet. */
-    storage: { ...disputes.storageStatus(), alertPct: outreach.config().storageAlertPct },
+       storage line costs no extra request. See storageView() above for why
+       alertPct has to ride along on every response, not just this one. */
+    storage: storageView(),
     disputes: rows
   });
 });
@@ -2387,7 +2395,7 @@ app.post('/api/admin/disputes/sweep', requireAdmin, (req, res) => {
   if (out.threads) {
     console.log(`[disputes] swept ${out.files} photo(s) from ${out.threads} resolved report(s)`);
   }
-  res.json({ success: true, ...out, storage: disputes.storageStatus() });
+  res.json({ success: true, ...out, storage: storageView() });
 });
 
 app.delete('/api/admin/disputes/:id/attachments', requireAdmin, (req, res) => {
@@ -2397,7 +2405,7 @@ app.delete('/api/admin/disputes/:id/attachments', requireAdmin, (req, res) => {
     console.log(`[disputes] ${(req.user && req.user.email) || 'admin'} removed ` +
       `${out.files} photo(s) from ${req.params.id}`);
   }
-  res.json({ success: true, ...out, storage: disputes.storageStatus() });
+  res.json({ success: true, ...out, storage: storageView() });
 });
 
 app.get('/api/admin/disputes/:id', requireAdmin, (req, res) => {
