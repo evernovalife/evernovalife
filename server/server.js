@@ -2390,6 +2390,10 @@ app.post('/api/admin/disputes/sweep', requireAdmin, (req, res) => {
 app.delete('/api/admin/disputes/:id/attachments', requireAdmin, (req, res) => {
   const out = disputes.stripAttachments(req.params.id, Date.now());
   if (!out) return res.status(404).json({ error: 'No report with that reference.' });
+  if (out.files) {
+    console.log(`[disputes] ${(req.user && req.user.email) || 'admin'} removed ` +
+      `${out.files} photo(s) from ${req.params.id}`);
+  }
   res.json({ success: true, ...out, storage: disputes.storageStatus() });
 });
 

@@ -520,9 +520,13 @@ test('stripping an unknown thread is a 404', async () => {
 
 test('the sweep runs on demand and reports zeros when nothing is due', async () => {
   const token = await adminToken();
+  const before = (await api('/api/admin/disputes', { token })).body.storage.usedBytes;
   const { status, body } = await api('/api/admin/disputes/sweep', { method: 'POST', token });
   assert.equal(status, 200);
-  assert.equal(typeof body.threads, 'number');
-  assert.equal(typeof body.files, 'number');
-  assert.ok(body.storage, 'the caller gets the fresh figure back');
+  // Nothing in this file is ever back-dated, so no thread is old enough to be
+  // due — the sweep must find nothing and must leave the total alone.
+  assert.equal(body.threads, 0);
+  assert.equal(body.files, 0);
+  assert.equal(body.bytes, 0);
+  assert.equal(body.storage.usedBytes, before, 'a sweep with nothing due frees nothing');
 });
