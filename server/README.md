@@ -610,10 +610,10 @@ Tunables (all read per request, so Render can change them without a redeploy):
   DISPUTE_STORAGE_ALERT_PCT      percentage that triggers the warning email (default 80)
 
 Expiry drops the bytes and keeps the record, so a cleared thread still reads honestly.
-The sweep itself only runs when an admin clicks Run cleanup in the console (which calls
-POST /api/admin/disputes/sweep) — nothing expires photos on its own schedule. It is the
-storage warning EMAIL that rides the existing /api/outreach/run cron: if that ping is not
-armed, the figure keeps climbing but the warning never sends.
+The sweep rides the existing /api/outreach/run cron (it runs before the storage alert is
+even selected, so a threshold email is never a stale one) — if that ping is not armed,
+nothing expires and the warning never sends. An admin can also run it on demand from
+Run cleanup in the console (POST /api/admin/disputes/sweep) without waiting for the cron.
 ```
 
 ## Notes & next steps

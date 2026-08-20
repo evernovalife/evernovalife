@@ -3655,7 +3655,7 @@ function cartCandidates() {
 /* The whole tick. Never throws: each kind is isolated so a failure in one
    still lets the other two run. */
 async function runOutreach(now = Date.now()) {
-  const summary = { cartsNudged: 0, ordersNudged: 0, stockAlerts: 0, storageAlerts: 0, errors: 0 };
+  const summary = { cartsNudged: 0, ordersNudged: 0, stockAlerts: 0, storageAlerts: 0, photosExpired: 0, errors: 0 };
 
   /* ---- 1. unpaid orders ---- */
   try {
@@ -3715,6 +3715,16 @@ async function runOutreach(now = Date.now()) {
 
   /* ---- 4. dispute photo storage ---- */
   try {
+    /* Expire first, then look at what is left. The other order would warn at
+       85% and immediately free the space that made it 85% — a false alarm the
+       owner cannot act on, because by the time they read it the number is
+       already wrong. */
+    const swept = disputes.sweepExpiredAttachments(now);
+    summary.photosExpired = swept.files;
+    if (swept.threads) {
+      console.log(`[outreach] expired ${swept.files} photo(s) from ${swept.threads} resolved report(s)`);
+    }
+
     const due = outreach.selectStorageAlert(disputes.storageStatus(), now);
     if (due) {
       try {
@@ -3733,9 +3743,9 @@ async function runOutreach(now = Date.now()) {
     console.error('[outreach] storage pass failed:', e.message);
   }
 
-  if (summary.cartsNudged || summary.ordersNudged || summary.stockAlerts || summary.storageAlerts || summary.errors) {
+  if (summary.cartsNudged || summary.ordersNudged || summary.stockAlerts || summary.storageAlerts || summary.photosExpired || summary.errors) {
     console.log(`[outreach] orders ${summary.ordersNudged} · carts ${summary.cartsNudged} · ` +
-                `stock ${summary.stockAlerts} · storage ${summary.storageAlerts} · errors ${summary.errors}`);
+                `stock ${summary.stockAlerts} · storage ${summary.storageAlerts} · photosExpired ${summary.photosExpired} · errors ${summary.errors}`);
   }
   return summary;
 }
