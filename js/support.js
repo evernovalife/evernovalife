@@ -145,18 +145,39 @@
   }
 
   /* ---- rendering ---- */
+  /* The same names and chips the account page uses. This page used to print
+     the raw status straight from the record, so a customer read
+     "awaiting_payment" while account.html called the same order
+     "Awaiting payment" — one order, two vocabularies, and one of them
+     internal. */
+  function statusChip(status) {
+    var s = String(status || '').toLowerCase();
+    var known = {
+      paid: 'Paid', pending: 'Pending', cancelled: 'Cancelled',
+      processing: 'Processing', shipped: 'Shipped', delivered: 'Delivered',
+      awaiting_payment: 'Awaiting payment',
+      underpaid: 'Payment short'
+    };
+    var label = known[s] || (s ? s.charAt(0).toUpperCase() + s.slice(1) : 'Processing');
+    var cls = known[s] ? s.replace(/_/g, '-') : 'processing';
+    return '<span class="order-status ' + esc(cls) + '">' + esc(label) + '</span>';
+  }
+
   function orderCard(o) {
     if (!o) return '';
     var items = (o.items || []).map(function (i) {
       var paid = (i.paidQuantity == null) ? i.quantity : i.paidQuantity;
+      /* A BOGO line ships more than it bills, so both numbers earn their place. */
       var qty = (paid !== i.quantity) ? (i.quantity + ' sent · ' + paid + ' billed') : ('×' + i.quantity);
       return '<li>' + esc(i.name) + ' <span class="text-muted">' + esc(qty) + '</span></li>';
     }).join('');
     var track = [o.carrier, o.tracking].filter(Boolean).join(' · ');
-    return '<h2>Order ' + esc(o.orderId) + '</h2>' +
-      '<ul>' + items + '</ul>' +
-      '<p class="text-muted">' + esc(o.status || '') +
-        (track ? ' · Tracking: ' + esc(track) : '') + '</p>';
+    return '<div class="sup-order-head">' +
+        '<span class="sup-order-ref">' + esc(o.orderId) + '</span>' +
+        statusChip(o.status) +
+      '</div>' +
+      '<ul class="sup-order-items">' + items + '</ul>' +
+      (track ? '<p class="sup-order-track"><span class="text-muted">Tracking</span> ' + esc(track) + '</p>' : '');
   }
 
   function messageHtml(d, m) {
@@ -251,6 +272,8 @@
         'If it still is not settled, open a new report on this order — this conversation stays here.</p>' +
         '<p><button type="button" class="btn btn-ghost btn-sm" id="supStartNew">Open a new report on this order</button></p>';
     }
+    var h1 = document.querySelector('#main h1');
+    if (h1) h1.textContent = closed ? 'Your report' : 'Your report';
     $('supIntro').textContent = closed
       ? 'This report is resolved.'
       : (d.status === 'awaiting_us' ? 'We have your report and will reply here.' : 'We have replied — your turn.');
@@ -273,6 +296,8 @@
     sel.innerHTML = '<option value="">Choose one…</option>' +
       state.reasons.map(function (r) { return '<option value="' + esc(r.code) + '">' + esc(r.label) + '</option>'; }).join('');
     if (chosen) sel.value = chosen;
+    var h1open = document.querySelector('#main h1');
+    if (h1open && !keepThread) h1open.textContent = 'Report a problem';
     $('supIntro').textContent = keepThread
       ? 'Tell us what is still wrong and we will open a new report on this order.'
       : 'Tell us what went wrong and we will answer here.';
