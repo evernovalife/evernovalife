@@ -124,27 +124,30 @@ test('a sixth open thread for one account is refused', () => {
   );
 });
 
-test('a tight loop of creates never collides on id, and every thread survives', () => {
-  // Same-millisecond ids used to repeat, and the store is keyed by id — a
-  // repeat silently overwrites another thread rather than duplicating one,
-  // so the count of surviving records is the assertion that actually
-  // catches that, not just the count of distinct ids returned.
-  const made = [];
-  for (let i = 0; i < 25; i++) {
-    made.push(disputes.create({
-      userId: 'u-idtest' + i,
-      orderId: 'ENL-ID' + i,
-      reason: 'other',
-      body: 'x',
-      authorEmail: 'idtest@example.com'
-    }));
+test('threads created inside one millisecond all survive', () => {
+  // The whole point of the entropy in a dispute id: the map is keyed by it,
+  // so two threads minted in the same millisecond would file under one key
+  // and the first would be lost. Real disk I/O spaces creates out far enough
+  // to hide that, so the clock is pinned here to force the collision case.
+  const realNow = Date.now;
+  Date.now = () => 1755648000000;
+  let made;
+  try {
+    made = Array.from({ length: 25 }, (_, i) =>
+      disputes.create({
+        userId: 'u-ms' + i, orderId: 'ENL-MS' + i, reason: 'other',
+        body: 'x', authorEmail: 'ms@example.com'
+      })
+    );
+  } finally {
+    Date.now = realNow;
   }
   const ids = made.map(d => d.id);
-  assert.equal(new Set(ids).size, ids.length, 'every created thread must have a distinct id');
-  const listed = new Set(disputes.list().map(d => d.id));
-  for (const id of ids) {
-    assert.ok(listed.has(id), `created thread ${id} is missing from list() — a collision would have overwritten it`);
-  }
+  assert.equal(new Set(ids).size, 25, 'every id is distinct');
+  // The assertion that actually catches the bug: a collision presents as a
+  // MISSING record, not as a duplicate id.
+  const stored = disputes.list();
+  for (const id of ids) assert.ok(stored.some(d => d.id === id), 'thread ' + id + ' survived');
 });
 
 test('an over-long message body is refused, and nothing is written', () => {
