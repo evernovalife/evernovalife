@@ -104,6 +104,19 @@
       } catch (e) { return []; }
     },
 
+    /* This account's dispute threads, as summaries. Empty array if signed
+       out or the API is unreachable — the account page still renders. */
+    async disputes() {
+      const token = this.getToken();
+      if (!token) return [];
+      try {
+        const res = await fetch(API_BASE + '/api/disputes', { headers: { Authorization: 'Bearer ' + token } });
+        if (!res.ok) return [];
+        const data = await res.json().catch(() => ({}));
+        return Array.isArray(data.disputes) ? data.disputes : [];
+      } catch (e) { return []; }
+    },
+
     /* Loyalty points balance + ledger + conversion rates, or null. */
     async loyalty() {
       const token = this.getToken();
@@ -216,6 +229,12 @@
     const box = document.getElementById('recentOrders');
     const orders = await Auth.orders();
 
+    // Which orders already have a report open — one request for the whole
+    // list, so the rows can say "view" instead of "report" where it matters.
+    let threads = [];
+    try { threads = (await Auth.disputes()) || []; } catch (e) { /* the rows still render */ }
+    const threadFor = (id) => threads.find(t => t.orderId === id) || null;
+
     // stat tiles
     const setNum = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
     setNum('statOrders', orders.length);
@@ -250,12 +269,21 @@
       const owe = o.payUrl && o.amountDue > 0
         ? `<div><a class="btn btn-primary btn-sm" href="${esc(o.payUrl)}">Pay the remaining ${esc(money(o.amountDue))}</a></div>`
         : '';
+      /* A problem with an order is reported from the order — it is the only
+         place the customer has the reference in front of them. Cancelled
+         orders have nothing to report against. */
+      const t = threadFor(o.orderId);
+      const report = o.status === 'cancelled' ? '' :
+        `<div><a class="btn btn-sm btn-ghost" href="support.html?order=${encodeURIComponent(o.orderId)}">${
+          t ? (t.status === 'resolved' ? 'See the closed report' : 'View your report') : 'Report a problem'
+        }</a></div>`;
       return `<div class="order-row">
         <div><strong>${esc(o.orderId)}</strong> <span class="text-muted">${esc(orderDate(o.createdAt))}</span></div>
         <div class="text-muted">${esc(orderItemsSummary(o.items))}${track ? `<br><span class="text-muted">Tracking: ${esc(track)}</span>` : ''}</div>
         <div>${esc(money(o.total))}</div>
         <span class="order-status ${b.cls}">${esc(b.label)}</span>
         ${owe}
+        ${report}
       </div>`;
     }).join('');
   }
