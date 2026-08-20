@@ -296,17 +296,119 @@ function deleteUserData(userId) {
   return removed;
 }
 
-/* Attachments are Task 2. Until then, nothing is stored and nothing is
-   removed — the seam is here so the record shape never changes. */
+/* ============================================================
+   ATTACHMENTS
+   The bytes go to DATA_DIR/dispute-files/<disputeId>/<fileId>.<ext>
+   and only the metadata into the record. A data-URL in the record
+   (how product images work) would rewrite a multi-megabyte JSON
+   file on every message in every thread.
+
+   Two rules on the way in, both load-bearing:
+     1. the type comes from the BYTES, never from the declared MIME
+        or the filename — a declared image/png that is really a
+        script is refused;
+     2. the client's filename is never used as a path — the file is
+        stored as <fileId>.<ext> and the given name is kept as a
+        display label only.
+   ============================================================ */
+const FILES_DIR = path.join(DATA_DIR, 'dispute-files');
+
+const MAGIC = [
+  { mime: 'image/png', ext: 'png', test: b => b.length > 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 },
+  { mime: 'image/jpeg', ext: 'jpg', test: b => b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
+  { mime: 'image/webp', ext: 'webp', test: b => b.length > 12 && b.slice(0, 4).toString('latin1') === 'RIFF' && b.slice(8, 12).toString('latin1') === 'WEBP' }
+];
+
+function sniffImage(buf) {
+  if (!Buffer.isBuffer(buf)) return null;
+  const hit = MAGIC.find(m => m.test(buf));
+  return hit ? hit.mime : null;
+}
+function extFor(mime) { return (MAGIC.find(m => m.mime === mime) || {}).ext || 'bin'; }
+
+let fileSeq = 0;
+function newFileId() { return 'f' + Date.now().toString(36) + (fileSeq++).toString(36); }
+
+/* The label the customer sees. Stripped of anything path-shaped so it can
+   never be mistaken for one, even by a later change to this file. */
+function cleanName(name) {
+  const s = String(name == null ? '' : name).replace(/[\\/]/g, ' ').replace(/\s+/g, ' ').trim();
+  return s.slice(0, 120) || 'image';
+}
+
 const attachStore = {
-  attach() { return []; },
-  removeAll() { }
+  /* Returns the metadata array to store on the message. Throws on anything
+     it will not accept — the caller has not written the record yet, so a
+     throw here leaves nothing behind. */
+  attach(disputeId, input) {
+    if (!disputeId || !input) return [];
+    const list = Array.isArray(input) ? input : [input];
+    if (!list.length) return [];
+    if (list.length > MAX_FILES_PER_MESSAGE) {
+      throw err(`Attach at most ${MAX_FILES_PER_MESSAGE} images to one message.`);
+    }
+
+    const dir = path.join(FILES_DIR, disputeId);
+    const written = [];
+    try {
+      const meta = list.map(item => {
+        const raw = String((item && item.data) || '').replace(/^data:[^;,]*;base64,/, '');
+        let buf;
+        try { buf = Buffer.from(raw, 'base64'); } catch (e) { buf = Buffer.alloc(0); }
+        if (!buf.length) throw err('That attachment was empty.');
+        if (buf.length > MAX_FILE_BYTES) throw err('Each image has to be under 2 MB.');
+        const mime = sniffImage(buf);
+        if (!mime) throw err('Attachments have to be PNG, JPEG or WebP images.');
+
+        const id = newFileId();
+        const file = path.join(dir, id + '.' + extFor(mime));
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(file, buf);
+        written.push(file);
+        return { id, name: cleanName(item && item.name), mime, bytes: buf.length };
+      });
+      return meta;
+    } catch (e) {
+      // One bad image in a batch must not leave the good ones orphaned on disk.
+      for (const f of written) { try { fs.unlinkSync(f); } catch (e2) { /* ignore */ } }
+      throw e;
+    }
+  },
+
+  removeAll(disputeId) {
+    if (!disputeId) return;
+    try { fs.rmSync(path.join(FILES_DIR, disputeId), { recursive: true, force: true }); }
+    catch (e) { console.error('[disputes] could not remove attachments:', e.message); }
+  }
 };
+
+/* Resolve a file id to a path — but ONLY through the record, so an id that
+   is not one of this thread's own attachments cannot resolve to anything.
+   That is what makes a `../` id inert: it is never joined to a path. */
+function fileMeta(disputeId, fileId) {
+  const d = get(disputeId);
+  if (!d) return null;
+  for (const m of d.messages) {
+    for (const a of (m.attachments || [])) {
+      if (a.id === fileId) {
+        return { path: path.join(FILES_DIR, disputeId, a.id + '.' + extFor(a.mime)), mime: a.mime, name: a.name };
+      }
+    }
+  }
+  return null;
+}
+
+function readFile(disputeId, fileId) {
+  const meta = fileMeta(disputeId, fileId);
+  if (!meta) return null;
+  try { return fs.readFileSync(meta.path); } catch (e) { return null; }
+}
 
 module.exports = {
   REASONS, OUTCOMES,
   MAX_BODY, MAX_NOTE, MAX_MESSAGES, MAX_OPEN_PER_USER, MAX_FILES_PER_MESSAGE, MAX_FILE_BYTES,
   list, listForUser, get, findOpenForOrder,
   create, addMessage, resolve, reopen, markRead,
-  unreadFor, summarize, deleteUserData
+  unreadFor, summarize, deleteUserData,
+  sniffImage, fileMeta, readFile
 };
