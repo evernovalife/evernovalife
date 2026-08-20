@@ -68,12 +68,14 @@ test('a thread resolved outside the window loses the bytes and keeps the record'
   assert.ok(fs.existsSync(onDisk));
 
   resolveDaysAgo(d.id, 120);
+  const before = disputes.totalAttachmentBytes();
   const out = disputes.sweepExpiredAttachments(Date.now());
-  // Not asserting out.threads: whether this run swept exactly one thread
-  // depends on what else was due elsewhere in the shared DATA_DIR — not
-  // this test's claim. The record checks below are.
-  assert.equal(out.files, 1);
-  assert.equal(out.bytes, PNG.length);
+  assert.ok(out.files >= 1, 'this thread was among those swept');
+  // Position-independent, and a stronger claim than a fixed count: whatever the
+  // sweep collected, the bytes it reports must equal the space that actually
+  // came back. A miscount here is what would make the admin toast lie.
+  assert.equal(before - disputes.totalAttachmentBytes(), out.bytes,
+    'the sweep reports exactly what it freed');
 
   const after = disputes.get(d.id);
   const att = after.messages[0].attachments[0];
