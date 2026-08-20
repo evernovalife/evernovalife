@@ -2472,14 +2472,24 @@
     render();
     try {
       var data = await A.api('/api/admin/disputes/' + encodeURIComponent(id));
+      // A second click can land while this one is still in flight — the
+      // second click wins, so a stale response must not overwrite it.
+      if (state.disputeId !== id) return;
       state.disputeThread = data;
       state.disputeOutcomes = data.outcomes || state.disputeOutcomes;
       render();
       // Opening it IS reading it — mark it and drop the rail tally.
       await A.api('/api/admin/disputes/' + encodeURIComponent(id) + '/read', { method: 'POST' });
+      if (state.disputeId !== id) return;
       await loadAll({ quiet: true });
+      if (state.disputeId !== id) return;
       render();
-    } catch (e) { A.toast(e.message, 'error'); }
+    } catch (e) {
+      A.toast(e.message, 'error');
+      // Leaving disputeId set with no thread strands the pane on a skeleton
+      // with no way back — drop the selection so the queue is usable again.
+      if (state.disputeId === id) { state.disputeId = ''; render(); }
+    }
   }
 
   async function replyToDispute(id, btn) {
