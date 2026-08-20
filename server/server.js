@@ -30,6 +30,7 @@ const labelDesign = require('./label-design.js');
 const mailer = require('./email.js');
 const outreach = require('./outreach.js');
 const ratelimit = require('./ratelimit.js');
+const disputes = require('./disputes.js');
 
 const app = express();
 const PORT = process.env.PORT || 4242;
@@ -77,7 +78,8 @@ app.get('/api/health', (req, res) => res.json({
   features: {
     stockCounts: true,            // PATCH /api/products/:id/stock exists
     orderLookup: true,            // POST /api/orders/lookup exists (guest order status)
-    outreach: true                // POST /api/outreach/run exists (nudges + stock alerts)
+    outreach: true,               // POST /api/outreach/run exists (nudges + stock alerts)
+    disputes: true                // customer dispute threads exist (support.html)
   }
 }));
 
@@ -744,6 +746,9 @@ app.delete('/api/admin/users/:id', requireAdmin, (req, res) => {
   // Critical: drop their auto-ship plans too, or the scheduler would keep
   // invoicing an account that no longer exists.
   try { subscriptions.deleteUserData(id); } catch (e) { console.error('[admin delete] autoship cleanup failed:', e.message); }
+  // Threads AND the images on disk — this is the only cascade that leaves
+  // bytes behind if it is missed.
+  try { disputes.deleteUserData(id); } catch (e) { console.error('[admin delete] dispute cleanup failed:', e.message); }
   res.json({ success: true, deleted: removed });
 });
 
@@ -2123,6 +2128,130 @@ app.post('/api/zelle/checkout', auth.requireAuth, async (req, res) => {
     console.error('[zelle checkout] failed:', err.message);
     res.status(err.status === 409 ? 409 : 400).json({ error: err.message });
   }
+});
+
+/* ============================================================
+   CUSTOMER DISPUTES
+   A thread about one order, opened by the account that placed it.
+   Deliberately narrow: no guest path (an account is required to
+   order, so almost every order has one), and resolving records an
+   outcome — it never moves money or stock. See
+   docs/superpowers/specs/2026-08-20-customer-disputes-design.md
+   ============================================================ */
+
+const disputeOpenLimiter = ratelimit.limit({
+  name: 'dispute-open',
+  windowMs: 60 * 60 * 1000,
+  max: 6,
+  message: 'That is a lot of reports in an hour. Reply on one of the open ones, or email support@evernovalife.com.'
+});
+const disputePostLimiter = ratelimit.limit({
+  name: 'dispute-post',
+  windowMs: 10 * 60 * 1000,
+  max: 30,
+  message: 'Too many messages from this connection. Wait a few minutes and try again.'
+});
+
+/* The slice of an order a dispute page needs: enough to talk about the
+   parcel without opening another tab, and nothing the thread has no use
+   for (no address, no payment ledger). */
+function disputeOrderView(order) {
+  if (!order) return null;
+  return {
+    orderId: order.orderId,
+    status: order.status,
+    total: order.total,
+    createdAt: order.createdAt,
+    carrier: order.carrier || '',
+    tracking: order.tracking || '',
+    items: (order.items || []).map(i => ({
+      name: i.name, quantity: i.quantity, paidQuantity: i.paidQuantity, price: i.price
+    }))
+  };
+}
+
+/* The caller's own order, or null. Every dispute route that names an order
+   goes through this — it is the ownership check. */
+function ownOrder(userId, orderId) {
+  return store.listOrders(userId).find(o => o && o.orderId === orderId) || null;
+}
+
+app.get('/api/disputes', auth.requireAuth, (req, res) => {
+  const mine = disputes.listForUser(req.user.id).map(disputes.summarize);
+  res.json({ success: true, reasons: disputes.REASONS, disputes: mine });
+});
+
+app.post('/api/disputes', auth.requireAuth, disputeOpenLimiter, (req, res) => {
+  const orderId = String(req.body.orderId || '').trim();
+  const order = ownOrder(req.user.id, orderId);
+  // 404, not 403: a 403 would confirm that the reference belongs to someone.
+  if (!order) return res.status(404).json({ error: 'No order of yours with that reference.' });
+  if (order.status === 'cancelled') {
+    return res.status(400).json({ error: 'That order was cancelled. If something is still wrong, email support@evernovalife.com.' });
+  }
+  try {
+    const d = disputes.create({
+      userId: req.user.id,
+      orderId,
+      reason: req.body.reason,
+      body: req.body.message,
+      authorEmail: req.user.email,
+      attachments: req.body.attachments
+    });
+    res.status(201).json({ success: true, dispute: d, order: disputeOrderView(order) });
+  } catch (err) {
+    res.status(err.status || 400).json({ error: err.message, disputeId: err.disputeId });
+  }
+});
+
+/* One helper for the three routes that read a thread: it returns the thread
+   only to its owner, and answers 404 for everything else — a wrong id and
+   someone else's id are indistinguishable from outside. */
+function ownDispute(req) {
+  const d = disputes.get(req.params.id);
+  if (!d || d.userId !== req.user.id) return null;
+  return d;
+}
+
+app.get('/api/disputes/:id', auth.requireAuth, (req, res) => {
+  const d = ownDispute(req);
+  if (!d) return res.status(404).json({ error: 'No report with that reference.' });
+  res.json({ success: true, dispute: d, order: disputeOrderView(ownOrder(req.user.id, d.orderId)) });
+});
+
+app.post('/api/disputes/:id/messages', auth.requireAuth, disputePostLimiter, (req, res) => {
+  const d = ownDispute(req);
+  if (!d) return res.status(404).json({ error: 'No report with that reference.' });
+  try {
+    const updated = disputes.addMessage(d.id, {
+      from: 'customer',
+      authorEmail: req.user.email,
+      body: req.body.message,
+      attachments: req.body.attachments
+    });
+    res.json({ success: true, dispute: updated });
+  } catch (err) {
+    res.status(err.status || 400).json({ error: err.message });
+  }
+});
+
+app.post('/api/disputes/:id/read', auth.requireAuth, (req, res) => {
+  const d = ownDispute(req);
+  if (!d) return res.status(404).json({ error: 'No report with that reference.' });
+  disputes.markRead(d.id, 'customer');
+  res.json({ success: true });
+});
+
+app.get('/api/disputes/:id/files/:fileId', auth.requireAuth, (req, res) => {
+  const d = ownDispute(req);
+  if (!d) return res.status(404).json({ error: 'No report with that reference.' });
+  const meta = disputes.fileMeta(d.id, req.params.fileId);
+  const buf = meta && disputes.readFile(d.id, req.params.fileId);
+  if (!buf) return res.status(404).json({ error: 'No such attachment.' });
+  res.set('Content-Type', meta.mime);
+  res.set('Content-Disposition', 'inline');
+  res.set('Cache-Control', 'private, max-age=3600');
+  res.send(buf);
 });
 
 /* ============================================================
