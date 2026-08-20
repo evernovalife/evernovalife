@@ -187,6 +187,53 @@
     if (firstLink) firstLink.focus();
   }
 
+  /* ---- a reply arriving while the owner is already here ----
+     The dialog above is a sign-in summary: it answers "what did I walk into?"
+     once and then gets out of the way. It says nothing about a customer who
+     replies twenty minutes later, which is the case that actually needs
+     catching — so the count is watched, and a RISE raises a toast.
+
+     A rise, not a non-zero total: re-announcing the same backlog every minute
+     would train the eye to ignore this within an hour. */
+  var POLL_MS = 60000;
+  var lastWaiting = null;
+  var timer = null;
+
+  function replyToast(added) {
+    if (document.querySelector('.reply-toast')) return;      // one at a time
+    var el = document.createElement('div');
+    el.className = 'reply-toast';
+    el.setAttribute('role', 'status');
+    el.innerHTML =
+      '<a href="admin.html#disputes">' +
+        icon('disputes') +
+        '<span><b>' + (added === 1 ? 'A customer replied' : added + ' customers replied') + '</b>' +
+        '<br>waiting on an answer</span>' +
+      '</a>' +
+      '<button type="button" class="reply-toast-x" aria-label="Dismiss">&times;</button>';
+    el.querySelector('.reply-toast-x').addEventListener('click', function () { el.remove(); });
+    document.body.appendChild(el);
+    window.setTimeout(function () { if (el.parentNode) el.remove(); }, 12000);
+  }
+
+  async function poll() {
+    var data = await fetchSummary();
+    if (!data) return;
+    var waiting = Number(data.disputes) || 0;
+    var total = waiting + (Number(data.unpaidOrders) || 0) +
+                (Number(data.toShip) || 0) + (Number(data.lowStock) || 0);
+    paintBadgeWhenReady(total);
+    if (lastWaiting !== null && waiting > lastWaiting) replyToast(waiting - lastWaiting);
+    lastWaiting = waiting;
+  }
+
+  function startPolling() {
+    stopPolling();
+    if (document.hidden) return;
+    timer = window.setInterval(poll, POLL_MS);
+  }
+  function stopPolling() { if (timer) { window.clearInterval(timer); timer = null; } }
+
   async function init() {
     if (!admin()) return;
     var data = await fetchSummary();
@@ -194,6 +241,15 @@
 
     var rows = rowsFor(data);
     paintBadgeWhenReady(rows.length ? (data.disputes + data.unpaidOrders + data.toShip + data.lowStock) : 0);
+
+    /* The first reading is the baseline, never news — otherwise every page load
+       would announce a backlog the owner has already seen. */
+    lastWaiting = Number(data.disputes) || 0;
+    startPolling();
+    document.addEventListener('visibilitychange', function () {
+      if (document.hidden) stopPolling();
+      else { poll(); startPolling(); }
+    });
 
     if (!data.anythingWaiting || !rows.length) return;
 

@@ -2623,6 +2623,51 @@
   /* ============================================================
      BOOT
      ============================================================ */
+  /* ---- a reply landing while the console is open ----
+     The rail tally is only as fresh as the last loadAll, which happens on a
+     deliberate action. So an owner sitting on this screen — the likeliest
+     place to be while working a queue — learned nothing until they pressed
+     Refresh. This watches for arrivals the same way the storefront does.
+
+     Deliberately quiet about the thread already on screen: saying "this
+     changed" about a conversation whose new message just rendered is noise. */
+  var WATCH_MS = 45000;
+  var lastWaiting = null;
+  var watchTimer = null;
+
+  async function watchDisputes() {
+    if (!A.hasCredentials()) return;
+    try {
+      var data = await A.api('/api/admin/summary');
+      var waiting = Number(data.disputes) || 0;
+      if (lastWaiting !== null && waiting > lastWaiting) {
+        var added = waiting - lastWaiting;
+        /* Refresh first so the rail tally and the queue agree with the toast
+           the owner is about to read. */
+        await loadAll({ quiet: true });
+        render();
+        var openThread = state.disputeThread && state.disputeThread.dispute;
+        var onlyTheOneOpen = added === 1 && openThread &&
+          state.view === 'disputes' && !document.hidden;
+        if (!onlyTheOneOpen) {
+          A.toast(added === 1 ? 'A customer replied — one report is waiting.'
+                              : added + ' customers replied — check Disputes.', 'success');
+        }
+      }
+      lastWaiting = waiting;
+    } catch (e) {
+      /* A failed poll is not worth a toast: the console is still usable and
+         the next tick will catch up. */
+    }
+  }
+
+  function startWatching() {
+    stopWatching();
+    if (document.hidden || !A.hasCredentials()) return;
+    watchTimer = window.setInterval(watchDisputes, WATCH_MS);
+  }
+  function stopWatching() { if (watchTimer) { window.clearInterval(watchTimer); watchTimer = null; } }
+
   function readHash() {
     var h = (window.location.hash || '').replace('#', '');
     return TITLES[h] ? h : 'dashboard';
@@ -2721,7 +2766,16 @@
     state.view = readHash();
 
     if (!A.hasCredentials()) { render(); renderGate(); return; }
-    loadAll();
+    loadAll().then(function () {
+      /* Seed the baseline from what the console already loaded, so the first
+         tick compares against reality rather than announcing the backlog. */
+      lastWaiting = (state.disputes || []).filter(function (d) { return d.unreadForAdmin; }).length;
+      startWatching();
+    });
+    document.addEventListener('visibilitychange', function () {
+      if (document.hidden) stopWatching();
+      else { watchDisputes(); startWatching(); }
+    });
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
