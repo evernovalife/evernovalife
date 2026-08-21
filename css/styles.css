@@ -3,6 +3,19 @@
    Dark ambient theme · Glassmorphism · Brand gradient
    ============================================================ */
 
+/* ---- the hidden attribute must actually hide ----
+   An author `display` rule beats the browser's own `[hidden] { display: none }`,
+   so the moment any element with a display rule is toggled with `.hidden = true`
+   it stays on screen and the toggle silently does nothing. That is not a
+   hypothetical: giving the report thread a grid layout broke exactly this, and
+   the page rendered both of its states at once.
+
+   `!important` is deliberate. Every author display rule outranks the attribute
+   otherwise, so a guard without it only works until the next component gets a
+   layout. */
+[hidden] { display: none !important; }
+
+
 /* ---------- Design Tokens ----------
    Palette lifted from the vial label: black substrate, gold frame + wordmark,
    electric-violet glow, chrome product type. */
