@@ -234,6 +234,9 @@
   function announceReply() {
     var b = $('supNew');
     if (b) b.hidden = false;
+    /* Only the title is conditional: a tab the reader is focused on does not
+       need its name changed, but the banner shows either way. */
+    if (document.hasFocus && document.hasFocus()) return;
     /* The count is deliberately not tracked across replies — "they replied" is
        the whole message, and a growing number would only be read as noise. */
     document.title = '(1) ' + baseTitle;
@@ -250,8 +253,12 @@
        news, or opening the page would announce a reply the reader is looking at. */
     var newest = newestRealId(d);
     if (lastSeenId !== null && newest !== lastSeenId && newestIsTheirs(d)) {
-      if (document.hidden) announceReply();
-      else markRead();       // they are looking straight at it
+      /* Announce it, full stop. `document.hidden` was the test here and it is
+         only true for a genuinely hidden tab — a second window side by side is
+         "visible" but unwatched, which is both how this gets tested and how a
+         customer actually leaves the page sitting. Being told about something
+         already on screen is mildly redundant; not being told is the bug. */
+      announceReply();
     }
     lastSeenId = newest;
 
@@ -429,6 +436,11 @@
       state.dispute = data.dispute;
       state.order = data.order || state.order;
       state.startingNew = false;
+      /* The site-wide watcher caches "this visitor has no reports" for the
+         session so the shop is not billed an API call per page. Opening one
+         makes that cache a lie — and a stale lie means the reply notification
+         never fires again all session, which is exactly how it went missing. */
+      try { window.sessionStorage.removeItem('enl_no_disputes'); } catch (e) {}
       $('supOrder').hidden = false;
       $('supOrder').innerHTML = orderCard(state.order);
       state.pending.length = 0;

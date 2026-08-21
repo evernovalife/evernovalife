@@ -24,7 +24,13 @@
 
   var API = (window.PEPTIDE_API_BASE || '');
   var SEEN_PREFIX = 'enl_reply_seen:';   // + dispute id
-  var NONE_KEY = 'enl_no_disputes';      // this session, nothing to watch
+  var NONE_KEY = 'enl_no_disputes';      // timestamp of a check that found none
+  /* The "nothing to watch" answer EXPIRES. It began as a permanent session flag
+     and that was a bug with teeth: a visitor who browsed the shop before opening
+     a report cached "none", and the reply notification then never fired again
+     for the rest of the session. A flag that can only ever be wrong in the
+     silent direction is the wrong shape — this one heals itself. */
+  var NONE_TTL = 5 * 60 * 1000;
   var POLL_MS = 60000;                   // slow: a shop page is not a chat window
 
   function esc(s) {
@@ -41,6 +47,11 @@
   function ss(key) { try { return window.sessionStorage.getItem(key); } catch (e) { return null; } }
   function ssSet(key, v) { try { window.sessionStorage.setItem(key, v); } catch (e) { /* private mode */ } }
 
+  function recentlyEmpty() {
+    var at = Number(ss(NONE_KEY));
+    return Number.isFinite(at) && at > 0 && (Date.now() - at) < NONE_TTL;
+  }
+
   /* The report page runs its own announcement against the open thread. */
   function onReportPage() {
     return /(^|\/)support\.html$/i.test(window.location.pathname);
@@ -54,7 +65,10 @@
       if (!res.ok) return [];                    // signed out, older server — stay quiet
       var data = await res.json();
       var all = (data && data.disputes) || [];
-      if (!all.length) { ssSet(NONE_KEY, '1'); return []; }
+      if (!all.length) { ssSet(NONE_KEY, String(Date.now())); return []; }
+      /* Seeing even one thread proves the cache wrong — clear it rather than
+         trusting a flag set before this visitor had any reports. */
+      try { window.sessionStorage.removeItem(NONE_KEY); } catch (e) {}
       return all.filter(function (d) { return d.unreadForCustomer; });
     } catch (e) {
       return [];                                  // offline: never disturb the shop
@@ -123,15 +137,16 @@
   function startPolling() {
     stopPolling();
     if (document.hidden) return;
-    timer = window.setInterval(function () { if (!ss(NONE_KEY)) check(); }, POLL_MS);
+    timer = window.setInterval(function () { if (!recentlyEmpty()) check(); }, POLL_MS);
   }
   function stopPolling() { if (timer) { window.clearInterval(timer); timer = null; } }
 
   function init() {
     if (onReportPage() || !token()) return;
-    /* A visitor who has never opened a report is the common case; one check a
-       session settles it and the shop stops paying for the question. */
-    if (ss(NONE_KEY)) { paintDotWhenReady(false); return; }
+    /* A visitor who has never opened a report is the common case, so a recent
+       "none" answer is reused rather than asking again on every page. It goes
+       stale on purpose — see NONE_TTL. */
+    if (recentlyEmpty()) { paintDotWhenReady(false); return; }
 
     check();
     startPolling();
