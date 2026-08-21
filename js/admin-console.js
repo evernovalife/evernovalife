@@ -2639,6 +2639,31 @@
   var lastWaiting = null;
   var watchTimer = null;
 
+  /* Refetch the conversation currently on screen. loadAll only refreshes the
+     QUEUE — the summaries in the rail and the list — and never the open
+     thread, so a customer's reply landed in the tally while the pane in front
+     of the owner still showed the old messages. Worse, the toast was being
+     suppressed precisely BECAUSE a thread was open, so the one case where the
+     owner was actually watching gave them nothing at all. */
+  async function refreshOpenThread(id) {
+    if (!id || state.disputeId !== id) return false;
+    try {
+      var data = await A.api('/api/admin/disputes/' + encodeURIComponent(id));
+      if (state.disputeId !== id) return false;      // they moved on mid-request
+      state.disputeThread = data;
+      render();
+      /* They are looking at it, so it is read — this also stops the rail tally
+         counting a thread whose new message is on screen. */
+      A.api('/api/admin/disputes/' + encodeURIComponent(id) + '/read', { method: 'POST' })
+        .then(function () { return loadAll({ quiet: true }); })
+        .then(function () { if (state.disputeId === id) render(); })
+        .catch(function () { /* the tally catches up on the next tick */ });
+      return true;
+    } catch (e) {
+      return false;                                   // the poll below is the floor
+    }
+  }
+
   async function watchDisputes() {
     if (!A.hasCredentials()) return;
     try {
@@ -2649,9 +2674,12 @@
         /* Refresh first so the rail tally and the queue agree with the toast
            the owner is about to read. */
         await loadAll({ quiet: true });
+        /* The open conversation is refreshed too, not just the queue around
+           it — otherwise the message the owner is being told about is the one
+           thing on screen that does not change. */
+        var shown = await refreshOpenThread(state.disputeId);
         render();
-        var openThread = state.disputeThread && state.disputeThread.dispute;
-        var onlyTheOneOpen = added === 1 && openThread &&
+        var onlyTheOneOpen = added === 1 && shown &&
           state.view === 'disputes' && !document.hidden;
         if (!onlyTheOneOpen) {
           A.toast(added === 1 ? 'A customer replied — one report is waiting.'
@@ -2782,7 +2810,16 @@
     });
     if (window.Live) {
       window.Live.on(function (ev) {
-        if (ev && (ev.type === 'dispute-message' || ev.type === 'dispute-opened')) watchDisputes();
+        if (!ev) return;
+        /* A message on the thread in front of the owner is refreshed straight
+           away and unconditionally — not routed through the waiting-count
+           watcher, which only reacts to a RISE and would miss a reply on a
+           thread already counted as waiting. */
+        if (ev.type === 'dispute-message' && ev.disputeId && ev.disputeId === state.disputeId) {
+          refreshOpenThread(ev.disputeId);
+          return;
+        }
+        if (ev.type === 'dispute-message' || ev.type === 'dispute-opened') watchDisputes();
       });
     }
   }
