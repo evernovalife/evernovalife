@@ -2491,6 +2491,7 @@
       // second click wins, so a stale response must not overwrite it.
       if (state.disputeId !== id) return;
       state.disputeThread = data;
+      if (window.AdminDisputes) window.AdminDisputes.followNext();
       state.disputeOutcomes = data.outcomes || state.disputeOutcomes;
       render();
       // Opening it IS reading it — mark it and drop the rail tally.
@@ -2520,6 +2521,7 @@
       // pane that has since moved on to a different one.
       if (state.disputeId !== id) return;
       state.disputeThread = Object.assign({}, state.disputeThread, { dispute: data.dispute });
+      if (window.AdminDisputes) window.AdminDisputes.followNext();
       if (emailWorks()) A.toast('Sent. The customer has been emailed a link to it.', 'success');
       else A.toast('Saved — but email is not configured, so nothing was sent. Tell them another way, or they will not know it is here.');
       await loadAll({ quiet: true });
@@ -2546,6 +2548,7 @@
         { method: 'POST', body: { outcome: outcome, note: note ? note.value : '' } });
       if (state.disputeId !== id) return;
       state.disputeThread = Object.assign({}, state.disputeThread, { dispute: data.dispute });
+      if (window.AdminDisputes) window.AdminDisputes.followNext();
       if (emailWorks()) A.toast('Closed, and the customer has been told.', 'success');
       else A.toast('Closed — but email is not configured, so the customer has not been told. Let them know another way.');
       await loadAll({ quiet: true });
@@ -2562,6 +2565,7 @@
       var data = await A.api('/api/admin/disputes/' + encodeURIComponent(id) + '/reopen', { method: 'POST' });
       if (state.disputeId !== id) return;
       state.disputeThread = Object.assign({}, state.disputeThread, { dispute: data.dispute });
+      if (window.AdminDisputes) window.AdminDisputes.followNext();
       await loadAll({ quiet: true });
       render();
     } catch (e) {

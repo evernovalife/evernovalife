@@ -246,10 +246,28 @@
      write reads a height the browser has not laid out yet, so the view lands
      on the message BEFORE the new one. Wait a frame and scroll to the last
      element itself rather than computing a number. */
-  function scrollToNewest() {
+  var STICK_PX = 80;
+  var stickNext = false;   // set when the reader's own action should win
+
+  /* Read where the reader was BEFORE the rebuild. Following along is right
+     when they are at the bottom; dragging them down from halfway through a
+     re-read, on a poll they did not ask for, is not. */
+  function readStick() {
+    if (stickNext) { stickNext = false; return { stick: true, top: 0 }; }
+    var stream = $('supStream');
+    if (!stream) return { stick: true, top: 0 };
+    var distance = stream.scrollHeight - stream.scrollTop - stream.clientHeight;
+    return { stick: distance < STICK_PX, top: stream.scrollTop };
+  }
+
+  function scrollToNewest(was) {
     var stream = $('supStream');
     if (!stream) return;
+    /* A frame later: reading scrollHeight in the same tick as the innerHTML
+       write gives the height before layout, so the view lands on the message
+       BEFORE the new one. */
     window.requestAnimationFrame(function () {
+      if (was && !was.stick) { stream.scrollTop = was.top; return; }
       var last = stream.lastElementChild;
       if (last && last.scrollIntoView) last.scrollIntoView({ block: 'end' });
       else stream.scrollTop = stream.scrollHeight;
@@ -260,8 +278,9 @@
     var d = state.dispute;
     $('supOpenForm').hidden = true;
     $('supThread').hidden = false;
+    var was = readStick();
     $('supStream').innerHTML = d.messages.map(function (m) { return messageHtml(d, m); }).join('');
-    scrollToNewest();
+    scrollToNewest(was);
 
     /* First render just establishes where we are; only a LATER change counts as
        news, or opening the page would announce a reply the reader is looking at. */
@@ -487,6 +506,7 @@
         body: { message: $('supReply').value, attachments: state.pendingReply.slice() }
       });
       state.dispute = data.dispute;
+      stickNext = true;          // they just sent it; always show it
       $('supReply').value = '';
       state.pendingReply.length = 0;
       $('supReplyPreviews').innerHTML = '';

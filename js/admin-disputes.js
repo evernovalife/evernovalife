@@ -246,6 +246,40 @@
       '</div>';
   }
 
+  /* ---- keeping the newest message in view ----
+     The thread never scrolled at all, so sending a reply left the view on
+     whatever was there before and the new message sat below the fold.
+
+     But snapping to the bottom on EVERY render is its own bug: this view is
+     rebuilt wholesale on a poll, and yanking someone who has scrolled up to
+     re-read what a customer said is worse than not scrolling. So the position
+     is read BEFORE the rebuild — near the bottom means follow along, anywhere
+     else means stay put. */
+  var STICK_PX = 80;
+
+  var stickNext = false;   // set when the owner's own action should win
+
+  function readStick(body) {
+    if (stickNext) { stickNext = false; return { stick: true, top: 0 }; }
+    var old = body.querySelector('.dsp-stream');
+    if (!old) return { stick: true, top: 0 };
+    var distance = old.scrollHeight - old.scrollTop - old.clientHeight;
+    return { stick: distance < STICK_PX, top: old.scrollTop };
+  }
+
+  function applyStick(body, was) {
+    var stream = body.querySelector('.dsp-stream');
+    if (!stream) return;
+    /* A frame later: reading scrollHeight in the same tick as the write gives
+       the height before layout, which lands on the previous message. */
+    window.requestAnimationFrame(function () {
+      if (!was.stick) { stream.scrollTop = was.top; return; }
+      var last = stream.lastElementChild;
+      if (last && last.scrollIntoView) last.scrollIntoView({ block: 'end' });
+      else stream.scrollTop = stream.scrollHeight;
+    });
+  }
+
   function render(state, body) {
     var list = state.disputes;
     if (!list) { body.innerHTML = A.skeleton(6); return; }
@@ -260,6 +294,7 @@
       return;
     }
     var rows = filtered(list, state.disputeTab);
+    var was = readStick(body);
     body.innerHTML =
       '<div class="dsp-wrap">' +
         storageLine(state) +
@@ -277,10 +312,18 @@
         '</div>' +
         threadPane(state) +
       '</div>';
+
+    applyStick(body, was);
   }
 
   /* streamHtml is exposed so the grouping can be exercised directly — a check
    that greps for a class name proves the string exists, not that three
    consecutive replies actually collapse into one group. */
-  window.AdminDisputes = { render: render, streamHtml: streamHtml };
+  window.AdminDisputes = {
+    render: render, streamHtml: streamHtml,
+    /* The console calls this before re-rendering after the owner sends or
+       opens a thread — their own action should always be followed, wherever
+       they had scrolled to. */
+    followNext: function () { stickNext = true; }
+  };
 })(window, document);
