@@ -26,9 +26,9 @@
   <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" media="print" onload="this.media='all'">
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"></noscript>
-  <link rel="stylesheet" href="css/styles.css?v=85">
+  <link rel="stylesheet" href="css/styles.css?v=86">
   <!-- 21+ age gate: runs before anything paints -->
-  <script src="js/age-gate.js?v=85"></script>
+  <script src="js/age-gate.js?v=86"></script>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Cpath d='M20.00 1.00 L21.91 15.38 L27.78 12.22 L24.62 18.09 L39.00 20.00 L24.62 21.91 L27.78 27.78 L21.91 24.62 L20.00 39.00 L18.09 24.62 L12.22 27.78 L15.38 21.91 L1.00 20.00 L15.38 18.09 L12.22 12.22 L18.09 15.38 Z' fill='%23a855f7'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -81,10 +81,15 @@
     </form>
   </div>
 
-    <section class="section">
-      <div class="container narrow">
-        <h1>Report a problem</h1>
-        <p class="text-muted" id="supIntro">Loading…</p>
+    <section class="section sup-page">
+      <div class="container sup-wrap">
+        <div class="sup-title">
+          <div>
+            <h1>Report a problem</h1>
+            <p class="text-muted" id="supIntro">Loading…</p>
+          </div>
+          <a class="sup-back" href="account.html">← Your orders</a>
+        </div>
 
         <div id="supGate" hidden>
           <p>Sign in to open or read a report about an order.</p>
@@ -93,7 +98,16 @@
           <p><a class="btn btn-primary" id="supGateLink" href="login.html?next=support.html">Sign in</a></p>
         </div>
 
-        <!-- The order this is about, so nobody has to open another tab. -->
+        <!-- One console for the whole report: the order it is about, the news
+             banner, and either the opening form or the conversation. It is the
+             only thing sized to the viewport, so nothing it holds can push the
+             composer off the bottom of the screen. -->
+        <div class="sup-panel glass" id="supPanel" hidden>
+
+          <!-- The order this is about, as one strip rather than a card, so it
+               costs a line instead of a screenful. -->
+          <div class="sup-bar" id="supOrder" hidden></div>
+
           <!-- Raised by the 20s poll when a reply lands while the reader is on
                another tab. Click scrolls to it. role="status" so a screen reader
                hears it without the banner being visible. -->
@@ -101,54 +115,53 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z"/></svg>
             Ever Nova Life replied &mdash; read it
           </button>
-        <div class="glass card" id="supOrder" hidden></div>
 
-        <!-- Path A: no thread on this order yet -->
-        <form class="form-card glass" id="supOpenForm" hidden>
-          <div class="form-field full">
-            <label for="supReason">What went wrong?</label>
-            <select id="supReason" required></select>
-          </div>
-          <div class="form-field full">
-            <label for="supMessage">Tell us what happened</label>
-            <textarea id="supMessage" rows="5" maxlength="4000" required
-              placeholder="What arrived, what you expected, and anything on the parcel or paperwork that looks wrong."></textarea>
-          </div>
-          <div class="form-field full">
-            <label for="supFiles">Photos (optional — up to 3, PNG/JPEG/WebP, 2 MB each)</label>
-            <span class="text-muted">Photos are kept while the report is open and for 90 days after it is closed.</span>
-            <input type="file" id="supFiles" accept="image/png,image/jpeg,image/webp" multiple>
-            <div class="sup-previews" id="supPreviews"></div>
-          </div>
-          <div class="form-msg" id="supOpenMsg" role="status"></div>
-          <button class="btn btn-primary" type="submit">Send the report</button>
-        </form>
-
-        <!-- Path B: a thread already exists -->
-        <!-- A conversation shell: the stream is the only thing that scrolls, and
-             the composer stays reachable without moving the page. Below the
-             mobile breakpoint this reverts to normal flow — a pinned composer
-             fighting an on-screen keyboard is worse than plain scrolling. -->
-        <div id="supThread" class="sup-shell" hidden>
-          <div class="sup-stream" id="supStream" role="log" aria-live="polite" aria-relevant="additions"></div>
-          <div class="sup-closed" id="supClosed" hidden></div>
-          <form class="sup-composer" id="supReplyForm">
-            <div class="sup-previews" id="supReplyPreviews"></div>
-            <div class="form-msg" id="supReplyMsg" role="status"></div>
-            <div class="sup-composer-row">
-              <label class="sup-attach" for="supReplyFiles" title="Attach photos — up to 3, kept for 90 days after the report closes">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.4 11.05 12.25 20.2a6 6 0 0 1-8.49-8.49l9.2-9.19a4 4 0 0 1 5.65 5.66l-9.2 9.19a2 2 0 0 1-2.82-2.83l8.49-8.48"/></svg>
-                <span class="sr-only">Attach photos (optional, up to 3)</span>
-              </label>
-              <input type="file" id="supReplyFiles" accept="image/png,image/jpeg,image/webp" multiple hidden>
-              <label class="sr-only" for="supReply">Reply</label>
-              <textarea id="supReply" rows="1" maxlength="4000" required placeholder="Write a reply…"></textarea>
-              <button class="btn btn-primary sup-send" type="submit">Send</button>
+          <!-- Path A: no thread on this order yet -->
+          <form class="sup-open" id="supOpenForm" hidden>
+            <div class="form-field full">
+              <label for="supReason">What went wrong?</label>
+              <select id="supReason" required></select>
             </div>
+            <div class="form-field full">
+              <label for="supMessage">Tell us what happened</label>
+              <textarea id="supMessage" rows="5" maxlength="4000" required
+                placeholder="What arrived, what you expected, and anything on the parcel or paperwork that looks wrong."></textarea>
+            </div>
+            <div class="form-field full">
+              <label for="supFiles">Photos (optional — up to 3, PNG/JPEG/WebP, 2 MB each)</label>
+              <span class="text-muted">Photos are kept while the report is open and for 90 days after it is closed.</span>
+              <input type="file" id="supFiles" accept="image/png,image/jpeg,image/webp" multiple>
+              <div class="sup-previews" id="supPreviews"></div>
+            </div>
+            <div class="form-msg" id="supOpenMsg" role="status"></div>
+            <button class="btn btn-primary" type="submit">Send the report</button>
           </form>
-        </div>
 
-        <p class="text-muted"><a href="account.html">← Back to your orders</a></p>
+          <!-- Path B: a thread already exists -->
+          <!-- The stream is the only thing that scrolls, and the composer stays
+               reachable without moving the page. Below the mobile breakpoint
+               this reverts to normal flow — a pinned composer fighting an
+               on-screen keyboard is worse than plain scrolling. -->
+          <div id="supThread" class="sup-shell" hidden>
+            <div class="sup-stream" id="supStream" role="log" aria-live="polite" aria-relevant="additions"></div>
+            <div class="sup-closed" id="supClosed" hidden></div>
+            <form class="sup-composer" id="supReplyForm">
+              <div class="sup-previews" id="supReplyPreviews"></div>
+              <div class="form-msg" id="supReplyMsg" role="status"></div>
+              <div class="sup-composer-row">
+                <label class="sup-attach" for="supReplyFiles" title="Attach photos — up to 3, kept for 90 days after the report closes">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.4 11.05 12.25 20.2a6 6 0 0 1-8.49-8.49l9.2-9.19a4 4 0 0 1 5.65 5.66l-9.2 9.19a2 2 0 0 1-2.82-2.83l8.49-8.48"/></svg>
+                  <span class="sr-only">Attach photos (optional, up to 3)</span>
+                </label>
+                <input type="file" id="supReplyFiles" accept="image/png,image/jpeg,image/webp" multiple hidden>
+                <label class="sr-only" for="supReply">Reply</label>
+                <textarea id="supReply" rows="1" maxlength="4000" required placeholder="Write a reply…"></textarea>
+                <button class="btn btn-primary sup-send" type="submit">Send</button>
+              </div>
+            </form>
+          </div>
+
+        </div>
       </div>
     </section>
   </main>
@@ -208,15 +221,15 @@
     </div>
   </footer>
 
-  <script src="js/config.js?v=85"></script>
-  <script src="js/products-data.js?v=85"></script>
-  <script src="js/cart.js?v=85"></script>
-  <script src="js/promos.js?v=85"></script>
-  <script src="js/main.js?v=85"></script>
-  <script src="js/live.js?v=85"></script>
-  <script src="js/admin-alert.js?v=85"></script>
-  <script src="js/customer-alert.js?v=85"></script>
-  <script src="js/auth.js?v=85"></script>
-  <script src="js/support.js?v=85"></script>
+  <script src="js/config.js?v=86"></script>
+  <script src="js/products-data.js?v=86"></script>
+  <script src="js/cart.js?v=86"></script>
+  <script src="js/promos.js?v=86"></script>
+  <script src="js/main.js?v=86"></script>
+  <script src="js/live.js?v=86"></script>
+  <script src="js/admin-alert.js?v=86"></script>
+  <script src="js/customer-alert.js?v=86"></script>
+  <script src="js/auth.js?v=86"></script>
+  <script src="js/support.js?v=86"></script>
 </body>
 </html>

@@ -163,27 +163,70 @@
     return '<span class="order-status ' + esc(cls) + '">' + esc(label) + '</span>';
   }
 
+  /* The order this report is about, as one strip. It used to be a card with a
+     bulleted item list, which cost a third of the screen to say what fits on a
+     line — and on a report about a parcel, the conversation is the thing the
+     customer came for. The full item text stays available as a tooltip when
+     the line has to truncate. */
   function orderCard(o) {
     if (!o) return '';
     var items = (o.items || []).map(function (i) {
       var paid = (i.paidQuantity == null) ? i.quantity : i.paidQuantity;
       /* A BOGO line ships more than it bills, so both numbers earn their place. */
       var qty = (paid !== i.quantity) ? (i.quantity + ' sent · ' + paid + ' billed') : ('×' + i.quantity);
-      return '<li>' + esc(i.name) + ' <span class="text-muted">' + esc(qty) + '</span></li>';
-    }).join('');
+      return i.name + ' ' + qty;
+    }).join(' · ');
     var track = [o.carrier, o.tracking].filter(Boolean).join(' · ');
-    return '<div class="sup-order-head">' +
-        '<span class="sup-order-ref">' + esc(o.orderId) + '</span>' +
-        statusChip(o.status) +
-      '</div>' +
-      '<ul class="sup-order-items">' + items + '</ul>' +
-      (track ? '<p class="sup-order-track"><span class="text-muted">Tracking</span> ' + esc(track) + '</p>' : '');
+    return '<span class="sup-order-ref">' + esc(o.orderId) + '</span>' +
+      statusChip(o.status) +
+      (track ? '<p class="sup-bar-track">Tracking <b>' + esc(track) + '</b></p>' : '') +
+      (items ? '<p class="sup-bar-items" title="' + esc(items) + '">' + esc(items) + '</p>' : '');
   }
 
-  function messageHtml(d, m) {
-    if (m.from === 'system') {
-      return '<div class="sup-msg system">' + esc(m.body) + '</div>';
-    }
+  /* ---- the conversation, written as a conversation ----
+     Every bubble used to repeat "Ever Nova Life · 8/21/2026, 11:21:33 AM",
+     which is a log line, not a message: four replies said the same date four
+     times and the seconds were never information anybody wanted. The date is
+     said once per day on a divider, the sender once per run of messages, and
+     the clock time sits quietly at the foot of each bubble. */
+  function dayKey(d) { return d.getFullYear() + '-' + d.getMonth() + '-' + d.getDate(); }
+
+  function dayLabel(d) {
+    var now = new Date();
+    var days = Math.round(
+      (new Date(now.getFullYear(), now.getMonth(), now.getDate()) -
+       new Date(d.getFullYear(), d.getMonth(), d.getDate())) / 86400000);
+    if (days === 0) return 'Today';
+    if (days === 1) return 'Yesterday';
+    var opts = { month: 'short', day: 'numeric' };
+    if (d.getFullYear() !== now.getFullYear()) opts.year = 'numeric';
+    return d.toLocaleDateString([], opts);
+  }
+
+  function timeLabel(d) { return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }
+
+  function streamHtml(d) {
+    var out = [], lastDay = '', lastFrom = '';
+    (d.messages || []).forEach(function (m) {
+      var when = new Date(m.createdAt);
+      var key = dayKey(when);
+      if (key !== lastDay) {
+        out.push('<div class="sup-day">' + esc(dayLabel(when)) + '</div>');
+        lastDay = key;
+        lastFrom = '';           // a new day always re-states who is speaking
+      }
+      if (m.from === 'system') {
+        out.push('<div class="sup-msg system">' + esc(m.body) + '</div>');
+        lastFrom = '';
+        return;
+      }
+      out.push(messageHtml(m, when, m.from === lastFrom));
+      lastFrom = m.from;
+    });
+    return out.join('');
+  }
+
+  function messageHtml(m, when, cont) {
     var atts = (m.attachments || []).map(function (a) {
       // Expired photos keep their place in the conversation so it still reads
       // honestly — a message saying "see the photo" above nothing would leave
@@ -193,11 +236,11 @@
       }
       return '<button type="button" class="sup-att" data-file="' + esc(a.id) + '">' + esc(a.name) + '</button>';
     }).join('');
-    return '<div class="sup-msg ' + (m.from === 'admin' ? 'theirs' : 'mine') + '">' +
-      '<div class="sup-msg-head">' + (m.from === 'admin' ? 'Ever Nova Life' : 'You') +
-        ' · ' + esc(new Date(m.createdAt).toLocaleString()) + '</div>' +
+    return '<div class="sup-msg ' + (m.from === 'admin' ? 'theirs' : 'mine') + (cont ? ' cont' : '') + '">' +
+      (cont ? '' : '<div class="sup-msg-head">' + (m.from === 'admin' ? 'Ever Nova Life' : 'You') + '</div>') +
       '<div class="sup-msg-body">' + esc(m.body).replace(/\n/g, '<br>') + '</div>' +
       (atts ? '<div class="sup-atts">' + atts + '</div>' : '') +
+      '<time class="sup-time" datetime="' + esc(when.toISOString()) + '">' + esc(timeLabel(when)) + '</time>' +
       '</div>';
   }
 
@@ -284,9 +327,12 @@
   function renderThread() {
     var d = state.dispute;
     $('supOpenForm').hidden = true;
+    $('supPanel').hidden = false;
+    $('supPanel').classList.add('thread');
     $('supThread').hidden = false;
-    $('supStream').innerHTML = d.messages.map(function (m) { return messageHtml(d, m); }).join('');
+    $('supStream').innerHTML = streamHtml(d);
     scrollToNewest();
+    measurePanel();
 
     /* First render just establishes where we are; only a LATER change counts as
        news, or opening the page would announce a reply the reader is looking at. */
@@ -333,6 +379,11 @@
      revealed alongside the closed conversation rather than replacing it. */
   function renderOpenForm(keepThread) {
     if (!keepThread) $('supThread').hidden = true;
+    /* With the form on screen the panel is ordinary content: it sizes to what
+       it holds and the page scrolls, rather than trapping a long form inside a
+       viewport-height box. */
+    $('supPanel').classList.remove('thread');
+    $('supPanel').hidden = false;
     $('supOpenForm').hidden = false;
     // On the escalation path this runs again on every 20-second poll, so the
     // reason the customer picked is carried across the rebuild — rebuilding
@@ -561,15 +612,16 @@
   }
 
   /* ---- boot ---- */
-  /* The shell's height is the viewport minus whatever the sticky header
-     actually occupies. Measured rather than hardcoded: the announcement bar
-     above the nav wraps at some widths, and a guessed constant would put the
-     composer under the header on exactly those. */
-  function measureHeader() {
-    var h = document.querySelector('.site-header');
-    if (!h) return;
-    var box = h.getBoundingClientRect();
-    document.documentElement.style.setProperty('--enl-hdr', Math.round(box.bottom) + 'px');
+  /* The console's height is the viewport minus everything above it. Measured
+     rather than budgeted: the sticky header grows when the announcement bar
+     wraps, the title block wraps at narrow widths, and the order strip is one
+     line or two depending on the order — a guessed constant is wrong on all of
+     those, and being wrong here is what pushed the composer off the screen. */
+  function measurePanel() {
+    var el = $('supPanel');
+    if (!el || el.hidden) return;
+    var top = el.getBoundingClientRect().top + (window.scrollY || window.pageYOffset || 0);
+    document.documentElement.style.setProperty('--sup-top', Math.round(top) + 'px');
   }
 
   function init() {
@@ -620,8 +672,8 @@
       });
     }
 
-    measureHeader();
-    window.addEventListener('resize', measureHeader);
+    measurePanel();
+    window.addEventListener('resize', measurePanel);
 
     /* One row until it needs more, so the composer stays the size of what is
        actually being written. */
