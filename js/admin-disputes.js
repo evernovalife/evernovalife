@@ -247,33 +247,36 @@
   }
 
   /* ---- keeping the newest message in view ----
-     The thread never scrolled at all, so sending a reply left the view on
-     whatever was there before and the new message sat below the fold.
+     The intent lives HERE, not in the DOM. Reading the old stream's scroll
+     position before each rebuild looked reasonable and was wrong: a send
+     triggers TWO renders (loadAll does one, the caller does another), so the
+     second one measured a stream that the first had already replaced with a
+     fresh element sitting at scrollTop 0 — concluded the reader had scrolled
+     up, and restored 0. That is the jump to the top.
 
-     But snapping to the bottom on EVERY render is its own bug: this view is
-     rebuilt wholesale on a poll, and yanking someone who has scrolled up to
-     re-read what a customer said is worse than not scrolling. So the position
-     is read BEFORE the rebuild — near the bottom means follow along, anywhere
-     else means stay put. */
+     So follow-the-bottom is a module flag, changed only by a real scroll from
+     a real person, and unaffected by however many times the view is rebuilt. */
   var STICK_PX = 80;
+  var followBottom = true;
 
-  var stickNext = false;   // set when the owner's own action should win
-
-  function readStick(body) {
-    if (stickNext) { stickNext = false; return { stick: true, top: 0 }; }
-    var old = body.querySelector('.dsp-stream');
-    if (!old) return { stick: true, top: 0 };
-    var distance = old.scrollHeight - old.scrollTop - old.clientHeight;
-    return { stick: distance < STICK_PX, top: old.scrollTop };
+  function atBottom(el) {
+    return (el.scrollHeight - el.scrollTop - el.clientHeight) < STICK_PX;
   }
 
-  function applyStick(body, was) {
+  function applyStick(body) {
     var stream = body.querySelector('.dsp-stream');
     if (!stream) return;
-    /* A frame later: reading scrollHeight in the same tick as the write gives
-       the height before layout, which lands on the previous message. */
+
+    /* The element is new on every render, so this listener dies with the old
+       one — nothing accumulates, and the wholesale-rerender rule holds. */
+    stream.addEventListener('scroll', function () {
+      followBottom = atBottom(stream);
+    });
+
+    if (!followBottom) return;
+    /* A frame later: scrollHeight read in the same tick as the write is the
+       height before layout, which lands on the message before the new one. */
     window.requestAnimationFrame(function () {
-      if (!was.stick) { stream.scrollTop = was.top; return; }
       var last = stream.lastElementChild;
       if (last && last.scrollIntoView) last.scrollIntoView({ block: 'end' });
       else stream.scrollTop = stream.scrollHeight;
@@ -294,7 +297,6 @@
       return;
     }
     var rows = filtered(list, state.disputeTab);
-    var was = readStick(body);
     body.innerHTML =
       '<div class="dsp-wrap">' +
         storageLine(state) +
@@ -313,7 +315,7 @@
         threadPane(state) +
       '</div>';
 
-    applyStick(body, was);
+    applyStick(body);
   }
 
   /* streamHtml is exposed so the grouping can be exercised directly — a check
@@ -321,9 +323,14 @@
    consecutive replies actually collapse into one group. */
   window.AdminDisputes = {
     render: render, streamHtml: streamHtml,
-    /* The console calls this before re-rendering after the owner sends or
-       opens a thread — their own action should always be followed, wherever
-       they had scrolled to. */
-    followNext: function () { stickNext = true; }
+    /* The console calls this when the owner sends, opens, resolves or reopens.
+       Their own action means "show me the result", whatever they had scrolled
+       to — and unlike a one-shot flag this survives the two renders a send
+       actually causes. */
+    followNext: function () { followBottom = true; },
+    /* Exposed so the decision can be exercised against a fake element rather
+       than grepped for — a check that greps proved nothing here twice. */
+    _atBottom: atBottom,
+    _follow: function (v) { if (v !== undefined) followBottom = v; return followBottom; }
   };
 })(window, document);

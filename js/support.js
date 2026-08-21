@@ -246,28 +246,35 @@
      write reads a height the browser has not laid out yet, so the view lands
      on the message BEFORE the new one. Wait a frame and scroll to the last
      element itself rather than computing a number. */
+  /* ---- keeping the newest message in view ----
+     Same rule as the admin thread, and for the same reason: the follow intent
+     is a module flag, not something re-derived from the DOM on each render.
+     Reading the old stream's position broke the moment a single action caused
+     two renders — the second measured an element the first had already
+     replaced at scrollTop 0, decided the reader had scrolled away, and put
+     them back at the top. */
   var STICK_PX = 80;
-  var stickNext = false;   // set when the reader's own action should win
+  var followBottom = true;
 
-  /* Read where the reader was BEFORE the rebuild. Following along is right
-     when they are at the bottom; dragging them down from halfway through a
-     re-read, on a poll they did not ask for, is not. */
-  function readStick() {
-    if (stickNext) { stickNext = false; return { stick: true, top: 0 }; }
-    var stream = $('supStream');
-    if (!stream) return { stick: true, top: 0 };
-    var distance = stream.scrollHeight - stream.scrollTop - stream.clientHeight;
-    return { stick: distance < STICK_PX, top: stream.scrollTop };
+  function atBottom(el) {
+    return (el.scrollHeight - el.scrollTop - el.clientHeight) < STICK_PX;
   }
 
-  function scrollToNewest(was) {
+  function followNewest() { followBottom = true; }
+
+  function scrollToNewest() {
     var stream = $('supStream');
     if (!stream) return;
-    /* A frame later: reading scrollHeight in the same tick as the innerHTML
-       write gives the height before layout, so the view lands on the message
-       BEFORE the new one. */
+
+    if (!stream.dataset || !stream.dataset.scrollWired) {
+      /* The stream element itself is not replaced here — only its innerHTML —
+         so this is wired once rather than on every render. */
+      stream.addEventListener('scroll', function () { followBottom = atBottom(stream); });
+      if (stream.dataset) stream.dataset.scrollWired = '1';
+    }
+
+    if (!followBottom) return;
     window.requestAnimationFrame(function () {
-      if (was && !was.stick) { stream.scrollTop = was.top; return; }
       var last = stream.lastElementChild;
       if (last && last.scrollIntoView) last.scrollIntoView({ block: 'end' });
       else stream.scrollTop = stream.scrollHeight;
@@ -278,9 +285,8 @@
     var d = state.dispute;
     $('supOpenForm').hidden = true;
     $('supThread').hidden = false;
-    var was = readStick();
     $('supStream').innerHTML = d.messages.map(function (m) { return messageHtml(d, m); }).join('');
-    scrollToNewest(was);
+    scrollToNewest();
 
     /* First render just establishes where we are; only a LATER change counts as
        news, or opening the page would announce a reply the reader is looking at. */
@@ -506,7 +512,7 @@
         body: { message: $('supReply').value, attachments: state.pendingReply.slice() }
       });
       state.dispute = data.dispute;
-      stickNext = true;          // they just sent it; always show it
+      followNewest();            // they just sent it; always show it
       $('supReply').value = '';
       state.pendingReply.length = 0;
       $('supReplyPreviews').innerHTML = '';
