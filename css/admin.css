@@ -478,10 +478,27 @@ body.adm {
    not move the list and reading a long thread does not move the console. */
 .dsp-wrap { height: calc(100dvh - 8.5rem); min-height: 26rem; align-items: stretch; }
 .dsp-queue { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-right: .25rem; }
-.dsp-pane { min-height: 0; display: grid; grid-template-rows: auto auto 1fr auto; gap: .75rem; }
-/* min-height:0 again: without it a grid child refuses to shrink, the stream
-   grows to fit its content and the console scrolls instead of the thread. */
-.dsp-pane .dsp-stream { min-height: 0; max-height: none; overscroll-behavior: contain; }
+/* Flex, NOT grid with positional rows. The pane emits four children or five
+   depending on whether the "Remove photos" strip is showing, so a fixed
+   `grid-template-rows: auto auto 1fr auto` put the stream on the 1fr row only
+   sometimes — and when it did not, the stream grew to fit its content, never
+   scrolled, and every new message landed below the fold. A layout that depends
+   on counting optional children is a layout that breaks the moment one appears.
+
+   Flex sizes by role instead of position: the stream takes what is left, and
+   everything else is exactly as tall as it needs to be. */
+.dsp-pane { min-height: 0; display: flex; flex-direction: column; gap: .75rem; }
+.dsp-pane > * { flex: 0 0 auto; }
+/* min-height:0 is what lets it shrink at all — a flex child defaults to
+   min-height:auto, so overflow-y would constrain nothing and the console would
+   scroll instead of the thread. */
+.dsp-pane > .dsp-stream {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 .dsp-pane.empty { display: block; }
 
 @media (max-width: 860px) {
@@ -489,5 +506,7 @@ body.adm {
   .dsp-wrap { height: auto; min-height: 0; }
   .dsp-queue { overflow: visible; }
   .dsp-pane { display: flex; flex-direction: column; }
-  .dsp-pane .dsp-stream { max-height: 60vh; }
+  /* No shell on a phone, so the stream caps itself rather than filling a
+     height the page no longer has. */
+  .dsp-pane > .dsp-stream { flex: 0 0 auto; max-height: 60vh; }
 }

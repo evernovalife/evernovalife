@@ -3100,15 +3100,21 @@ body.pd-modal-open { overflow: hidden; }
    measured at runtime into --enl-hdr because it is sticky and its height moves
    with the announcement bar. dvh rather than vh: on a phone vh ignores the
    collapsing address bar, so a 100vh shell hides its own composer. */
-.sup-shell { display: grid; grid-template-rows: 1fr auto; gap: .75rem;
+/* Flex, not positional grid rows. This block holds the stream, a closed-report
+   notice and the composer, and which of them exist depends on the thread's
+   state — so a fixed row template only lines up for some of those states. The
+   admin pane had exactly that bug: its stream fell off the 1fr row whenever an
+   optional child appeared, stopped scrolling, and put every new message below
+   the fold. Size by role instead. */
+.sup-shell { display: flex; flex-direction: column; gap: .75rem;
   height: calc(100dvh - var(--enl-hdr, 140px) - 7rem); min-height: 22rem; }
-.sup-shell .sup-closed { grid-row: 2; }
+.sup-shell > * { flex: 0 0 auto; }
 
 .sup-stream { display: flex; flex-direction: column; gap: .6rem; padding: .25rem;
-  /* min-height:0 is what makes this scroll at all — a grid child defaults to
-     min-height:auto, so without it the content pushes the row taller and the
-     PAGE scrolls instead of the stream. */
-  min-height: 0; overflow-y: auto;
+  /* Takes whatever the fixed rows leave. min-height:0 is what makes it scroll
+     at all — a flex child defaults to min-height:auto, so without it the
+     content pushes the container taller and the PAGE scrolls instead. */
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
   /* Stops the scroll handing off to the page when the stream hits an end. */
   overscroll-behavior: contain; }
 
@@ -3229,7 +3235,7 @@ body.adminalert-open { overflow: hidden; }
    rule is that nothing may be taller than its column. */
 @media (max-width: 700px) {
   .sup-shell { display: block; height: auto; min-height: 0; }
-  .sup-stream { max-height: 60vh; }
+  .sup-stream { flex: 0 0 auto; max-height: 60vh; }
   .sup-composer { margin-top: .75rem; }
 }
 @media (prefers-reduced-motion: reduce) { .sup-attach { transition: none; } }
