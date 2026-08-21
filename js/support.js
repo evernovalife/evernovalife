@@ -242,12 +242,26 @@
     document.title = '(1) ' + baseTitle;
   }
 
+  /* Setting scrollTop from scrollHeight in the same tick as the innerHTML
+     write reads a height the browser has not laid out yet, so the view lands
+     on the message BEFORE the new one. Wait a frame and scroll to the last
+     element itself rather than computing a number. */
+  function scrollToNewest() {
+    var stream = $('supStream');
+    if (!stream) return;
+    window.requestAnimationFrame(function () {
+      var last = stream.lastElementChild;
+      if (last && last.scrollIntoView) last.scrollIntoView({ block: 'end' });
+      else stream.scrollTop = stream.scrollHeight;
+    });
+  }
+
   function renderThread() {
     var d = state.dispute;
     $('supOpenForm').hidden = true;
     $('supThread').hidden = false;
     $('supStream').innerHTML = d.messages.map(function (m) { return messageHtml(d, m); }).join('');
-    $('supStream').scrollTop = $('supStream').scrollHeight;
+    scrollToNewest();
 
     /* First render just establishes where we are; only a LATER change counts as
        news, or opening the page would announce a reply the reader is looking at. */
@@ -590,6 +604,15 @@
       reply.addEventListener('input', function () {
         reply.style.height = 'auto';
         reply.style.height = Math.min(reply.scrollHeight, 128) + 'px';
+      });
+    }
+
+    /* Instant when the stream is up, poll underneath when it is not. */
+    if (window.Live) {
+      window.Live.on(function (ev) {
+        if (!ev || !state.dispute) return;
+        if (ev.disputeId !== state.dispute.id) return;
+        if (ev.type === 'dispute-reply' || ev.type === 'dispute-resolved') load(true);
       });
     }
 

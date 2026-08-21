@@ -2230,6 +2230,7 @@ app.post('/api/disputes', auth.requireAuth, disputeOpenLimiter, (req, res) => {
     /* Their receipt. Unawaited with a catch, like every other dispute mail:
        a broken SMTP must not fail the report the customer just wrote. */
     sendDisputeOpenedEmail(d).catch(e => console.error('[disputes] acknowledgement email failed:', e.message));
+    notifyAdmins({ type: 'dispute-opened', orderId: d.orderId, disputeId: d.id });
     res.status(201).json({ success: true, dispute: disputes.forCustomer(d), order: disputeOrderView(order) });
   } catch (err) {
     res.status(err.status || 400).json({ error: err.message, disputeId: err.disputeId });
@@ -2261,6 +2262,7 @@ app.post('/api/disputes/:id/messages', auth.requireAuth, disputePostLimiter, (re
       body: req.body.message,
       attachments: req.body.attachments
     });
+    notifyAdmins({ type: 'dispute-message', orderId: updated.orderId, disputeId: updated.id });
     res.json({ success: true, dispute: disputes.forCustomer(updated) });
   } catch (err) {
     res.status(err.status || 400).json({ error: err.message });
@@ -2476,6 +2478,94 @@ function adminSummary() {
   return summary;
 }
 
+/* ============================================================
+   LIVE EVENTS (Server-Sent Events)
+   A reply should reach the other side the moment it is written, not on
+   the next poll. SSE rather than websockets: it is one-way, which is all
+   this needs, it is plain HTTP so nothing in front of it has to learn a
+   new protocol, and EventSource is native — no dependency, which the
+   no-new-dependencies rule requires anyway.
+
+   Polling is NOT removed on the client. A connection can be recycled by
+   the host at any time, and a notification system whose only path is one
+   socket is a notification system that goes quiet without telling anyone.
+   The stream is the fast path; the poll is the floor.
+
+   AUTHENTICATION: EventSource cannot send an Authorization header, so the
+   credential has to travel in the URL. A JWT must not — it would land in
+   server logs, proxy logs and browser history, and this file already
+   refuses to put the admin key in a query string for the same reason.
+   Instead an authenticated request mints a single-use ticket that is good
+   for sixty seconds and dies on first use.
+   ============================================================ */
+const SSE_TICKET_MS = 60 * 1000;
+const sseTickets = new Map();          // ticket -> { userId, isAdmin, expires }
+const sseByUser = new Map();           // userId -> Set<res>
+const sseAdmins = new Set();           // every signed-in admin's stream
+
+function sweepTickets(now) {
+  for (const [t, v] of sseTickets) if (v.expires <= now) sseTickets.delete(t);
+}
+
+app.post('/api/events/ticket', auth.requireAuth, (req, res) => {
+  const now = Date.now();
+  sweepTickets(now);
+  const ticket = require('crypto').randomBytes(16).toString('hex');
+  sseTickets.set(ticket, {
+    userId: req.user.id,
+    isAdmin: Boolean(req.user.isAdmin),
+    expires: now + SSE_TICKET_MS
+  });
+  res.json({ success: true, ticket, expiresInMs: SSE_TICKET_MS });
+});
+
+app.get('/api/events', (req, res) => {
+  const ticket = String(req.query.ticket || '');
+  const found = sseTickets.get(ticket);
+  sseTickets.delete(ticket);                      // single use, always
+  if (!found || found.expires <= Date.now()) {
+    return res.status(401).json({ error: 'That live-updates ticket is not valid any more.' });
+  }
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',    // no-transform: stop proxies buffering
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no'
+  });
+  res.write('retry: 5000\n\n');                   // the browser reconnects on its own
+
+  const set = sseByUser.get(found.userId) || new Set();
+  set.add(res);
+  sseByUser.set(found.userId, set);
+  if (found.isAdmin) sseAdmins.add(res);
+
+  /* A comment line every 25s. Idle connections get closed by hosts and
+     proxies, and a silently dead stream is the failure this must not have. */
+  const beat = setInterval(() => { try { res.write(': ping\n\n'); } catch (e) { /* gone */ } }, 25000);
+
+  req.on('close', () => {
+    clearInterval(beat);
+    sseAdmins.delete(res);
+    const live = sseByUser.get(found.userId);
+    if (live) { live.delete(res); if (!live.size) sseByUser.delete(found.userId); }
+  });
+});
+
+function sseSend(res, payload) {
+  try { res.write('data: ' + JSON.stringify(payload) + '\n\n'); } catch (e) { /* dropped */ }
+}
+/* Never let a broken stream break the write that triggered it — these are
+   called from routes that have already done the real work. */
+function notifyUser(userId, payload) {
+  try { (sseByUser.get(userId) || []).forEach(r => sseSend(r, payload)); }
+  catch (e) { console.error('[events] user notify failed:', e.message); }
+}
+function notifyAdmins(payload) {
+  try { sseAdmins.forEach(r => sseSend(r, payload)); }
+  catch (e) { console.error('[events] admin notify failed:', e.message); }
+}
+
 app.get('/api/admin/summary', requireAdmin, (req, res) => {
   res.json({ success: true, ...adminSummary() });
 });
@@ -2576,6 +2666,7 @@ app.post('/api/admin/disputes/:id/messages', requireAdmin, async (req, res) => {
       attachments: req.body.attachments
     });
     sendDisputeReplyEmail(updated).catch(e => console.error('[disputes] reply email failed:', e.message));
+    notifyUser(updated.userId, { type: 'dispute-reply', orderId: updated.orderId, disputeId: updated.id });
     res.json({ success: true, dispute: updated });
   } catch (err) {
     res.status(err.status || 400).json({ error: err.message });
@@ -2592,6 +2683,7 @@ app.post('/api/admin/disputes/:id/resolve', requireAdmin, (req, res) => {
       by: (req.user && req.user.email) || 'admin'
     });
     sendDisputeResolvedEmail(updated).catch(e => console.error('[disputes] resolved email failed:', e.message));
+    notifyUser(updated.userId, { type: 'dispute-resolved', orderId: updated.orderId, disputeId: updated.id });
     res.json({ success: true, dispute: updated });
   } catch (err) {
     res.status(err.status || 400).json({ error: err.message });

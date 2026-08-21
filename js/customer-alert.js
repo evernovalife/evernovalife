@@ -125,7 +125,11 @@
     /* Announce each answered report once a session. The dot stays regardless,
        so a dismissed toast never means a lost reply. */
     for (var i = 0; i < unread.length; i++) {
-      var key = SEEN_PREFIX + unread[i].id;
+      /* Keyed to the REPLY, not the thread. Keying on the dispute id alone
+         meant the first answer toasted and every answer after it on that
+         thread was silently skipped for the rest of the session — which is
+         exactly why this stopped appearing. lastAt changes per message. */
+      var key = SEEN_PREFIX + unread[i].id + ':' + (unread[i].lastAt || '');
       if (ss(key)) continue;
       ssSet(key, '1');
       toast(unread[i]);
@@ -150,6 +154,14 @@
 
     check();
     startPolling();
+    /* The instant path. The poll above stays as the floor: a stream can die
+       without saying so, and a notification that depends on one socket is a
+       notification that goes quiet. */
+    if (window.Live) {
+      window.Live.on(function (ev) {
+        if (ev && (ev.type === 'dispute-reply' || ev.type === 'dispute-resolved')) check();
+      });
+    }
     document.addEventListener('visibilitychange', function () {
       if (document.hidden) stopPolling();
       else { check(); startPolling(); }

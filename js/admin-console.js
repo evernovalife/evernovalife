@@ -2776,6 +2776,11 @@
       if (document.hidden) stopWatching();
       else { watchDisputes(); startWatching(); }
     });
+    if (window.Live) {
+      window.Live.on(function (ev) {
+        if (ev && (ev.type === 'dispute-message' || ev.type === 'dispute-opened')) watchDisputes();
+      });
+    }
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);

@@ -250,6 +250,11 @@
       if (document.hidden) stopPolling();
       else { poll(); startPolling(); }
     });
+    if (window.Live) {
+      window.Live.on(function (ev) {
+        if (ev && (ev.type === 'dispute-message' || ev.type === 'dispute-opened')) poll();
+      });
+    }
 
     if (!data.anythingWaiting || !rows.length) return;
 
