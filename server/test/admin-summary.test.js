@@ -180,3 +180,12 @@ test('the summary carries no customer records', async () => {
       `${key} should be a plain count, not a record`);
   }
 });
+
+test('the summary counts inbox threads waiting on us', async () => {
+  const inbox = require('../inbox.js');
+  inbox.create({ email: 'waiting@example.com', subject: 'Waiting', body: 'A question.' });
+  const token = await adminToken();
+  const res = await fetch(`${base}/api/admin/summary`, { headers: { Authorization: `Bearer ${token}` } });
+  const data = await res.json();
+  assert.ok(data.inbox >= 1, 'a thread awaiting us should be counted');
+});

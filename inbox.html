@@ -3,19 +3,20 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Research Accounts — Ever Nova Life</title>
-  <meta name="description" content="Apply for a research account with Ever Nova Life. Materials are supplied for qualified in-vitro research; organizations may be asked to provide institutional or business information before ordering.">
-  <link rel="canonical" href="https://evernovalife.com/research-accounts.html">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Your conversation — Ever Nova Life</title>
+  <meta name="description" content="Read our reply and write back — no account needed.">
+  <link rel="canonical" href="https://evernovalife.com/inbox.html">
   <meta name="theme-color" content="#07040f">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Ever Nova Life">
-  <meta property="og:title" content="Research Accounts — Ever Nova Life">
-  <meta property="og:description" content="Apply for a research account. Materials are supplied for qualified in-vitro research organizations.">
-  <meta property="og:url" content="https://evernovalife.com/research-accounts.html">
+  <meta property="og:title" content="Your conversation — Ever Nova Life">
+  <meta property="og:description" content="Read our reply and write back — no account needed.">
+  <meta property="og:url" content="https://evernovalife.com/inbox.html">
   <meta property="og:image" content="https://evernovalife.com/og-image.svg">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="Research Accounts — Ever Nova Life">
-  <meta name="twitter:description" content="Apply for a research account. Materials are supplied for qualified in-vitro research organizations.">
+  <meta name="twitter:title" content="Your conversation — Ever Nova Life">
+  <meta name="twitter:description" content="Read our reply and write back — no account needed.">
   <meta name="twitter:image" content="https://evernovalife.com/og-image.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -71,153 +72,30 @@
   </header>
 
   <main id="main">
+    <section class="section">
+      <div class="container inbox-wrap">
+        <h1 class="inbox-title" id="inboxTitle">Your conversation</h1>
+        <p class="inbox-sub" id="inboxSub">Loading…</p>
 
-  <!-- ===== SEARCH OVERLAY ===== -->
-  <div class="search-overlay" id="searchOverlay">
-    <form class="search-box">
-      <input type="search" placeholder="Search peptides…" aria-label="Search">
-      <button class="btn btn-primary" type="submit">Search</button>
-    </form>
-  </div>
+        <div class="inbox-thread" id="inboxThread" aria-live="polite"></div>
 
-  <section class="page-head">
-    <div class="container">
-      <div class="breadcrumb"><a href="index.html">Home</a> <span>/</span> <span>Research Accounts</span></div>
-      <h1>Research <span class="gradient-text">Accounts</span></h1>
-      <p>Ever Nova Life supplies materials for qualified in-vitro research. Organizations may be asked to provide institutional or business information before ordering.</p>
-    </div>
-  </section>
-
-  <!-- ===== HOW APPROVAL WORKS ===== -->
-  <section class="section" style="padding-top:0">
-    <div class="container">
-      <div class="content-card glass">
-        <h2>How Approval Works</h2>
-        <p>Access is granted to qualified organizations rather than by a single checkbox at checkout.</p>
-        <ol class="bullets">
-          <li><strong>Application submitted</strong> — you complete the short form below.</li>
-          <li><strong>Organization reviewed</strong> — we review the business or institutional information provided.</li>
-          <li><strong>Account approved or declined</strong> — you receive a decision by email.</li>
-          <li><strong>Ordering access enabled</strong> — approved accounts can view ordering options after signing in.</li>
-        </ol>
-        <p style="font-size:.9rem;opacity:.85">Please do not submit confidential research protocols through this form. A general description of your intended research context is sufficient.</p>
-      </div>
-    </div>
-  </section>
-
-  <!-- ===== APPLICATION FORM ===== -->
-  <section class="section" style="padding-top:0">
-    <div class="container">
-      <div class="content-card glass">
-        <h2>Apply for Research Access</h2>
-        <p style="font-size:.95rem;opacity:.85;margin-top:-.25rem">Complete the form and submit — it opens a pre-filled message in your email app addressed to our research-accounts team. You can also email <a href="mailto:support@evernovalife.com">support@evernovalife.com</a> directly.</p>
-        <form id="researchAccountForm" style="display:grid;gap:1rem;max-width:640px">
-          <div>
-            <label for="ra-name">Full name *</label>
-            <input id="ra-name" name="fullName" autocomplete="name" type="text" required>
-          </div>
-          <div>
-            <label for="ra-role">Professional role *</label>
-            <input id="ra-role" name="role" autocomplete="organization-title" type="text" required>
-          </div>
-          <div>
-            <label for="ra-org">Organization *</label>
-            <input id="ra-org" name="organization" autocomplete="organization" type="text" required>
-          </div>
-          <div>
-            <label for="ra-dept">Department</label>
-            <input id="ra-dept" name="department" type="text">
-          </div>
-          <div>
-            <label for="ra-email">Institutional or business email *</label>
-            <input id="ra-email" name="email" autocomplete="email" type="email" required>
-          </div>
-          <div>
-            <label for="ra-website">Organization website</label>
-            <input id="ra-website" name="website" autocomplete="url" type="url" placeholder="https://">
-          </div>
-          <div>
-            <label for="ra-country-bill">Billing country *</label>
-            <input id="ra-country-bill" name="billingCountry" autocomplete="billing country-name" type="text" required>
-          </div>
-          <div>
-            <label for="ra-country-ship">Shipping country *</label>
-            <input id="ra-country-ship" name="shippingCountry" type="text" value="United States" readonly aria-readonly="true">
-            <p class="form-hint" style="margin:.35rem 0 0">We ship within the United States only.</p>
-          </div>
-          <div>
-            <label for="ra-context">General intended research context *</label>
-            <textarea id="ra-context" name="researchContext" rows="4" required placeholder="A brief, general description — no confidential protocols."></textarea>
-          </div>
-          <label style="display:flex;gap:.6rem;align-items:flex-start;font-size:.95rem">
-            <input type="checkbox" name="confirmInVitro" required style="margin-top:.25rem">
-            <span>I confirm these materials are for qualified in-vitro research use only, and not for human or animal use.</span>
-          </label>
-          <label style="display:flex;gap:.6rem;align-items:flex-start;font-size:.95rem">
-            <input type="checkbox" name="acceptRestrictions" required style="margin-top:.25rem">
-            <span>I accept the purchase restrictions and <a href="terms.html">Terms of Service</a>.</span>
-          </label>
-          <label style="display:flex;gap:.6rem;align-items:flex-start;font-size:.95rem">
-            <input type="checkbox" name="authorizedBuyer" required style="margin-top:.25rem">
-            <span>I am authorized to purchase on behalf of this organization.</span>
-          </label>
-          <div class="hero-cta" style="margin-top:.5rem">
-            <button type="submit" class="btn btn-primary btn-lg">Apply for Research Access</button>
-            <a href="contact.html?subject=technical" class="btn btn-ghost btn-lg">Contact Technical Support</a>
-          </div>
-          <div class="form-msg" aria-live="polite"></div>
+        <form class="inbox-composer" id="inboxComposer" hidden>
+          <label class="sr-only" for="inboxBody">Your reply</label>
+          <textarea id="inboxBody" rows="3" maxlength="4000" placeholder="Write a reply…" required></textarea>
+          <button class="btn btn-primary" type="submit" id="inboxSend">Send</button>
         </form>
+
+        <p class="inbox-closed" id="inboxClosed" hidden>
+          This conversation is closed. Email
+          <a href="mailto:support@evernovalife.com">support@evernovalife.com</a> to pick it back up.
+        </p>
+
+        <p class="form-msg" id="inboxMsg" role="status"></p>
       </div>
-
-      <div class="content-card glass" style="margin-top:1.5rem;border:1px solid rgba(168,85,247,.35)">
-        <h3 style="margin-top:0">Research-Use Notice</h3>
-        <p style="margin-bottom:0">For qualified in-vitro research and laboratory use only. Not for human or animal use. Purchasers must meet the eligibility requirements in our <a href="terms.html">Terms of Service</a>.</p>
-      </div>
-    </div>
-  </section>
-
-  <!-- Honest submission: build a pre-filled email to the research-accounts
-       team. Nothing is silently dropped or falsely marked as received. -->
-  <script>
-    (function () {
-      var form = document.getElementById('researchAccountForm');
-      if (!form) return;
-      form.addEventListener('submit', function (e) {
-        e.preventDefault();
-        if (!form.checkValidity()) { form.reportValidity(); return; }
-        var v = function (id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; };
-        var lines = [
-          'Full name: ' + v('ra-name'),
-          'Professional role: ' + v('ra-role'),
-          'Organization: ' + v('ra-org'),
-          'Department: ' + v('ra-dept'),
-          'Institutional/business email: ' + v('ra-email'),
-          'Organization website: ' + v('ra-website'),
-          'Billing country: ' + v('ra-country-bill'),
-          'Shipping country: ' + v('ra-country-ship'),
-          '',
-          'Intended research context:',
-          v('ra-context'),
-          '',
-          'Confirmed: in-vitro research use only; accepts purchase restrictions and Terms; authorized to purchase for this organization.'
-        ];
-        var href = 'mailto:support@evernovalife.com'
-          + '?subject=' + encodeURIComponent('Research Account Application — ' + (v('ra-org') || v('ra-name')))
-          + '&body=' + encodeURIComponent(lines.join('\n'));
-        var msg = form.querySelector('.form-msg');
-        if (msg) {
-          msg.className = 'form-msg success';
-          msg.innerHTML = 'Opening your email app to send this application to <strong>support@evernovalife.com</strong>. ' +
-            'If nothing opens, please email us directly at that address.';
-        }
-        window.location.href = href;
-      });
-    })();
-  </script>
-
-  <!-- ===== FOOTER ===== -->
+    </section>
   </main>
 
+  <!-- ===== FOOTER ===== -->
   <footer class="site-footer">
     <div class="container footer-grid">
       <div class="footer-brand">
@@ -272,14 +150,14 @@
     </div>
   </footer>
 
-  <script src="js/products-data.js?v=87"></script>
   <script src="js/config.js?v=87"></script>
-  <script src="js/chat.js?v=87"></script>
+  <script src="js/products-data.js?v=87"></script>
   <script src="js/cart.js?v=87"></script>
   <script src="js/promos.js?v=87"></script>
   <script src="js/main.js?v=87"></script>
   <script src="js/live.js?v=87"></script>
   <script src="js/admin-alert.js?v=87"></script>
   <script src="js/customer-alert.js?v=87"></script>
+  <script src="js/inbox.js?v=87"></script>
 </body>
 </html>

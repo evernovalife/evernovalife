@@ -112,6 +112,9 @@ The server also serves the static site, so open **http://localhost:4242/checkout
 | POST   | `/api/admin/disputes/:id/reopen` | Admin: reopen a closed dispute                |
 | POST   | `/api/admin/disputes/:id/read` | Admin: mark a dispute thread read               |
 | GET    | `/api/admin/disputes/:id/files/:fileId` | Admin: an attached image           |
+| GET    | `/api/agent/product`   | Chat agent: catalog lookup by name (signed `x-agent-secret`) |
+| POST   | `/api/agent/escalate`  | Chat agent: hand a conversation to a person (signed `x-agent-secret`) |
+| POST   | `/api/agent/transcript` | ElevenLabs → us: signed post-call webhook, one finished conversation |
 | GET    | `/api/health`          | Liveness + which methods are configured          |
 
 ## Crypto payments — Bitcoin / Lightning (BTCPay Server)
@@ -629,6 +632,75 @@ that sleeps or restarts runs no timers, which is why the external ping is still 
 trigger). An admin can also run it on demand from Run cleanup in the console
 (POST /api/admin/disputes/sweep) without waiting for either.
 ```
+
+## AI chat agent (ElevenLabs)
+
+A text-only ElevenLabs agent answers catalog and policy questions from the
+site's own copy and a live product lookup, and hands off to a person — into
+the inbox behind `admin.html#inbox` — when it cannot help or is asked
+something it must refuse. Full setup (the system prompt, knowledge-base
+list, tool schemas, and go-live checklist) is in `docs/AI-CHAT.md`; this
+section is only the server side.
+
+That inbox is fed by chat escalations and by nothing else today.
+`contact.html` is still a `mailto:` form and was never wired to
+`/api/inbox`, so with the shipped default (`agentId` empty in `js/config.js`)
+the queue has no producers at all. Wiring the contact form into the same
+threads is a reasonable follow-on; it is deliberately not part of this.
+
+```
+ElevenLabs agent
+   │  GET  /api/agent/product?q=...     ── x-agent-secret header  → catalog lookup
+   │  POST /api/agent/escalate          ── x-agent-secret header  → opens an inbox thread
+   ▼
+ElevenLabs (post-call) ── POST /api/agent/transcript (signed) ──► saved to disk
+```
+
+Env vars:
+
+```
+ELEVENLABS_API_KEY          Your ElevenLabs account key. Not read by this server's
+                             code — nothing in server/*.js references it. Keep it
+                             here anyway (server/.env is git-ignored) so it lives
+                             with the other secrets; use it yourself against
+                             ElevenLabs' own API/CLI when uploading the knowledge base.
+ELEVENLABS_AGENT_SECRET     Shared secret the agent presents as the x-agent-secret
+                             header on every call to /api/agent/product and
+                             /api/agent/escalate. Set the same value in each tool's
+                             header config in the ElevenLabs dashboard. Unset means
+                             every call to either route is refused — there is no
+                             "open while testing" mode.
+ELEVENLABS_WEBHOOK_SECRET   HMAC key for the post-call webhook
+                             (POST /api/agent/transcript). ElevenLabs signs the call
+                             with an elevenlabs-signature header shaped
+                             t=<unix-seconds>,v0=<hex>, HMAC-SHA256 over
+                             "${t}.${raw body}"; a signature more than 30 minutes
+                             off the server's clock, in either direction, is
+                             rejected as a possible replay. Set the same value in
+                             the webhook's config in the dashboard.
+```
+
+Neither `ELEVENLABS_AGENT_SECRET` nor `ELEVENLABS_WEBHOOK_SECRET` ever appears
+in the browser — the widget only needs the agent's id, which is meant to be
+public (it is required to be, for ElevenLabs' embeddable widget to work at
+all: the widget only runs against agents with authentication disabled). The
+agent id itself lives in `js/config.js` (`window.ENL_CHAT.agentId`), not here.
+
+`GET /api/agent/product` returns at most 5 rows, each
+`{ id, name, price, currency, inStock, url }` — no `sku` field exists on a
+product record, so none is returned. `inStock` is the same availability rule
+checkout uses (the admin's in-stock switch and the stock count both have to
+allow it), and unpublished/retired products are filtered out before the
+search runs, same as the public storefront.
+
+The agent-tool rate limit (`agent-tool`, 300 requests/minute) is deliberately
+one shared budget, not keyed per visitor: every call to these two routes
+arrives from ElevenLabs' own infrastructure, never straight from a visitor's
+browser, so there is no per-caller identity to key it on.
+
+A verified transcript webhook call is written to
+`DATA_DIR/agent-transcripts/` as one JSON file per conversation. Not seeded;
+not in git.
 
 ## Notes & next steps
 

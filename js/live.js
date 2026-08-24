@@ -92,7 +92,9 @@
 
   window.Live = {
     /* handler(payload) — payload.type is 'dispute-reply', 'dispute-resolved',
-       'dispute-message' or 'dispute-opened', each with orderId and disputeId. */
+       'dispute-message' or 'dispute-opened', each with orderId and disputeId;
+       or 'inbox-opened' (a chat escalation), which carries threadId instead —
+       an inbox thread has no account and no order behind it. */
     on: function (fn) {
       if (typeof fn !== 'function') return;
       handlers.push(fn);

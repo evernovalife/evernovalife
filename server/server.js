@@ -13,6 +13,7 @@
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const express = require('express');
 const cors = require('cors');
 
@@ -31,6 +32,7 @@ const mailer = require('./email.js');
 const outreach = require('./outreach.js');
 const ratelimit = require('./ratelimit.js');
 const disputes = require('./disputes.js');
+const inbox = require('./inbox.js');
 
 const app = express();
 const PORT = process.env.PORT || 4242;
@@ -760,6 +762,7 @@ app.delete('/api/admin/users/:id', requireAdmin, (req, res) => {
   // Threads AND the images on disk — this is the only cascade that leaves
   // bytes behind if it is missed.
   try { disputes.deleteUserData(id); } catch (e) { console.error('[admin delete] dispute cleanup failed:', e.message); }
+  try { inbox.deleteForEmail(removed.email); } catch (e) { console.error('[admin delete] inbox cleanup failed:', e.message); }
   res.json({ success: true, deleted: removed });
 });
 
@@ -2289,6 +2292,349 @@ app.get('/api/disputes/:id/files/:fileId', auth.requireAuth, (req, res) => {
 });
 
 /* ============================================================
+   THE INBOX
+   Disputes need an account and an order. Most people who will
+   ever use the chat bubble have neither — they are shopping.
+   These routes are the landing pad for that, and the guest half
+   of them is deliberately unauthenticated for the same reason
+   the pay-the-balance page is: the reader is a stranger on a
+   phone, hours later, with no password to hand.
+
+   The signed token in the URL is the whole credential. It
+   unlocks exactly ONE thread, and all it can do is read that
+   conversation and add a line to it. It cannot move money,
+   reveal an account, or list anything.
+   ============================================================ */
+const inboxPostLimiter = ratelimit.limit({
+  name: 'inbox-post',
+  windowMs: 10 * 60 * 1000,
+  max: 20,
+  /* NO `key`, deliberately — one shared bucket for all guest replies, and
+     DO NOT "improve" this by keying it. Read the whole of this before you do.
+
+     Per-visitor keying is not achievable here. The fallback key is the client
+     address, and this server never calls app.set('trust proxy'), so behind
+     Render every request arrives from the PROXY's address — identical for
+     every visitor. An address-keyed limiter on this route is already one
+     site-wide bucket in production, whatever it looks like in a test. Same
+     conclusion agentLimiter reaches, for the same reason.
+
+     Keying it on req.params.id was tried, and reverted. It looks like it buys
+     per-thread isolation; what it actually buys is a denial-of-service
+     against the entire server. ratelimit.js keeps ONE global `buckets` Map
+     shared by every limiter here, capped at MAX_KEYS, and once that cap is
+     hit after a sweep it calls next() — it FAILS OPEN. This route is
+     UNAUTHENTICATED and the limiter runs BEFORE the token is verified, so
+     req.params.id is raw attacker input at this point: MAX_KEYS cheap POSTs
+     with distinct ids fill the map with entries that live for this window and
+     switch rate limiting OFF site-wide — login, the order-status lookup, the
+     agent bucket, all of it — until they expire.
+
+     Validating the id's SHAPE does not fix that. MSG-AAAAAAAAAAAA,
+     MSG-AAAAAAAAAAAB, … are all shape-valid and each still mints its own
+     bucket; only the prefix of the junk changes. Nor does checking the thread
+     really exists: inbox.get() calls load(), which reads and JSON-parses the
+     whole of inbox.json, so that trades a keyspace amplification for an I/O
+     one — a full file parse per unauthenticated request.
+
+     An unkeyed limiter has a keyspace of one entry per client address. It is
+     bounded by construction, it does no filesystem work, and it cannot be
+     used to switch off anybody else's limiter. That is worth more than
+     isolation this route could not really have had. */
+  message: 'Too many messages from this connection. Wait a few minutes and try again.'
+});
+
+function inboxToken(id) { return auth.refToken('inbox', id); }
+
+function inboxLink(t) {
+  return `${SITE()}/inbox.html?id=${encodeURIComponent(t.id)}&t=${inboxToken(t.id)}`;
+}
+
+/* A wrong token and a thread that never existed get the same answer, so
+   the endpoint cannot be used to find out which thread ids are real. */
+function threadFromToken(req) {
+  const id = String(req.params.id || '');
+  const t = String((req.query && req.query.t) || (req.body && req.body.t) || '');
+  if (!auth.verifyRefToken('inbox', id, t)) return null;
+  return inbox.get(id);
+}
+
+const INBOX_NOT_FOUND = { error: 'That conversation link is not valid.' };
+
+/* inbox.js throws its own refusals with a `.status` on them, and those are
+   written to be read by a stranger. Anything WITHOUT a status is not one of
+   those — it is a real fault (an ENOSPC or EACCES out of inbox.save(), say),
+   and `e.message` there carries the absolute path of inbox.json.tmp. That
+   must not be handed to an anonymous guest, and it must not be dressed up as
+   a 400 either: a 400 reads as "you typed something wrong" when in fact the
+   server dropped their message. Log the real thing, answer with a 500. */
+function inboxError(res, e, where) {
+  if (e && e.status) return res.status(e.status).json({ error: e.message });
+  console.error(`[inbox] ${where} failed:`, (e && e.stack) || e);
+  return res.status(500).json({
+    error: 'Something went wrong on our side and that did not save. Try again in a moment, or email support@evernovalife.com.'
+  });
+}
+
+app.get('/api/inbox/:id', (req, res) => {
+  const t = threadFromToken(req);
+  if (!t) return res.status(404).json(INBOX_NOT_FOUND);
+  // markRead() re-reads the file, so it returns a fresh object with the
+  // stamp on it — respond with THAT, not the pre-mark `t`, or the caller
+  // sees a stale customerReadAt in the same response that just set it.
+  const updated = inbox.markRead(t.id, 'customer') || t;
+  res.json({ success: true, thread: inbox.forGuest(updated) });
+});
+
+app.post('/api/inbox/:id/messages', inboxPostLimiter, (req, res) => {
+  const t = threadFromToken(req);
+  if (!t) return res.status(404).json(INBOX_NOT_FOUND);
+  try {
+    const updated = inbox.addMessage(t.id, { from: 'customer', body: req.body && req.body.body });
+    sendInboxReplyAlert(updated).catch(e => console.error('[inbox] reply alert failed:', e.message));
+    res.json({ success: true, thread: inbox.forGuest(updated) });
+  } catch (e) {
+    inboxError(res, e, 'guest reply');
+  }
+});
+
+/* ---- the admin side ---- */
+app.get('/api/admin/inbox', requireAdmin, (req, res) => {
+  res.json({ success: true, threads: inbox.list().map(inbox.summarize) });
+});
+
+app.get('/api/admin/inbox/:id', requireAdmin, (req, res) => {
+  const t = inbox.get(req.params.id);
+  if (!t) return res.status(404).json({ error: 'No conversation with that reference.' });
+  // Same reasoning as the guest route above: respond with markRead()'s own
+  // return value, not the pre-mark `t`, so adminReadAt isn't stale.
+  const updated = inbox.markRead(t.id, 'admin') || t;
+  res.json({ success: true, thread: updated, link: inboxLink(updated) });
+});
+
+app.post('/api/admin/inbox/:id/messages', requireAdmin, (req, res) => {
+  try {
+    const updated = inbox.addMessage(req.params.id, { from: 'store', body: req.body && req.body.body });
+    sendInboxAnsweredEmail(updated).catch(e => console.error('[inbox] answer email failed:', e.message));
+    res.json({ success: true, thread: updated });
+  } catch (e) {
+    inboxError(res, e, 'admin reply');
+  }
+});
+
+app.post('/api/admin/inbox/:id/close', requireAdmin, (req, res) => {
+  try {
+    const by = (req.user && req.user.email) || 'admin';
+    res.json({ success: true, thread: inbox.close(req.params.id, { by }) });
+  } catch (e) {
+    inboxError(res, e, 'close');
+  }
+});
+
+/* ============================================================
+   THE CHAT AGENT'S THREE DOORS
+   Everything the ElevenLabs agent can reach is here, and the
+   list is short on purpose. It can read the catalog, it can
+   hand a conversation to a human, and it can post back a
+   finished transcript. It cannot read an order, an account, or
+   anything with a name and address attached — handing an LLM a
+   lookup keyed on customer records is the shortest path to
+   disclosing one to whoever guessed a reference.
+   ============================================================ */
+const AGENT_SECRET = process.env.ELEVENLABS_AGENT_SECRET || '';
+const AGENT_WEBHOOK_SECRET = process.env.ELEVENLABS_WEBHOOK_SECRET || '';
+
+/* Unkeyed on purpose — every caller here is ElevenLabs' own infrastructure,
+   never the visitor's browser, so the request always arrives from
+   ElevenLabs' egress address no matter what this server's proxy trust is
+   set to (and that setting is out of scope for this route: it's global,
+   and getting the hop count wrong would let every OTHER limiter on this
+   server be evaded via a spoofed X-Forwarded-For). Per-caller keying is
+   not achievable for a server-to-server integration like this one, so the
+   bucket is deliberately one shared budget for all agent traffic — sized
+   for the whole feature (a live call doing several lookups plus escalate
+   attempts across many concurrent conversations), not for one visitor. */
+const agentLimiter = ratelimit.limit({
+  name: 'agent-tool',
+  windowMs: 60 * 1000,
+  max: 300,
+  message: 'Too many lookups. Tell the visitor to try again in a minute.'
+});
+
+/* Fails closed: no secret configured means no request gets through, ever —
+   not "open for testing", not "open until someone notices". The length
+   check compares BYTE length (via Buffer), not JS string length, because
+   `timingSafeEqual` compares buffers — a non-ASCII secret has more bytes
+   than UTF-16 code units, and comparing `.length` on the strings would let
+   a same-code-unit-length probe reach `timingSafeEqual` with mismatched
+   buffer lengths, which throws (a 500) instead of failing with a 401. */
+/* A budget for FAILED auth only. requireAgent runs before agentLimiter, so
+   without this the static shared secret could be probed at unlimited rate.
+   Swapping the two would fix that but at a worse price: the agent bucket is
+   one shared, unkeyed budget for ALL legitimate agent traffic, so counting
+   anonymous probes into it would let a stranger starve the live feature.
+   Counting only the failures keeps a valid caller's budget untouched. */
+const agentAuthFailLimiter = ratelimit.limit({
+  name: 'agent-auth-fail',
+  windowMs: 60 * 1000,
+  max: 20,
+  message: 'Not authorised.'
+});
+
+function requireAgent(req, res, next) {
+  const given = Buffer.from(String(req.get('x-agent-secret') || ''));
+  const secret = Buffer.from(AGENT_SECRET);
+  if (!AGENT_SECRET || given.length !== secret.length ||
+      !crypto.timingSafeEqual(given, secret)) {
+    // The limiter answers 429 itself once the budget is gone; until then it
+    // calls through to the 401 this route would have given anyway.
+    return agentAuthFailLimiter(req, res, () =>
+      res.status(401).json({ error: 'Not authorised.' }));
+  }
+  next();
+}
+
+/* What the agent may say about a product: the name, what it costs, and
+   whether we have it. Availability is `productStore.isAvailable()` — the
+   same function checkout uses — because `inStock` is its own admin switch
+   independent of `stockQty` (a product can be pulled from sale with stock
+   still on the shelf), and reporting stock alone would call a pulled
+   product available. */
+function agentProductView(p) {
+  return {
+    id: p.id,
+    name: p.name,
+    price: Number(p.price) || 0,
+    currency: 'USD',
+    inStock: productStore.isAvailable(p),
+    url: `${SITE()}/product.html?id=${encodeURIComponent(p.id)}`
+  };
+}
+
+app.get('/api/agent/product', requireAgent, agentLimiter, (req, res) => {
+  const q = String((req.query && req.query.q) || '').trim().toLowerCase();
+  // Unpublished = "not on the site at all" (a draft, a pulled lot, a
+  // retired SKU) — the agent is never an admin, so it gets exactly what an
+  // anonymous storefront visitor would see, same filter as GET /api/products.
+  const all = productStore.listProducts().filter(productStore.isPublished);
+  const hits = q
+    ? all.filter(p => String(p.name || '').toLowerCase().includes(q))
+    : all;
+  res.json({ success: true, products: hits.slice(0, 5).map(agentProductView) });
+});
+
+app.post('/api/agent/escalate', requireAgent, agentLimiter, (req, res) => {
+  const b = req.body || {};
+  try {
+    const t = inbox.create({
+      email: b.email,
+      name: b.name,
+      subject: b.subject,
+      body: b.body,
+      transcript: b.transcript
+    });
+    sendInboxOpenedEmail(t).catch(e => console.error('[inbox] acknowledgement failed:', e.message));
+    /* The same doorbell the dispute routes ring. Without it the console only
+       learns about an escalation on its next poll, and the pop-up/toast in
+       js/admin-alert.js never fires live at all. */
+    notifyAdmins({ type: 'inbox-opened', threadId: t.id });
+    res.json({
+      success: true,
+      reference: t.id,
+      /* The agent reads this sentence out, so it must not promise something
+         that did not happen: sendInboxOpenedEmail() returns silently when
+         SMTP is unconfigured, and that email is the ONLY delivery of the
+         tokenized link. With no mailer, the honest sentence is the reference
+         and nothing about email. Keep both to one sentence. */
+      message: mailer.CONFIGURED
+        ? `A person has it. The reference is ${t.id}, and a confirmation is on its way to ${t.email}.`
+        : `A person has it — quote the reference ${t.id} if you get in touch again.`
+    });
+  } catch (e) {
+    // inbox.js's own refusals carry a .status and are written to be read
+    // aloud; anything else is a server fault and must not have its message
+    // (a filesystem path, say) spoken to a visitor or handed to an LLM.
+    inboxError(res, e, 'escalate');
+  }
+});
+
+/* The post-call webhook. Audit evidence must not live only in a vendor
+   dashboard we could lose access to, so every finished conversation is
+   written here as well. The signature is checked against the RAW body —
+   `express.json({ verify })` at the top of this file keeps it on
+   req.rawBody precisely so webhooks like this one can. */
+// A captured signature+body pair is otherwise valid forever, which turns a
+// single leaked webhook call into a permanent replay. Reject anything
+// outside this window, in either direction (a clock running fast counts too).
+const AGENT_SIGNATURE_MAX_AGE_SEC = 30 * 60;
+
+function verifyAgentSignature(rawBody, header) {
+  if (!AGENT_WEBHOOK_SECRET || !header || !rawBody) return false;
+  const parts = String(header).split(',').reduce((acc, piece) => {
+    const [k, v] = piece.split('=');
+    if (k && v) acc[k.trim()] = v.trim();
+    return acc;
+  }, {});
+  if (!parts.t || !parts.v0) return false;
+  const t = Number(parts.t);
+  if (!Number.isFinite(t)) return false;
+  if (Math.abs(Math.floor(Date.now() / 1000) - t) > AGENT_SIGNATURE_MAX_AGE_SEC) return false;
+  const expected = crypto.createHmac('sha256', AGENT_WEBHOOK_SECRET)
+    .update(`${parts.t}.${rawBody.toString('utf8')}`)
+    .digest('hex');
+  const a = Buffer.from(parts.v0);
+  const b = Buffer.from(expected);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+/* This route has no shared secret in front of it — the HMAC IS the check —
+   so an unsigned flood otherwise costs a signature computation each and is
+   never counted anywhere. Its own bucket, so a burst here cannot spend the
+   product-lookup/escalate budget the live conversation depends on. */
+const agentTranscriptLimiter = ratelimit.limit({
+  name: 'agent-transcript',
+  windowMs: 60 * 1000,
+  max: 120,
+  message: 'Too many transcript posts. Try again in a minute.'
+});
+
+/* express.json's global limit is 12mb — sized for the photos on a dispute
+   report, not for a chat transcript, and every byte of this one is written
+   to disk under DATA_DIR. A transcript that large is a bug or an attack. */
+const AGENT_TRANSCRIPT_MAX_BYTES = 512 * 1024;
+
+app.post('/api/agent/transcript', agentTranscriptLimiter, (req, res) => {
+  const size = (req.rawBody && req.rawBody.length) || 0;
+  if (size > AGENT_TRANSCRIPT_MAX_BYTES) {
+    console.error(`[agent] transcript rejected: ${size} bytes`);
+    return res.status(413).json({ error: 'That transcript is too large.' });
+  }
+  if (!verifyAgentSignature(req.rawBody, req.get('elevenlabs-signature'))) {
+    console.error('[agent] transcript rejected: signature mismatch');
+    return res.status(401).json({ error: 'Not authorised.' });
+  }
+  try {
+    const dir = path.join(process.env.DATA_DIR || path.join(__dirname, 'data'), 'agent-transcripts');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    // Allowlist only: this id ends up in a filename, and a value like
+    // "../../etc/passwd" or an absolute path must not be able to steer where
+    // that write lands. Anything outside [A-Za-z0-9_-] is dropped, not encoded.
+    // Truncated as well: the allowlist strips the separators but not the
+    // LENGTH, and a 10,000-character id survives it intact, overruns the
+    // filesystem's name limit and comes back as ENAMETOOLONG — a 500 on a
+    // webhook, for input the caller chose.
+    const id = String((req.body && req.body.conversation_id) || 'unknown')
+      .replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
+    const stampName = new Date().toISOString().replace(/[:.]/g, '-');
+    fs.writeFileSync(path.join(dir, `${stampName}-${id}.json`), JSON.stringify(req.body, null, 2));
+    res.json({ success: true });
+  } catch (e) {
+    console.error('[agent] transcript store failed:', e.message);
+    res.status(500).json({ error: 'Could not store that.' });
+  }
+});
+
+/* ============================================================
    DISPUTE NOTIFICATIONS
    A doorbell, not a transcript: the mail says a reply is waiting
    and links to the thread. The message body is deliberately NOT
@@ -2356,6 +2702,77 @@ function buildDisputeOpenedMail(d, email, name) {
     <p style="color:#9ca3af;font-size:12px;margin-top:24px">Nothing else is needed from you for now.</p>
   </div>`;
   return { to: email, subject, text, html };
+}
+
+/* The guest has no account, so email is the only way to tell them an
+   answer is waiting. The body of the answer is NOT included: an inbox
+   thread can carry an address or an order reference, and a forwarded
+   chain outlives the tab. */
+async function sendInboxAnsweredEmail(t) {
+  if (!mailer.CONFIGURED) return;
+  const link = inboxLink(t);
+  const who = t.name || 'there';
+  const subject = 'We have replied to your question';
+  const text = `Hi ${who},\n\n` +
+    `There's an answer waiting on your question ("${t.subject}").\n\n` +
+    `Read it and reply here:\n${link}\n\n` +
+    `— The Ever Nova Life team`;
+  const html = `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;color:#1f2937">
+    <h2 style="color:#6d28d9;margin-bottom:4px">We have replied</h2>
+    <p>Hi ${escapeHtmlSrv(who)}, there's an answer waiting on your question.</p>
+    <p><strong>${escapeHtmlSrv(t.subject)}</strong></p>
+    <p><a href="${link}" style="display:inline-block;background:#6d28d9;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600">Read the reply</a></p>
+  </div>`;
+  await mailer.sendMail({ to: t.email, subject, text, html });
+}
+
+/* Tell the shop a guest wrote back. The admin console polls, but the
+   owner is not always looking at it. */
+async function sendInboxReplyAlert(t) {
+  if (!mailer.CONFIGURED) return;
+  const to = (process.env.ADMIN_EMAIL || (process.env.ADMIN_EMAILS || '').split(',')[0] || '').trim();
+  if (!to) return;
+  const subject = `Reply on ${t.id} — ${t.subject}`;
+  const text = `${t.email} wrote back on ${t.id}.\n\n` +
+    `Open the console: ${SITE()}/admin.html#inbox\n`;
+  await mailer.sendMail({ to, subject, text, html: `<p>${escapeHtmlSrv(t.email)} wrote back on <strong>${escapeHtmlSrv(t.id)}</strong>.</p><p><a href="${SITE()}/admin.html#inbox">Open the console</a></p>` });
+}
+
+/* The visitor's receipt. Escalating from a chat box is a moment of
+   doubt — the person has just been told a machine cannot help them —
+   and an email that arrives immediately is what makes the handoff feel
+   real. No message body, for the reason the dispute mails give: a
+   forwarded chain outlives the tab. */
+function buildInboxOpenedMail(t) {
+  const link = inboxLink(t);
+  const who = t.name || 'there';
+  /* Fixed Subject, reference only. `t.subject` is free text the chat agent
+     relayed from a visitor, to an address nothing has verified — an LLM is
+     trivially talked into calling a tool with arguments of the caller's
+     choosing, so putting that text in a Subject line (or in the body) turns
+     this branded acknowledgement into a phishing carrier aimed at anyone.
+     The subject IS still shown, on the thread itself, behind the signed
+     token — where only the real recipient can reach it. Same reason the
+     `who` below is escaped rather than trusted. */
+  const subject = `We've got your question (${t.id})`;
+  const text = `Hi ${who},\n\n` +
+    `Your question has reached us — reference ${t.id}.\n\n` +
+    `A person will reply. You'll get an email when there's an answer, and you can read the conversation here at any time:\n${link}\n\n` +
+    `Nothing else is needed from you for now.\n\n` +
+    `— The Ever Nova Life team`;
+  const html = `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;color:#1f2937">
+    <h2 style="color:#6d28d9;margin-bottom:4px">We've got your question</h2>
+    <p>Hi ${escapeHtmlSrv(who)}, your question has reached us — reference <strong>${escapeHtmlSrv(t.id)}</strong>.</p>
+    <p>A person will reply. You'll get an email when there's an answer.</p>
+    <p><a href="${link}" style="display:inline-block;background:#6d28d9;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600">See the conversation</a></p>
+    <p style="color:#9ca3af;font-size:12px;margin-top:24px">Nothing else is needed from you for now.</p>
+  </div>`;
+  return { to: t.email, subject, text, html };
+}
+
+async function sendInboxOpenedEmail(t) {
+  if (!mailer.CONFIGURED) return;
+  await mailer.sendMail(buildInboxOpenedMail(t));
 }
 
 function buildDisputeResolvedMail(d, email, name) {
@@ -2449,6 +2866,10 @@ function adminSummary() {
   const waitingThreads = disputes.list()
     .filter(d => disputes.summarize(d).status === 'awaiting_us').length;
 
+  /* Same rule, the other queue: an inbox thread the customer spoke last
+     on is waiting on us, and a closed one never is. */
+  const waitingInbox = inbox.list().filter(t => t.status === 'awaiting_us').length;
+
   let lowStock = 0;
   const threshold = outreach.config().lowStockThreshold;
   for (const p of productStore.listProducts()) {
@@ -2460,6 +2881,7 @@ function adminSummary() {
 
   const summary = {
     disputes: waitingThreads,
+    inbox: waitingInbox,
     unpaidOrders: orders.filter(o => SUMMARY_OPEN.indexOf(o.status) !== -1).length,
     toShip: orders.filter(o => o.status === SUMMARY_PAID).length,
     lowStock,
@@ -2473,7 +2895,7 @@ function adminSummary() {
      at all when this is false, and "nothing is waiting" is one decision,
      not five the browser has to re-derive and keep in step. */
   summary.anythingWaiting = Boolean(
-    summary.disputes || summary.unpaidOrders || summary.toShip || summary.lowStock
+    summary.disputes || summary.inbox || summary.unpaidOrders || summary.toShip || summary.lowStock
   );
   return summary;
 }
@@ -4299,4 +4721,5 @@ app.buildDisputeOpenedMail = buildDisputeOpenedMail;
 app.buildDisputeReplyMail = buildDisputeReplyMail;
 app.buildDisputeResolvedMail = buildDisputeResolvedMail;
 app.buildDisputeStorageMail = buildDisputeStorageMail;
+app.buildInboxOpenedMail = buildInboxOpenedMail;
 module.exports = app;

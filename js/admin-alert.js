@@ -93,6 +93,7 @@
     disputes: '<path d="M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z"/>',
     orders: '<path d="M6 2 4 6v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6l-2-4z"/><path d="M4 6h16"/><path d="M16 10a4 4 0 0 1-8 0"/>',
     box: '<path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/>',
+    inbox: '<path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/><path d="m22 7-10 6L2 7"/>',
     alert: '<path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/>'
   };
   function icon(name) {
@@ -105,6 +106,14 @@
     if (s.disputes) {
       rows.push({ icon: 'disputes', href: 'admin.html#disputes',
         text: plural(s.disputes, 'customer') + ' waiting on a reply' });
+    }
+    /* Chat escalations are their own queue. Without this row a shop with
+       ONLY inbox threads waiting saw nothing at all: anythingWaiting came
+       back true, rows.length was 0, and init() returned before opening the
+       dialog — no pop-up, no toast, no badge. */
+    if (s.inbox) {
+      rows.push({ icon: 'inbox', href: 'admin.html#inbox',
+        text: plural(s.inbox, 'question') + ' from the chat waiting on a reply' });
     }
     if (s.unpaidOrders) {
       rows.push({ icon: 'orders', href: 'admin.html#orders',
@@ -197,17 +206,27 @@
      would train the eye to ignore this within an hour. */
   var POLL_MS = 60000;
   var lastWaiting = null;
+  var lastInbox = null;
   var timer = null;
 
-  function replyToast(added) {
+  /* `where` is 'disputes' or 'inbox' — the two queues that can grow while
+     the owner is looking at something else. A toast that always pointed at
+     #disputes would send them to an empty tab when a chat escalation is what
+     arrived. */
+  function replyToast(added, where) {
     if (document.querySelector('.reply-toast')) return;      // one at a time
+    var inboxKind = where === 'inbox';
     var el = document.createElement('div');
     el.className = 'reply-toast';
     el.setAttribute('role', 'status');
     el.innerHTML =
-      '<a href="admin.html#disputes">' +
-        icon('disputes') +
-        '<span><b>' + (added === 1 ? 'A customer replied' : added + ' customers replied') + '</b>' +
+      '<a href="' + (inboxKind ? 'admin.html#inbox' : 'admin.html#disputes') + '">' +
+        icon(inboxKind ? 'inbox' : 'disputes') +
+        '<span><b>' +
+          (inboxKind
+            ? (added === 1 ? 'A question came in from the chat' : added + ' questions came in from the chat')
+            : (added === 1 ? 'A customer replied' : added + ' customers replied')) +
+        '</b>' +
         '<br>waiting on an answer</span>' +
       '</a>' +
       '<button type="button" class="reply-toast-x" aria-label="Dismiss">&times;</button>';
@@ -220,11 +239,16 @@
     var data = await fetchSummary();
     if (!data) return;
     var waiting = Number(data.disputes) || 0;
-    var total = waiting + (Number(data.unpaidOrders) || 0) +
+    var inboxWaiting = Number(data.inbox) || 0;
+    var total = waiting + inboxWaiting + (Number(data.unpaidOrders) || 0) +
                 (Number(data.toShip) || 0) + (Number(data.lowStock) || 0);
     paintBadgeWhenReady(total);
-    if (lastWaiting !== null && waiting > lastWaiting) replyToast(waiting - lastWaiting);
+    // Disputes first when both grew in the same minute: one toast at a time,
+    // and a dispute is attached to an order somebody has already paid for.
+    if (lastWaiting !== null && waiting > lastWaiting) replyToast(waiting - lastWaiting, 'disputes');
+    else if (lastInbox !== null && inboxWaiting > lastInbox) replyToast(inboxWaiting - lastInbox, 'inbox');
     lastWaiting = waiting;
+    lastInbox = inboxWaiting;
   }
 
   function startPolling() {
@@ -240,11 +264,16 @@
     if (!data) return;
 
     var rows = rowsFor(data);
-    paintBadgeWhenReady(rows.length ? (data.disputes + data.unpaidOrders + data.toShip + data.lowStock) : 0);
+    paintBadgeWhenReady(rows.length
+      ? ((Number(data.disputes) || 0) + (Number(data.inbox) || 0) +
+         (Number(data.unpaidOrders) || 0) + (Number(data.toShip) || 0) +
+         (Number(data.lowStock) || 0))
+      : 0);
 
     /* The first reading is the baseline, never news — otherwise every page load
        would announce a backlog the owner has already seen. */
     lastWaiting = Number(data.disputes) || 0;
+    lastInbox = Number(data.inbox) || 0;
     startPolling();
     document.addEventListener('visibilitychange', function () {
       if (document.hidden) stopPolling();
@@ -252,7 +281,8 @@
     });
     if (window.Live) {
       window.Live.on(function (ev) {
-        if (ev && (ev.type === 'dispute-message' || ev.type === 'dispute-opened')) poll();
+        if (ev && (ev.type === 'dispute-message' || ev.type === 'dispute-opened' ||
+                   ev.type === 'inbox-opened')) poll();
       });
     }
 
