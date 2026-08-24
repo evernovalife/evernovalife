@@ -177,11 +177,26 @@ Two tools, both webhook-type tools in the ElevenLabs dashboard, both send
   | `transcript` | array of `{role, text, at}` | no | The conversation so far |
 
 - **Response on success:** `{ success: true, reference: "MSG-...",
-  message: "A person has it. The reference is MSG-..., and a confirmation
-  is on its way to <email>." }`. The `message` field is written to be read
+  message: "<a sentence>" }`. The `message` field is written to be read
   aloud — have the agent say that sentence back to the visitor rather than
   composing its own, and read the reference number out of `reference` (or
   straight from the sentence — they're the same value).
+
+  **The sentence has two forms, and which one you get depends on your own
+  SMTP settings.** The acknowledgement email is the ONLY delivery of the
+  link to the thread, so the server refuses to promise one it cannot send:
+
+  | SMTP configured (`SMTP_USER` + `SMTP_PASS` set) | `message` |
+  |---|---|
+  | yes | `A person has it. The reference is MSG-..., and a confirmation is on its way to <email>.` |
+  | no | `A person has it — quote the reference MSG-... if you get in touch again.` |
+
+  This is exactly why the agent must read `message` rather than compose its
+  own line. With no mailer configured, nothing will arrive in the visitor's
+  inbox and the reference they were told to keep is the only way back to the
+  conversation — an agent that invents "check your email" there has stranded
+  them. Configure SMTP before going live (see `server/README.md`); the
+  no-mailer sentence is a safety net, not the intended experience.
 - **Response on failure:** a 4xx with `{ error: "<a sentence>" }` — for
   example, an invalid email, an empty message, or too many open threads
   already on that address. The agent should read that sentence to the
