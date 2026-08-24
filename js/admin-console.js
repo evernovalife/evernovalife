@@ -2658,14 +2658,13 @@
         'The inbox view did not load — check that <code>js/admin-inbox.js</code> is uploaded.</p></div>';
       return;
     }
-    // Pick the first thread automatically the first time this view is
-    // opened, so there is something to read without an extra click — same
-    // idea as the dispute queue, just done here instead of in the view,
-    // since opening a thread is a fetch and the view only renders state.
-    if (!state.inboxId && state.inbox && state.inbox.length) {
-      openInboxThread(state.inbox[0].id);
-      return;
-    }
+    /* No auto-open. It used to pick the first thread here, which closed a
+       loop with openInboxThread()'s catch: the catch clears state.inboxId
+       and re-renders, this re-opened the same thread, the fetch failed
+       again — so one 500, one deleted thread or one network flap spun the
+       console, hammering the API and stacking toasts. renderDisputes()
+       never auto-opened for exactly this reason; match it. The queue's
+       first row is one click away, and a click cannot loop. */
     IBX.render(state, body, {
       open: openInboxThread, reply: replyToInboxThread, close: closeInboxThread
     });
