@@ -2495,6 +2495,37 @@ async function sendInboxReplyAlert(t) {
   await mailer.sendMail({ to, subject, text, html: `<p>${escapeHtmlSrv(t.email)} wrote back on <strong>${escapeHtmlSrv(t.id)}</strong>.</p><p><a href="${SITE()}/admin.html#inbox">Open the console</a></p>` });
 }
 
+/* The visitor's receipt. Escalating from a chat box is a moment of
+   doubt — the person has just been told a machine cannot help them —
+   and an email that arrives immediately is what makes the handoff feel
+   real. No message body, for the reason the dispute mails give: a
+   forwarded chain outlives the tab. */
+function buildInboxOpenedMail(t) {
+  const link = inboxLink(t);
+  const who = t.name || 'there';
+  const subject = `We've got your question (${t.id})`;
+  const text = `Hi ${who},\n\n` +
+    `Your question has reached us — reference ${t.id}.\n\n` +
+    `What it was about: ${t.subject}\n\n` +
+    `A person will reply. You'll get an email when there's an answer, and you can read the conversation here at any time:\n${link}\n\n` +
+    `Nothing else is needed from you for now.\n\n` +
+    `— The Ever Nova Life team`;
+  const html = `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;color:#1f2937">
+    <h2 style="color:#6d28d9;margin-bottom:4px">We've got your question</h2>
+    <p>Hi ${escapeHtmlSrv(who)}, your question has reached us — reference <strong>${escapeHtmlSrv(t.id)}</strong>.</p>
+    <p><strong>What it was about:</strong> ${escapeHtmlSrv(t.subject)}</p>
+    <p>A person will reply. You'll get an email when there's an answer.</p>
+    <p><a href="${link}" style="display:inline-block;background:#6d28d9;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600">See the conversation</a></p>
+    <p style="color:#9ca3af;font-size:12px;margin-top:24px">Nothing else is needed from you for now.</p>
+  </div>`;
+  return { to: t.email, subject, text, html };
+}
+
+async function sendInboxOpenedEmail(t) {
+  if (!mailer.CONFIGURED) return;
+  await mailer.sendMail(buildInboxOpenedMail(t));
+}
+
 function buildDisputeResolvedMail(d, email, name) {
   const link = disputeLink(d);
   const who = name || 'there';
@@ -4436,4 +4467,5 @@ app.buildDisputeOpenedMail = buildDisputeOpenedMail;
 app.buildDisputeReplyMail = buildDisputeReplyMail;
 app.buildDisputeResolvedMail = buildDisputeResolvedMail;
 app.buildDisputeStorageMail = buildDisputeStorageMail;
+app.buildInboxOpenedMail = buildInboxOpenedMail;
 module.exports = app;
