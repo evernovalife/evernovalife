@@ -19,7 +19,18 @@
   var cfg = window.ENL_CHAT || {};
   if (!cfg.agentId) return;
 
-  var WIDGET_SRC = 'https://unpkg.com/@elevenlabs/convai-widget-embed';
+  // cfg.version pins the widget bundle. Left empty, the URL below resolves
+  // to whatever @elevenlabs/convai-widget-embed publishes next on unpkg —
+  // fine while you're setting the agent up, but this script also runs on
+  // checkout.html and pay.html, the two pages where money changes hands, so
+  // once a version is known to work, set it in js/config.js and the shop
+  // stops inheriting the vendor's latest release automatically. Only a
+  // plain version token (letters, digits, dots, hyphens) is accepted here —
+  // anything else is ignored rather than concatenated into the URL.
+  var PKG = '@elevenlabs/convai-widget-embed';
+  var rawVersion = cfg.version || '';
+  var safeVersion = /^[0-9A-Za-z.\-]+$/.test(rawVersion) ? rawVersion : '';
+  var WIDGET_SRC = 'https://unpkg.com/' + PKG + (safeVersion ? '@' + safeVersion : '');
   var loaded = false;
 
   function mount() {
@@ -35,9 +46,11 @@
     s.async = true;
     s.type = 'text/javascript';
     s.onerror = function () {
-      // The vendor is unreachable or blocked. Take the element back
-      // out so there is no dead furniture on the page.
+      // The vendor is unreachable or blocked. Take both the element and
+      // the failed script tag back out so there is no dead furniture left
+      // in the page.
       if (el.parentNode) el.parentNode.removeChild(el);
+      if (s.parentNode) s.parentNode.removeChild(s);
     };
     document.head.appendChild(s);
   }
