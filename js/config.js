@@ -68,6 +68,24 @@ window.ENL_ANALYTICS = {
   websiteId: ''                       // Umami only
 };
 
+/* ------------------------------------------------------------
+   AI CHAT  (off until you fill this in)
+   The assistant that answers product and policy questions, and
+   hands the conversation to a person when it cannot.
+
+     agentId — the PUBLIC agent id from the ElevenLabs dashboard.
+               Public is the right word: it is visible in the page
+               source by design. The API key and the tool secrets
+               are server-side only and never appear here.
+
+   Leave agentId empty and nothing loads at all — no script tag,
+   no bubble, no requests — and the site behaves exactly as it
+   did before the feature existed.
+
+     window.ENL_CHAT = { agentId: 'agent_xxxxxxxxxxxx' };
+   ------------------------------------------------------------ */
+window.ENL_CHAT = { agentId: '' };
+
 (function () {
   var PROD_API_BASE = 'https://evernova-api.onrender.com';   // ← your Render backend
 
