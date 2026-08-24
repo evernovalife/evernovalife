@@ -3304,3 +3304,27 @@ body.adminalert-open { overflow: hidden; }
   .sup-bar-items { margin-left: 0; flex-basis: 100%; white-space: normal; }
 }
 @media (prefers-reduced-motion: reduce) { .sup-attach { transition: none; } }
+
+/* ---- guest conversation page (inbox.html) ---- */
+.inbox-wrap { max-width: 720px; }
+.inbox-title { margin-bottom: 4px; }
+.inbox-sub { color: var(--dark-text-muted); margin-bottom: 24px; }
+.inbox-thread { display: flex; flex-direction: column; gap: 14px; margin-bottom: 20px; }
+.inbox-msg {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.inbox-msg.is-mine { border-color: rgba(124, 58, 237, 0.35); }
+.inbox-msg-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  gap: 12px; margin-bottom: 6px; font-size: 0.85rem;
+}
+.inbox-who { font-weight: 600; }
+.inbox-msg-head time { color: var(--dark-text-muted); }
+.inbox-msg-body { margin: 0; line-height: 1.55; overflow-wrap: anywhere; }
+.inbox-composer { display: flex; flex-direction: column; gap: 10px; }
+.inbox-composer textarea { width: 100%; resize: vertical; }
+.inbox-composer button { align-self: flex-end; }
+.inbox-closed { color: var(--dark-text-muted); }

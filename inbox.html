@@ -4,19 +4,19 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="robots" content="noindex, nofollow">
-  <title>Sign In — Ever Nova Life</title>
-  <meta name="description" content="Sign in to your Ever Nova Life account to track orders, manage addresses and access your research peptide order history.">
-  <link rel="canonical" href="https://evernovalife.com/login.html">
+  <title>Your conversation — Ever Nova Life</title>
+  <meta name="description" content="Read our reply and write back — no account needed.">
+  <link rel="canonical" href="https://evernovalife.com/support.html">
   <meta name="theme-color" content="#07040f">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Ever Nova Life">
-  <meta property="og:title" content="Sign In — Ever Nova Life">
-  <meta property="og:description" content="Sign in to your Ever Nova Life account to track orders, manage addresses and access your research peptide order history.">
-  <meta property="og:url" content="https://evernovalife.com/login.html">
+  <meta property="og:title" content="Report a Problem — Ever Nova Life">
+  <meta property="og:description" content="Read our reply and write back — no account needed.">
+  <meta property="og:url" content="https://evernovalife.com/support.html">
   <meta property="og:image" content="https://evernovalife.com/og-image.svg">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="Sign In — Ever Nova Life">
-  <meta name="twitter:description" content="Sign in to your Ever Nova Life account to track orders, manage addresses and access your research peptide order history.">
+  <meta name="twitter:title" content="Report a Problem — Ever Nova Life">
+  <meta name="twitter:description" content="Read our reply and write back — no account needed.">
   <meta name="twitter:image" content="https://evernovalife.com/og-image.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -72,51 +72,30 @@
   </header>
 
   <main id="main">
+    <section class="section">
+      <div class="container inbox-wrap">
+        <h1 class="inbox-title" id="inboxTitle">Your conversation</h1>
+        <p class="inbox-sub" id="inboxSub">Loading…</p>
 
-  <!-- ===== SEARCH OVERLAY ===== -->
-  <div class="search-overlay" id="searchOverlay">
-    <form class="search-box">
-      <input type="search" placeholder="Search peptides…" aria-label="Search">
-      <button class="btn btn-primary" type="submit">Search</button>
-    </form>
-  </div>
+        <div class="inbox-thread" id="inboxThread" aria-live="polite"></div>
 
-  <section class="section">
-    <div class="container">
-      <div class="auth-wrap">
-        <div class="auth-card glass">
-          <h1>Welcome <span class="gradient-text">Back</span></h1>
-          <p class="sub">Sign in to your Ever Nova Life account</p>
+        <form class="inbox-composer" id="inboxComposer" hidden>
+          <label class="sr-only" for="inboxBody">Your reply</label>
+          <textarea id="inboxBody" rows="3" maxlength="4000" placeholder="Write a reply…" required></textarea>
+          <button class="btn btn-primary" type="submit" id="inboxSend">Send</button>
+        </form>
 
-          <form id="loginForm" novalidate>
-            <div class="form-field">
-              <label for="loginEmail">Email</label>
-              <input type="email" id="loginEmail" name="email" autocomplete="username email" placeholder="you@lab.com" required>
-            </div>
-            <div class="form-field">
-              <label for="loginPassword">Password</label>
-              <input type="password" id="loginPassword" name="password" autocomplete="current-password" placeholder="••••••••" required>
-            </div>
-            <div class="form-row-between">
-              <label class="form-check">
-                <input type="checkbox" name="remember">
-                <span>Remember me</span>
-              </label>
-              <a href="forgot-password.html">Forgot password?</a>
-            </div>
-            <button class="btn btn-primary btn-block" type="submit">Sign In</button>
-            <div class="form-msg"></div>
-          </form>
+        <p class="inbox-closed" id="inboxClosed" hidden>
+          This conversation is closed. Email
+          <a href="mailto:support@evernovalife.com">support@evernovalife.com</a> to pick it back up.
+        </p>
 
-          <p class="auth-foot">Don't have an account? <a href="register.html">Create one</a></p>
-        </div>
+        <p class="form-msg" id="inboxMsg" role="status"></p>
       </div>
-    </div>
-  </section>
-
-  <!-- ===== FOOTER ===== -->
+    </section>
   </main>
 
+  <!-- ===== FOOTER ===== -->
   <footer class="site-footer">
     <div class="container footer-grid">
       <div class="footer-brand">
@@ -179,6 +158,6 @@
   <script src="js/live.js?v=87"></script>
   <script src="js/admin-alert.js?v=87"></script>
   <script src="js/customer-alert.js?v=87"></script>
-  <script src="js/auth.js?v=87"></script>
+  <script src="js/inbox.js?v=87"></script>
 </body>
 </html>
