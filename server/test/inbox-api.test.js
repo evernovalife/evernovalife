@@ -159,6 +159,15 @@ test('closing a thread stops the guest writing to it', async () => {
   assert.strictEqual(res.status, 409);
 });
 
+test("an admin's read is reflected in the SAME response, not the next one", async () => {
+  const t = seed('same-response read stamp');
+  const token = await adminToken();
+  const res = await fetch(`${base}/api/admin/inbox/${t.id}`, { headers: { Authorization: `Bearer ${token}` } });
+  assert.strictEqual(res.status, 200);
+  const seen = (await res.json()).thread;
+  assert.ok(seen.adminReadAt, 'adminReadAt should already be stamped in this response, not a stale pre-mark copy');
+});
+
 test('the admin list carries the unread flag', async () => {
   const t = seed('unread flag', 'guest@example.com');
   const token = await adminToken();

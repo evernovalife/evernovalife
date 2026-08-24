@@ -2308,6 +2308,14 @@ const inboxPostLimiter = ratelimit.limit({
   name: 'inbox-post',
   windowMs: 10 * 60 * 1000,
   max: 20,
+  // No `key` would fall back to the client address, and this server does not
+  // set `trust proxy` — behind Render every guest shares one address, so one
+  // noisy sender would lock every other guest out of every other thread.
+  // Per-thread buckets keep that blast radius to the thread being abused.
+  // req.params.id is attacker-controlled here (the limiter runs before token
+  // verification), which is fine: it only ever subdivides a bucket, never
+  // widens one.
+  key: (req) => ratelimit.clientKey(req) + ':' + String((req.params && req.params.id) || ''),
   message: 'Too many messages from this connection. Wait a few minutes and try again.'
 });
 
@@ -2331,8 +2339,11 @@ const INBOX_NOT_FOUND = { error: 'That conversation link is not valid.' };
 app.get('/api/inbox/:id', (req, res) => {
   const t = threadFromToken(req);
   if (!t) return res.status(404).json(INBOX_NOT_FOUND);
-  inbox.markRead(t.id, 'customer');
-  res.json({ success: true, thread: inbox.forGuest(t) });
+  // markRead() re-reads the file, so it returns a fresh object with the
+  // stamp on it — respond with THAT, not the pre-mark `t`, or the caller
+  // sees a stale customerReadAt in the same response that just set it.
+  const updated = inbox.markRead(t.id, 'customer') || t;
+  res.json({ success: true, thread: inbox.forGuest(updated) });
 });
 
 app.post('/api/inbox/:id/messages', inboxPostLimiter, (req, res) => {
@@ -2355,8 +2366,10 @@ app.get('/api/admin/inbox', requireAdmin, (req, res) => {
 app.get('/api/admin/inbox/:id', requireAdmin, (req, res) => {
   const t = inbox.get(req.params.id);
   if (!t) return res.status(404).json({ error: 'No conversation with that reference.' });
-  inbox.markRead(t.id, 'admin');
-  res.json({ success: true, thread: t, link: inboxLink(t) });
+  // Same reasoning as the guest route above: respond with markRead()'s own
+  // return value, not the pre-mark `t`, so adminReadAt isn't stale.
+  const updated = inbox.markRead(t.id, 'admin') || t;
+  res.json({ success: true, thread: updated, link: inboxLink(updated) });
 });
 
 app.post('/api/admin/inbox/:id/messages', requireAdmin, (req, res) => {
