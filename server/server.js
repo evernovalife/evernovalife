@@ -2737,17 +2737,23 @@ async function sendInboxReplyAlert(t) {
 function buildInboxOpenedMail(t) {
   const link = inboxLink(t);
   const who = t.name || 'there';
+  /* Fixed Subject, reference only. `t.subject` is free text the chat agent
+     relayed from a visitor, to an address nothing has verified — an LLM is
+     trivially talked into calling a tool with arguments of the caller's
+     choosing, so putting that text in a Subject line (or in the body) turns
+     this branded acknowledgement into a phishing carrier aimed at anyone.
+     The subject IS still shown, on the thread itself, behind the signed
+     token — where only the real recipient can reach it. Same reason the
+     `who` below is escaped rather than trusted. */
   const subject = `We've got your question (${t.id})`;
   const text = `Hi ${who},\n\n` +
     `Your question has reached us — reference ${t.id}.\n\n` +
-    `What it was about: ${t.subject}\n\n` +
     `A person will reply. You'll get an email when there's an answer, and you can read the conversation here at any time:\n${link}\n\n` +
     `Nothing else is needed from you for now.\n\n` +
     `— The Ever Nova Life team`;
   const html = `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;color:#1f2937">
     <h2 style="color:#6d28d9;margin-bottom:4px">We've got your question</h2>
     <p>Hi ${escapeHtmlSrv(who)}, your question has reached us — reference <strong>${escapeHtmlSrv(t.id)}</strong>.</p>
-    <p><strong>What it was about:</strong> ${escapeHtmlSrv(t.subject)}</p>
     <p>A person will reply. You'll get an email when there's an answer.</p>
     <p><a href="${link}" style="display:inline-block;background:#6d28d9;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600">See the conversation</a></p>
     <p style="color:#9ca3af;font-size:12px;margin-top:24px">Nothing else is needed from you for now.</p>

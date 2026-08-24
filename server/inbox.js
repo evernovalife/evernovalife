@@ -78,6 +78,13 @@ function cleanBody(body) {
   if (s.length > MAX_BODY) throw err(`That message is too long — keep it under ${MAX_BODY} characters.`);
   return s;
 }
+/* The `\s+ → ' '` collapse is LOAD-BEARING, not cosmetic. `subject` and
+   `name` arrive from the chat agent — free text a visitor talked an LLM
+   into relaying — and end up in emails the shop sends. Collapsing runs of
+   whitespace is what destroys a CR or LF before it can reach a mail header,
+   so a "preserve the line breaks the visitor typed" change here would
+   reopen header injection. Anything that needs multi-line text must go
+   through cleanBody(), which never reaches a header. */
 function cleanShort(value, max) {
   return String(value == null ? '' : value).trim().replace(/\s+/g, ' ').slice(0, max);
 }
