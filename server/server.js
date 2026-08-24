@@ -33,6 +33,7 @@ const outreach = require('./outreach.js');
 const ratelimit = require('./ratelimit.js');
 const disputes = require('./disputes.js');
 const inbox = require('./inbox.js');
+const agentKnowledge = require('./agent-knowledge.js');
 
 const app = express();
 const PORT = process.env.PORT || 4242;
@@ -2429,6 +2430,85 @@ app.post('/api/admin/inbox/:id/close', requireAdmin, (req, res) => {
   } catch (e) {
     inboxError(res, e, 'close');
   }
+});
+
+/* ============================================================
+   WHAT THE CHAT AGENT KNOWS  (admin only)
+   The console's Knowledge tab. Everything here is a thin pass to
+   agent-knowledge.js, which talks to ElevenLabs on the server's
+   behalf — ELEVENLABS_API_KEY can rewrite every agent on the
+   account, so it must never reach a browser.
+
+   Files arrive base64 in a JSON body, the same way dispute photos
+   and product images already do. That keeps the 12mb express.json
+   ceiling as the one size limit on this server and spares us a
+   multipart parser to maintain.
+   ============================================================ */
+function agentKbError(res, e, what) {
+  if (!e || !e.status) {
+    console.error(`[agent-kb] ${what} failed:`, (e && e.message) || e);
+    return res.status(500).json({ error: 'Something went wrong on our side. Try again.' });
+  }
+  res.status(e.status).json({ error: e.message });
+}
+
+app.get('/api/admin/agent/knowledge', requireAdmin, async (req, res) => {
+  try {
+    res.json({
+      success: true,
+      configured: agentKnowledge.configured(),
+      documents: agentKnowledge.configured() ? await agentKnowledge.list() : []
+    });
+  } catch (e) { agentKbError(res, e, 'list'); }
+});
+
+app.post('/api/admin/agent/knowledge/text', requireAdmin, async (req, res) => {
+  try {
+    const b = req.body || {};
+    res.json({ success: true, document: await agentKnowledge.addText(b.name, b.text) });
+  } catch (e) { agentKbError(res, e, 'add text'); }
+});
+
+app.post('/api/admin/agent/knowledge/url', requireAdmin, async (req, res) => {
+  try {
+    const b = req.body || {};
+    // A bare filename is the common case — "returns.html" rather than the
+    // whole address — so complete it against our own site.
+    const raw = String(b.url || '').trim();
+    const url = /^https?:\/\//i.test(raw) ? raw : `${SITE()}/${raw.replace(/^\/+/, '')}`;
+    res.json({ success: true, document: await agentKnowledge.addUrl(url, b.name || raw) });
+  } catch (e) { agentKbError(res, e, 'add page'); }
+});
+
+app.post('/api/admin/agent/knowledge/file', requireAdmin, async (req, res) => {
+  try {
+    const b = req.body || {};
+    res.json({ success: true, document: await agentKnowledge.addFile(b.name, b.base64) });
+  } catch (e) { agentKbError(res, e, 'add file'); }
+});
+
+app.post('/api/admin/agent/knowledge/:id/refresh', requireAdmin, async (req, res) => {
+  try {
+    res.json({ success: true, document: await agentKnowledge.refresh(req.params.id) });
+  } catch (e) { agentKbError(res, e, 'refresh'); }
+});
+
+app.delete('/api/admin/agent/knowledge/:id', requireAdmin, async (req, res) => {
+  try {
+    res.json({ success: true, removed: await agentKnowledge.remove(req.params.id) });
+  } catch (e) { agentKbError(res, e, 'remove'); }
+});
+
+/* Rebuild the catalogue and delivery documents from what the shop is
+   selling right now. This is the button to press after a price change. */
+app.post('/api/admin/agent/knowledge/sync', requireAdmin, async (req, res) => {
+  try {
+    const out = await agentKnowledge.syncGenerated({
+      products: productStore.listProducts().filter(productStore.isPublished),
+      shipping: { methods: shippingRates.listAll() }
+    });
+    res.json({ success: true, ...out });
+  } catch (e) { agentKbError(res, e, 'sync'); }
 });
 
 /* ============================================================

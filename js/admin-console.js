@@ -66,6 +66,7 @@
     disputeOutcomes: [],   // how a report can be closed, from the list response
     disputeTab: 'awaiting_us',
     inbox: null,           // inbox threads — questions from people with no account
+    knowledge: null,       // documents the chat agent answers from
     inboxId: '',           // which thread the right pane is showing
     inboxThread: null,     // the full thread, loaded when one is opened
     storage: null,         // dispute photo usage against the ceiling (includes alertPct, from the server)
@@ -361,6 +362,7 @@
     autoship: ['Auto-Ship', 'Repeating orders and their next invoice'],
     disputes: ['Disputes', 'Problems customers have reported, and how they ended'],
     inbox: ['Inbox', 'Questions from people without an account — mostly from the chat'],
+    knowledge: ['Knowledge', 'What the chat agent knows, and how to add to it'],
     customers: ['Customers', 'Everyone with an account']
   };
 
@@ -391,6 +393,7 @@
     else if (state.view === 'autoship') renderAutoship();
     else if (state.view === 'disputes') renderDisputes();
     else if (state.view === 'inbox') renderInbox();
+    else if (state.view === 'knowledge') renderKnowledge();
     else if (state.view === 'customers') renderCustomers();
     else renderDashboard();
 
@@ -2650,6 +2653,117 @@
      no outcome to pick), so there is less here.
      ============================================================ */
 
+  /* ---- the agent's knowledge base ----
+     Loaded on demand rather than in loadAll(): it is a round trip to
+     ElevenLabs, and every other view would pay for it on every refresh
+     without ever showing it. */
+  var KB = window.AdminKnowledge;
+
+  function renderKnowledge() {
+    if (!KB) {
+      body.innerHTML = '<div class="adm-card"><p class="adm-note" style="margin:0">' +
+        'The knowledge view did not load — check that <code>js/admin-knowledge.js</code> is uploaded.</p></div>';
+      return;
+    }
+    if (state.knowledge === null && !state.knowledgeLoading) loadKnowledge();
+    KB.render(state, body);
+  }
+
+  async function loadKnowledge() {
+    state.knowledgeLoading = true;
+    try {
+      state.knowledge = await A.api('/api/admin/agent/knowledge');
+    } catch (e) {
+      // configured:false is the honest shape for "the server cannot reach
+      // it", and the view already explains that case properly.
+      state.knowledge = { configured: false, documents: [], error: e.message };
+      A.toast(e.message, 'error');
+    } finally {
+      state.knowledgeLoading = false;
+      if (state.view === 'knowledge') render();
+    }
+  }
+
+  async function kbAction(btn, work, done) {
+    var label = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Working…';
+    try {
+      var out = await work();
+      A.toast(done(out), 'success');
+      state.knowledge = null;
+      await loadKnowledge();
+    } catch (e) {
+      A.toast(e.message, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = label;
+    }
+  }
+
+  function kbAddText(btn) {
+    var name = (document.getElementById('kbNoteName') || {}).value || '';
+    var text = (document.getElementById('kbNoteText') || {}).value || '';
+    if (!text.trim()) { A.toast('Write something first.', 'error'); return; }
+    kbAction(btn,
+      function () { return A.api('/api/admin/agent/knowledge/text', { method: 'POST', body: { name: name, text: text } }); },
+      function (d) { return 'Added "' + d.document.name + '".'; });
+  }
+
+  function kbAddUrl(btn) {
+    var page = (document.getElementById('kbPage') || {}).value || '';
+    if (!page.trim()) { A.toast('Which page?', 'error'); return; }
+    kbAction(btn,
+      function () { return A.api('/api/admin/agent/knowledge/url', { method: 'POST', body: { url: page.trim() } }); },
+      function (d) { return 'Added "' + d.document.name + '".'; });
+  }
+
+  /* Read to base64 in the browser and post as JSON — the same path dispute
+     photos and product images take, so this server needs no multipart
+     parser. The 10MB guard is ours: express.json stops at 12mb and base64
+     inflates by a third, so a 10MB file is already close to the ceiling. */
+  function kbAddFile(btn) {
+    var input = document.getElementById('kbFile');
+    var file = input && input.files && input.files[0];
+    if (!file) { A.toast('Pick a file first.', 'error'); return; }
+    if (file.size > 10 * 1024 * 1024) {
+      A.toast('That file is over 10MB — too big to upload here.', 'error');
+      return;
+    }
+    var reader = new FileReader();
+    reader.onerror = function () { A.toast('That file could not be read.', 'error'); };
+    reader.onload = function () {
+      var base64 = String(reader.result || '').split(',')[1] || '';
+      kbAction(btn,
+        function () {
+          return A.api('/api/admin/agent/knowledge/file', {
+            method: 'POST', body: { name: file.name, base64: base64 }
+          });
+        },
+        function (d) { return 'Uploaded ' + d.document.name + '.'; });
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function kbRefresh(btn, id, name) {
+    kbAction(btn,
+      function () { return A.api('/api/admin/agent/knowledge/' + encodeURIComponent(id) + '/refresh', { method: 'POST', body: {} }); },
+      function () { return 'Re-read ' + name + ' from the site.'; });
+  }
+
+  function kbRemove(btn, id, name) {
+    if (!window.confirm('Remove "' + name + '"? The agent stops answering from it.')) return;
+    kbAction(btn,
+      function () { return A.api('/api/admin/agent/knowledge/' + encodeURIComponent(id), { method: 'DELETE' }); },
+      function () { return 'Removed ' + name + '.'; });
+  }
+
+  function kbSync(btn) {
+    kbAction(btn,
+      function () { return A.api('/api/admin/agent/knowledge/sync', { method: 'POST', body: {} }); },
+      function (d) { return 'Catalogue and delivery rebuilt from today\'s data (' + d.stamp + ').'; });
+  }
+
   var IBX = window.AdminInbox;
 
   function renderInbox() {
@@ -2862,6 +2976,12 @@
       else if (t.hasAttribute('data-ibx-open')) openInboxThread(t.getAttribute('data-ibx-open'));
       else if (t.classList.contains('act-ibx-reply')) replyToInboxThread(t.getAttribute('data-id'), t);
       else if (t.classList.contains('act-ibx-close')) closeInboxThread(t.getAttribute('data-id'), t);
+      else if (t.classList.contains('act-kb-file')) kbAddFile(t);
+      else if (t.classList.contains('act-kb-text')) kbAddText(t);
+      else if (t.classList.contains('act-kb-url')) kbAddUrl(t);
+      else if (t.classList.contains('act-kb-sync')) kbSync(t);
+      else if (t.classList.contains('act-kb-refresh')) kbRefresh(t, t.getAttribute('data-id'), t.getAttribute('data-name'));
+      else if (t.classList.contains('act-kb-remove')) kbRemove(t, t.getAttribute('data-id'), t.getAttribute('data-name'));
     });
 
     /* The designer previews live: every keystroke redraws the label from the

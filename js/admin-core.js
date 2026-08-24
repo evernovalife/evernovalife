@@ -146,7 +146,11 @@
     print: '<path d="M6 9V3h12v6"/><path d="M6 18H4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v7H6z"/>',
     bitcoin: '<path d="M8 6h6a3 3 0 0 1 0 6H8z"/><path d="M8 12h7a3 3 0 0 1 0 6H8z"/><path d="M8 6v12"/><path d="M11 3v3"/><path d="M11 18v3"/><path d="M14.5 3v3"/><path d="M14.5 18v3"/>',
     external: '<path d="M14 3h7v7"/><path d="M21 3 10 14"/><path d="M20 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5"/>',
-    chat: '<path d="M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z"/>'
+    chat: '<path d="M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z"/>',
+    // An open book, for the Knowledge view — the spine down the middle and
+    // a page falling away either side, so it reads at 20px in the rail.
+    book: '<path d="M12 6.5V21"/><path d="M12 6.5C10.5 5 8.5 4.2 6 4.2H3v13.3h3c2.5 0 4.5.8 6 2.3"/>' +
+          '<path d="M12 6.5C13.5 5 15.5 4.2 18 4.2h3v13.3h-3c-2.5 0-4.5.8-6 2.3"/>'
   };
   function icon(name, cls) {
     var body = ICONS[name];
@@ -232,6 +236,7 @@
     { key: 'autoship', href: 'admin.html#autoship', label: 'Auto-Ship', icon: 'repeat' },
     { key: 'disputes', href: 'admin.html#disputes', label: 'Disputes', icon: 'chat', tally: 'navDisputes' },
     { key: 'inbox', href: 'admin.html#inbox', label: 'Inbox', icon: 'chat', tally: 'navInbox' },
+    { key: 'knowledge', href: 'admin.html#knowledge', label: 'Knowledge', icon: 'book' },
     { key: 'customers', href: 'admin.html#customers', label: 'Customers', icon: 'users' },
     { key: 'products', href: 'admin-products.html', label: 'Products', icon: 'box' },
     { key: 'labels', href: 'labels.html', label: 'Vial labels', icon: 'print' }

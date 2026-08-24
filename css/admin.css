@@ -510,3 +510,62 @@ body.adm {
      height the page no longer has. */
   .dsp-pane > .dsp-stream { flex: 0 0 auto; max-height: 60vh; }
 }
+
+/* ---- Knowledge: what the chat agent answers from ---- */
+.adm-kb-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+.adm-kb-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 12px; border: 1px solid var(--adm-line); border-radius: 10px;
+  background: var(--adm-surface-2);
+}
+.adm-kb-main { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.adm-kb-name { font-weight: 600; overflow-wrap: anywhere; }
+.adm-kb-type {
+  font-size: .72rem; text-transform: uppercase; letter-spacing: .06em;
+  padding: 2px 7px; border-radius: 999px;
+  border: 1px solid var(--adm-line); color: var(--dark-text-muted);
+}
+.adm-kb-auto { font-size: .78rem; color: var(--dark-text-muted); }
+.adm-kb-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.adm-kb-add { padding: 14px 0; border-top: 1px solid var(--adm-line); }
+.adm-kb-add:first-of-type { border-top: 0; padding-top: 4px; }
+.adm-kb-add label { display: block; font-weight: 600; margin-bottom: 8px; }
+.adm-kb-add input[type="text"], .adm-kb-add textarea {
+  width: 100%; margin-bottom: 8px; font-family: inherit; font-size: .95rem;
+  padding: .6rem .8rem; border-radius: 8px;
+  border: 1px solid var(--adm-line); background: var(--adm-surface); color: var(--dark-text);
+}
+.adm-kb-add textarea { resize: vertical; }
+.adm-kb-add input[type="text"]:focus, .adm-kb-add textarea:focus {
+  outline: none; border-color: var(--accent-purple);
+}
+.adm-kb-inline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.adm-kb-inline input[type="text"] { flex: 1 1 220px; margin-bottom: 0; }
+.adm-kb-inline input[type="file"] { flex: 1 1 220px; color: var(--dark-text-muted); font-size: .9rem; }
+@media (max-width: 640px) {
+  .adm-kb-row { flex-direction: column; align-items: flex-start; }
+  .adm-kb-actions { width: 100%; }
+}
+
+/* The Knowledge card's head carries an action; push it to the far edge
+   rather than letting it hug the heading. Scoped to this card so the other
+   heads, whose trailing element is a hint that reads better beside the
+   title, are untouched. */
+.adm-card-head .act-kb-sync { margin-left: auto; }
+
+/* The native file button ships grey-on-grey and reads as somebody else's
+   software dropped into a dark panel. ::file-selector-button is the only
+   handle on it, and it needs the ghost-button treatment by hand — it does
+   not inherit from .btn. */
+.adm-kb-inline input[type="file"]::file-selector-button {
+  font: inherit; font-size: 0.85rem; font-weight: 600;
+  margin-right: 0.7rem; padding: 0.45rem 0.9rem;
+  border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--adm-line);
+  background: var(--adm-surface-2); color: var(--dark-text);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.adm-kb-inline input[type="file"]::file-selector-button:hover {
+  border-color: var(--accent-purple);
+  background: rgba(168, 85, 247, 0.12);
+}
