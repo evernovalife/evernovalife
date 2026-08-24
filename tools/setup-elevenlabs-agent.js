@@ -202,9 +202,61 @@ function toolConfigs() {
   ];
 }
 
+/* ---- how the bubble looks ----
+   Straight off the printed vial label, which is where the whole site's
+   palette comes from: near-black substrate, gold hairline, violet for the
+   thing you press. Left at the vendor's default the widget arrives white
+   and blue, which on this site reads as somebody else's software bolted
+   onto the corner of the page.
+
+   `variant: 'expandable'` keeps it a small bubble until it is opened.
+   The copy is deliberately plain — "Questions?" rather than anything
+   implying a person is waiting to type back. */
+const WIDGET = {
+  variant: 'expandable',
+  placement: 'bottom-right',
+  bg_color: '#120a22',            // --dark-surface, one step up from the page
+  text_color: '#ececf5',          // --dark-text
+  btn_color: '#7c3aed',           // the violet actions carry site-wide
+  btn_text_color: '#ffffff',
+  border_color: 'rgba(214, 182, 86, 0.34)',   // --glass-border-strong, the gold hairline
+  focus_color: '#a855f7',         // --accent-purple
+  border_radius: 16,
+  action_text: 'Questions?',
+  start_call_text: 'Ask a question',
+  end_call_text: 'End chat',
+  expand_text: 'Open chat',
+  avatar: { type: 'orb', color_1: '#7c3aed', color_2: '#d4af37' }
+};
+
+/* Apply the look to an agent that already exists, without touching its
+   prompt, tools or knowledge base. Used by --restyle. */
+async function restyle(agentId) {
+  process.stdout.write('  Restyling ' + agentId + '… ');
+  await call('PATCH', '/v1/convai/agents/' + encodeURIComponent(agentId), {
+    platform_settings: { widget: WIDGET }
+  });
+  console.log('ok');
+  console.log('');
+  console.log('  The widget config lives on the agent, not in your site files —');
+  console.log('  so this takes effect on reload. Nothing needs re-uploading.');
+  console.log('');
+}
+
 async function main() {
   if (!process.env.ELEVENLABS_API_KEY) {
     die('ELEVENLABS_API_KEY is not set.\n  Put it in server/.env — that file is git-ignored:\n\n    ELEVENLABS_API_KEY=sk_...');
+  }
+
+  /* --restyle <agent_id>: repaint an existing agent and stop. Wanted
+     because the look is the one thing you iterate on after everything
+     else is working, and rebuilding the agent to change a colour would
+     mean re-uploading the knowledge base for nothing. */
+  const restyleId = arg('restyle', '');
+  if (restyleId) {
+    console.log('');
+    await restyle(restyleId);
+    return;
   }
   if (!process.env.ELEVENLABS_AGENT_SECRET) {
     die('ELEVENLABS_AGENT_SECRET is not set.\n  Generate one and put it in server/.env AND in Render\'s Environment tab:\n\n    node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
@@ -278,7 +330,8 @@ async function main() {
         language: 'en'
       },
       conversation: { text_only: true }
-    }
+    },
+    platform_settings: { widget: WIDGET }
   });
   const agentId = agent && (agent.agent_id || agent.id);
   if (!agentId) die(`No agent id came back. Response: ${JSON.stringify(agent)}`);
