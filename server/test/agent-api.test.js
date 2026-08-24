@@ -23,6 +23,7 @@ process.env.ELEVENLABS_WEBHOOK_SECRET = 'webhook-hmac-secret';
 
 const app = require('../server.js');
 const inbox = require('../inbox.js');
+const productStore = require('../products.js');
 
 let server, base;
 const AGENT = { 'Content-Type': 'application/json', 'x-agent-secret': 'agent-shared-secret' };
@@ -48,7 +49,9 @@ test('product lookup returns live catalog rows, capped at five', async () => {
   assert.strictEqual(res.status, 200);
   const data = await res.json();
   assert.ok(Array.isArray(data.products));
-  assert.ok(data.products.length <= 5);
+  // The seeded catalog ships 9 products, all published — an unfiltered read
+  // returns more than 5, so this is exactly 5 only if the cap actually ran.
+  assert.strictEqual(data.products.length, 5);
   if (data.products.length) {
     const p = data.products[0];
     assert.strictEqual(typeof p.name, 'string');
@@ -57,6 +60,22 @@ test('product lookup returns live catalog rows, capped at five', async () => {
     // Nothing about who bought what may cross this boundary.
     assert.strictEqual(p.orders, undefined);
   }
+});
+
+test('an unpublished product never reaches the agent', async () => {
+  // published:true is the visible one; published:false is a draft/pulled
+  // listing — "not on the site at all" per products.js — and must not be
+  // quoted a price or handed a live product.html link by the chat agent.
+  const visible = productStore.addProduct({ name: 'Agent Visible Peptide', price: 42, published: true });
+  const hidden = productStore.addProduct({ name: 'Agent Hidden Peptide', price: 42, published: false });
+
+  const res = await fetch(`${base}/api/agent/product?q=Agent`, { headers: AGENT });
+  assert.strictEqual(res.status, 200);
+  const data = await res.json();
+  const names = data.products.map(p => p.name);
+  assert.ok(names.includes(visible.name), 'the published product should be found');
+  assert.ok(!names.includes(hidden.name), 'the unpublished product must not be found');
+  assert.ok(!data.products.some(p => p.id === hidden.id), 'the unpublished product id must not appear at all');
 });
 
 test('escalate needs the shared secret', async () => {
@@ -103,6 +122,19 @@ test('escalate refuses a bad address with a sentence the agent can say', async (
   assert.ok(data.error.length > 0);
 });
 
+test('requireAgent rejects a byte-length mismatch with 401, not a thrown 500', async () => {
+  // 'agent-shared-secret' is 20 UTF-16 code units. This probe is also 20 code
+  // units (each 'é' is one code unit) but 40 UTF-8 bytes — same JS .length,
+  // different Buffer length. A guard comparing string .length instead of
+  // buffer byte length would let this reach crypto.timingSafeEqual, which
+  // throws on a buffer-length mismatch rather than returning false.
+  const probe = 'é'.repeat('agent-shared-secret'.length);
+  assert.strictEqual(probe.length, 'agent-shared-secret'.length);
+  assert.notStrictEqual(Buffer.byteLength(probe), Buffer.byteLength('agent-shared-secret'));
+  const res = await fetch(`${base}/api/agent/product?q=`, { headers: { 'x-agent-secret': probe } });
+  assert.strictEqual(res.status, 401);
+});
+
 function signed(bodyString, secret, timestamp) {
   const t = timestamp || Math.floor(Date.now() / 1000);
   const mac = crypto.createHmac('sha256', secret).update(`${t}.${bodyString}`).digest('hex');
@@ -133,6 +165,20 @@ test('a tampered transcript is rejected and never stored', async () => {
   const dir = path.join(TMP_DATA, 'agent-transcripts');
   const files = fs.existsSync(dir) ? fs.readdirSync(dir) : [];
   assert.ok(!files.some(f => f.includes('conv_evil')), 'a tampered body must never reach disk');
+});
+
+test('a transcript with a stale timestamp is rejected and never stored', async () => {
+  const body = JSON.stringify({ conversation_id: 'conv_stale', transcript: [] });
+  const twoHoursAgo = Math.floor(Date.now() / 1000) - (2 * 60 * 60);
+  const res = await fetch(`${base}/api/agent/transcript`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'elevenlabs-signature': signed(body, 'webhook-hmac-secret', twoHoursAgo) },
+    body
+  });
+  assert.strictEqual(res.status, 401);
+  const dir = path.join(TMP_DATA, 'agent-transcripts');
+  const files = fs.existsSync(dir) ? fs.readdirSync(dir) : [];
+  assert.ok(!files.some(f => f.includes('conv_stale')), 'a stale-timestamp body must never reach disk');
 });
 
 test('a transcript with no signature at all is rejected', async () => {

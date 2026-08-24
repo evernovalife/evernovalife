@@ -2405,45 +2405,63 @@ app.post('/api/admin/inbox/:id/close', requireAdmin, (req, res) => {
 const AGENT_SECRET = process.env.ELEVENLABS_AGENT_SECRET || '';
 const AGENT_WEBHOOK_SECRET = process.env.ELEVENLABS_WEBHOOK_SECRET || '';
 
+/* Unkeyed on purpose — every caller here is ElevenLabs' own infrastructure,
+   never the visitor's browser, so the request always arrives from
+   ElevenLabs' egress address no matter what this server's proxy trust is
+   set to (and that setting is out of scope for this route: it's global,
+   and getting the hop count wrong would let every OTHER limiter on this
+   server be evaded via a spoofed X-Forwarded-For). Per-caller keying is
+   not achievable for a server-to-server integration like this one, so the
+   bucket is deliberately one shared budget for all agent traffic — sized
+   for the whole feature (a live call doing several lookups plus escalate
+   attempts across many concurrent conversations), not for one visitor. */
 const agentLimiter = ratelimit.limit({
   name: 'agent-tool',
   windowMs: 60 * 1000,
-  max: 60,
+  max: 300,
   message: 'Too many lookups. Tell the visitor to try again in a minute.'
 });
 
 /* Fails closed: no secret configured means no request gets through, ever —
-   not "open for testing", not "open until someone notices". `given.length
-   !== AGENT_SECRET.length` is checked BEFORE timingSafeEqual because that
-   function throws on a length mismatch rather than returning false, and an
-   absent header is the empty string, which still has a defined length. */
+   not "open for testing", not "open until someone notices". The length
+   check compares BYTE length (via Buffer), not JS string length, because
+   `timingSafeEqual` compares buffers — a non-ASCII secret has more bytes
+   than UTF-16 code units, and comparing `.length` on the strings would let
+   a same-code-unit-length probe reach `timingSafeEqual` with mismatched
+   buffer lengths, which throws (a 500) instead of failing with a 401. */
 function requireAgent(req, res, next) {
-  const given = String(req.get('x-agent-secret') || '');
-  if (!AGENT_SECRET || given.length !== AGENT_SECRET.length ||
-      !crypto.timingSafeEqual(Buffer.from(given), Buffer.from(AGENT_SECRET))) {
+  const given = Buffer.from(String(req.get('x-agent-secret') || ''));
+  const secret = Buffer.from(AGENT_SECRET);
+  if (!AGENT_SECRET || given.length !== secret.length ||
+      !crypto.timingSafeEqual(given, secret)) {
     return res.status(401).json({ error: 'Not authorised.' });
   }
   next();
 }
 
 /* What the agent may say about a product: the name, what it costs, and
-   whether we have it. `stockQty` absent means untracked, which the
-   catalog treats as available. */
+   whether we have it. Availability is `productStore.isAvailable()` — the
+   same function checkout uses — because `inStock` is its own admin switch
+   independent of `stockQty` (a product can be pulled from sale with stock
+   still on the shelf), and reporting stock alone would call a pulled
+   product available. */
 function agentProductView(p) {
-  const tracked = p.stockQty !== undefined && p.stockQty !== null && p.stockQty !== '';
   return {
     id: p.id,
     name: p.name,
     price: Number(p.price) || 0,
     currency: 'USD',
-    inStock: tracked ? Number(p.stockQty) > 0 : true,
+    inStock: productStore.isAvailable(p),
     url: `${SITE()}/product.html?id=${encodeURIComponent(p.id)}`
   };
 }
 
 app.get('/api/agent/product', requireAgent, agentLimiter, (req, res) => {
   const q = String((req.query && req.query.q) || '').trim().toLowerCase();
-  const all = productStore.listProducts();
+  // Unpublished = "not on the site at all" (a draft, a pulled lot, a
+  // retired SKU) — the agent is never an admin, so it gets exactly what an
+  // anonymous storefront visitor would see, same filter as GET /api/products.
+  const all = productStore.listProducts().filter(productStore.isPublished);
   const hits = q
     ? all.filter(p => String(p.name || '').toLowerCase().includes(q))
     : all;
@@ -2479,6 +2497,11 @@ app.post('/api/agent/escalate', requireAgent, agentLimiter, (req, res) => {
    written here as well. The signature is checked against the RAW body —
    `express.json({ verify })` at the top of this file keeps it on
    req.rawBody precisely so webhooks like this one can. */
+// A captured signature+body pair is otherwise valid forever, which turns a
+// single leaked webhook call into a permanent replay. Reject anything
+// outside this window, in either direction (a clock running fast counts too).
+const AGENT_SIGNATURE_MAX_AGE_SEC = 30 * 60;
+
 function verifyAgentSignature(rawBody, header) {
   if (!AGENT_WEBHOOK_SECRET || !header || !rawBody) return false;
   const parts = String(header).split(',').reduce((acc, piece) => {
@@ -2487,6 +2510,9 @@ function verifyAgentSignature(rawBody, header) {
     return acc;
   }, {});
   if (!parts.t || !parts.v0) return false;
+  const t = Number(parts.t);
+  if (!Number.isFinite(t)) return false;
+  if (Math.abs(Math.floor(Date.now() / 1000) - t) > AGENT_SIGNATURE_MAX_AGE_SEC) return false;
   const expected = crypto.createHmac('sha256', AGENT_WEBHOOK_SECRET)
     .update(`${parts.t}.${rawBody.toString('utf8')}`)
     .digest('hex');
