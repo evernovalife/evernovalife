@@ -637,10 +637,16 @@ trigger). An admin can also run it on demand from Run cleanup in the console
 
 A text-only ElevenLabs agent answers catalog and policy questions from the
 site's own copy and a live product lookup, and hands off to a person — into
-the same inbox a visitor reaches through the contact form — when it cannot
-help or is asked something it must refuse. Full setup (the system prompt,
-knowledge-base list, tool schemas, and go-live checklist) is in
-`docs/AI-CHAT.md`; this section is only the server side.
+the inbox behind `admin.html#inbox` — when it cannot help or is asked
+something it must refuse. Full setup (the system prompt, knowledge-base
+list, tool schemas, and go-live checklist) is in `docs/AI-CHAT.md`; this
+section is only the server side.
+
+That inbox is fed by chat escalations and by nothing else today.
+`contact.html` is still a `mailto:` form and was never wired to
+`/api/inbox`, so with the shipped default (`agentId` empty in `js/config.js`)
+the queue has no producers at all. Wiring the contact form into the same
+threads is a reasonable follow-on; it is deliberately not part of this.
 
 ```
 ElevenLabs agent

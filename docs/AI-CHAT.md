@@ -11,10 +11,17 @@ The bubble in the corner of the site is a text-only ElevenLabs agent. It
 answers questions from our own published pages and from a live catalog
 lookup, and when it cannot help — or is asked something it must refuse — it
 hands the conversation to a person. That handoff opens a thread in
-`admin.html#inbox`, the same queue a visitor reaches by using the site's
-contact form with no account. Nothing about the agent's design lets it look
-up an order, an account, or anyone's address; it only ever sees the catalog
-and the words the visitor types to it.
+`admin.html#inbox`. Nothing about the agent's design lets it look up an
+order, an account, or anyone's address; it only ever sees the catalog and the
+words the visitor types to it.
+
+**Who feeds that inbox, today.** Chat escalations, and nothing else.
+`contact.html` is still a plain `mailto:` form — it has never been wired to
+`/api/inbox`, and writing it that it "reaches the same queue" would be
+untrue. It also means that until `agentId` is set (§2, and it ships empty)
+the inbox has no producers at all and the tab stays empty. Pointing the
+contact form at the same threads is a sensible follow-on, and deliberately
+not done here: it is the owner's call, not a side effect of shipping chat.
 
 ## 2. The secrets, and where each goes
 
