@@ -31,6 +31,7 @@ const mailer = require('./email.js');
 const outreach = require('./outreach.js');
 const ratelimit = require('./ratelimit.js');
 const disputes = require('./disputes.js');
+const inbox = require('./inbox.js');
 
 const app = express();
 const PORT = process.env.PORT || 4242;
@@ -760,6 +761,7 @@ app.delete('/api/admin/users/:id', requireAdmin, (req, res) => {
   // Threads AND the images on disk — this is the only cascade that leaves
   // bytes behind if it is missed.
   try { disputes.deleteUserData(id); } catch (e) { console.error('[admin delete] dispute cleanup failed:', e.message); }
+  try { inbox.deleteForEmail(removed.email); } catch (e) { console.error('[admin delete] inbox cleanup failed:', e.message); }
   res.json({ success: true, deleted: removed });
 });
 
@@ -2289,6 +2291,94 @@ app.get('/api/disputes/:id/files/:fileId', auth.requireAuth, (req, res) => {
 });
 
 /* ============================================================
+   THE INBOX
+   Disputes need an account and an order. Most people who will
+   ever use the chat bubble have neither — they are shopping.
+   These routes are the landing pad for that, and the guest half
+   of them is deliberately unauthenticated for the same reason
+   the pay-the-balance page is: the reader is a stranger on a
+   phone, hours later, with no password to hand.
+
+   The signed token in the URL is the whole credential. It
+   unlocks exactly ONE thread, and all it can do is read that
+   conversation and add a line to it. It cannot move money,
+   reveal an account, or list anything.
+   ============================================================ */
+const inboxPostLimiter = ratelimit.limit({
+  name: 'inbox-post',
+  windowMs: 10 * 60 * 1000,
+  max: 20,
+  message: 'Too many messages from this connection. Wait a few minutes and try again.'
+});
+
+function inboxToken(id) { return auth.refToken('inbox', id); }
+
+function inboxLink(t) {
+  return `${SITE()}/inbox.html?id=${encodeURIComponent(t.id)}&t=${inboxToken(t.id)}`;
+}
+
+/* A wrong token and a thread that never existed get the same answer, so
+   the endpoint cannot be used to find out which thread ids are real. */
+function threadFromToken(req) {
+  const id = String(req.params.id || '');
+  const t = String((req.query && req.query.t) || (req.body && req.body.t) || '');
+  if (!auth.verifyRefToken('inbox', id, t)) return null;
+  return inbox.get(id);
+}
+
+const INBOX_NOT_FOUND = { error: 'That conversation link is not valid.' };
+
+app.get('/api/inbox/:id', (req, res) => {
+  const t = threadFromToken(req);
+  if (!t) return res.status(404).json(INBOX_NOT_FOUND);
+  inbox.markRead(t.id, 'customer');
+  res.json({ success: true, thread: inbox.forGuest(t) });
+});
+
+app.post('/api/inbox/:id/messages', inboxPostLimiter, (req, res) => {
+  const t = threadFromToken(req);
+  if (!t) return res.status(404).json(INBOX_NOT_FOUND);
+  try {
+    const updated = inbox.addMessage(t.id, { from: 'customer', body: req.body && req.body.body });
+    sendInboxReplyAlert(updated).catch(e => console.error('[inbox] reply alert failed:', e.message));
+    res.json({ success: true, thread: inbox.forGuest(updated) });
+  } catch (e) {
+    res.status(e.status || 400).json({ error: e.message });
+  }
+});
+
+/* ---- the admin side ---- */
+app.get('/api/admin/inbox', requireAdmin, (req, res) => {
+  res.json({ success: true, threads: inbox.list().map(inbox.summarize) });
+});
+
+app.get('/api/admin/inbox/:id', requireAdmin, (req, res) => {
+  const t = inbox.get(req.params.id);
+  if (!t) return res.status(404).json({ error: 'No conversation with that reference.' });
+  inbox.markRead(t.id, 'admin');
+  res.json({ success: true, thread: t, link: inboxLink(t) });
+});
+
+app.post('/api/admin/inbox/:id/messages', requireAdmin, (req, res) => {
+  try {
+    const updated = inbox.addMessage(req.params.id, { from: 'store', body: req.body && req.body.body });
+    sendInboxAnsweredEmail(updated).catch(e => console.error('[inbox] answer email failed:', e.message));
+    res.json({ success: true, thread: updated });
+  } catch (e) {
+    res.status(e.status || 400).json({ error: e.message });
+  }
+});
+
+app.post('/api/admin/inbox/:id/close', requireAdmin, (req, res) => {
+  try {
+    const by = (req.user && req.user.email) || 'admin';
+    res.json({ success: true, thread: inbox.close(req.params.id, { by }) });
+  } catch (e) {
+    res.status(e.status || 400).json({ error: e.message });
+  }
+});
+
+/* ============================================================
    DISPUTE NOTIFICATIONS
    A doorbell, not a transcript: the mail says a reply is waiting
    and links to the thread. The message body is deliberately NOT
@@ -2356,6 +2446,40 @@ function buildDisputeOpenedMail(d, email, name) {
     <p style="color:#9ca3af;font-size:12px;margin-top:24px">Nothing else is needed from you for now.</p>
   </div>`;
   return { to: email, subject, text, html };
+}
+
+/* The guest has no account, so email is the only way to tell them an
+   answer is waiting. The body of the answer is NOT included: an inbox
+   thread can carry an address or an order reference, and a forwarded
+   chain outlives the tab. */
+async function sendInboxAnsweredEmail(t) {
+  if (!mailer.CONFIGURED) return;
+  const link = inboxLink(t);
+  const who = t.name || 'there';
+  const subject = 'We have replied to your question';
+  const text = `Hi ${who},\n\n` +
+    `There's an answer waiting on your question ("${t.subject}").\n\n` +
+    `Read it and reply here:\n${link}\n\n` +
+    `— The Ever Nova Life team`;
+  const html = `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;color:#1f2937">
+    <h2 style="color:#6d28d9;margin-bottom:4px">We have replied</h2>
+    <p>Hi ${escapeHtmlSrv(who)}, there's an answer waiting on your question.</p>
+    <p><strong>${escapeHtmlSrv(t.subject)}</strong></p>
+    <p><a href="${link}" style="display:inline-block;background:#6d28d9;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600">Read the reply</a></p>
+  </div>`;
+  await mailer.sendMail({ to: t.email, subject, text, html });
+}
+
+/* Tell the shop a guest wrote back. The admin console polls, but the
+   owner is not always looking at it. */
+async function sendInboxReplyAlert(t) {
+  if (!mailer.CONFIGURED) return;
+  const to = (process.env.ADMIN_EMAIL || (process.env.ADMIN_EMAILS || '').split(',')[0] || '').trim();
+  if (!to) return;
+  const subject = `Reply on ${t.id} — ${t.subject}`;
+  const text = `${t.email} wrote back on ${t.id}.\n\n` +
+    `Open the console: ${SITE()}/admin.html#inbox\n`;
+  await mailer.sendMail({ to, subject, text, html: `<p>${escapeHtmlSrv(t.email)} wrote back on <strong>${escapeHtmlSrv(t.id)}</strong>.</p><p><a href="${SITE()}/admin.html#inbox">Open the console</a></p>` });
 }
 
 function buildDisputeResolvedMail(d, email, name) {
