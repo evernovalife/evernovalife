@@ -43,3 +43,9 @@ Status legend: **NEEDED** = no source found · **VERIFY** = a claim is on the si
 
 ## Research-account approval
 - **Approval criteria & turnaround** — VERIFY. research-accounts.html describes an application. Confirm what documentation is required and the review turnaround to state publicly.
+
+## ACH / e-Check (added 2026-08-25, from the processor's onboarding packet)
+- **Governing-law state** — NEEDED. terms.html §10 still says "the state in which Ever Nova Life operates". The processor's template expects a named state in both the governing-law and jurisdiction sentences. Name it.
+- **ACH provider name** — NEEDED. terms.html §13 describes a processor-hosted page without naming the provider. Name it once the processor is confirmed, so the customer can see who they are handing bank details to.
+- **Registered trademark claim** — VERIFY. The template asserts the site name is a registered trademark. §15 was written WITHOUT that claim, because an unregistered mark stated as registered is a misrepresentation. Add it only if "Ever Nova Life" is actually registered.
+- **ACH rail is not built** — NEEDED before ACH can be offered. §13 is published inert: it governs ACH orders, and no ACH option exists at checkout. Going live needs the provider redirect, an order status for a pending debit, return-code handling (R01 insufficient funds and the rest), and the settlement wait before shipping. None of that exists in server/server.js today.
