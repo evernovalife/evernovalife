@@ -230,18 +230,33 @@ test('a traversing conversation_id cannot write outside the transcript directory
 });
 
 test('an absolute conversation_id cannot steer the write', async () => {
-  const absolute = process.platform === 'win32' ? 'C:\Windows\Temp\enl-pwn' : '/tmp/enl-pwn';
-  const res = await postTranscript({ conversation_id: absolute, transcript: [] });
-  assert.strictEqual(res.status, 200);
+  /* String.raw, NOT a plain quoted string. 'C:\Windows\Temp\enl-pwn' is a
+     JS escape minefield — \W, \T and \e all collapse and the value arrives as
+     C:WindowsTempenl-pwn with no separators in it at all, so the test would
+     pass on win32 without ever exercising a separator. Both shapes are sent
+     on every platform for the same reason: the separator is the payload. */
+  const windowsAbs = String.raw`C:\Windows\Temp\enl-pwn-win`;
+  const posixAbs = '/tmp/enl-pwn-posix';
+  assert.ok(windowsAbs.includes('\\'), 'the win32 payload must really contain backslashes');
 
-  // path.join would have been overridden by an absolute second argument had
-  // the separators survived; they do not, so the drive letter and the path
-  // arrive as ordinary characters in a filename.
-  const written = filesIn(TX_DIR).filter(f => /enl-pwn/.test(f));
-  assert.strictEqual(written.length, 1);
-  const full = path.resolve(TX_DIR, written[0]);
-  assert.ok(full.startsWith(path.resolve(TX_DIR) + path.sep), `${full} escaped the directory`);
-  assert.ok(!fs.existsSync(absolute), 'the absolute path must not have been created');
+  for (const absolute of [windowsAbs, posixAbs]) {
+    const res = await postTranscript({ conversation_id: absolute, transcript: [] });
+    assert.strictEqual(res.status, 200);
+    assert.ok(!fs.existsSync(absolute), `${absolute} must not have been created`);
+  }
+
+  // path.join(dir, name) is overridden outright by an absolute second
+  // argument, so the allowlist strip removing the separators (and the colon,
+  // and the leading slash) is the only thing standing between this payload
+  // and an arbitrary write. What lands is an ordinary filename.
+  const written = filesIn(TX_DIR).filter(f => /enl-pwn-(win|posix)/.test(f));
+  assert.strictEqual(written.length, 2, 'both should have landed in the transcripts directory');
+  for (const f of written) {
+    const full = path.resolve(TX_DIR, f);
+    assert.ok(full.startsWith(path.resolve(TX_DIR) + path.sep), `${full} escaped the directory`);
+    assert.ok(!/[\\/:]/.test(f), `no separator may survive into the filename: ${f}`);
+  }
+  assert.ok(!fs.existsSync(path.join(TMP_DATA, 'Windows')), 'no directory tree may be created from the payload');
 });
 
 test('a 10,000-character conversation_id is truncated, not a 500', async () => {
