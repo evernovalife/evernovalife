@@ -3352,7 +3352,7 @@ function validateCheckout(form) {
    screen. Bump WEB_AUTH_VERSION whenever the copy in
    checkout.html #webAuthText changes.
    ============================================================ */
-const WEB_AUTH_VERSION = '2026-08-14';
+const WEB_AUTH_VERSION = '2026-08-24';
 
 function webAuthorizationRecord() {
   const box = document.getElementById('webAuthCheck');

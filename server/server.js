@@ -247,7 +247,7 @@ function assertResearchDetails(shipping) {
    record is the answer to a "I never authorized this" dispute, so it is built
    HERE rather than trusted from the browser for the parts we can observe
    ourselves. Checked server-side so an order cannot be placed around the form. */
-const WEB_AUTH_VERSION = '2026-08-14';
+const WEB_AUTH_VERSION = '2026-08-24';
 const WEB_AUTH_MAX_TEXT = 4000;
 
 function buildWebAuthorization(raw, req) {
