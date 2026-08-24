@@ -178,3 +178,46 @@ test('the admin list carries the unread flag', async () => {
   assert.strictEqual(row.unreadForAdmin, true);
   assert.strictEqual(row.email, 'guest@example.com');
 });
+
+/* The limiter on POST /api/inbox/:id/messages is keyed per thread, which is
+   right — one noisy sender must not lock every other guest out of every
+   other conversation. But the id is raw attacker input on an UNAUTHENTICATED
+   route and the limiter runs before the token check, so the key it builds has
+   to be bounded. ratelimit.js keeps ONE global bucket Map for every limiter
+   on this server, capped at MAX_KEYS, and once it is full after a sweep it
+   calls next() — it FAILS OPEN. An unbounded keyspace here is therefore a
+   denial-of-service against login, the order-status lookup and the agent
+   bucket, not merely a hole in this route.
+
+   This test cannot fill 10,000 keys in reasonable time, so it pins the
+   property that makes filling them impossible: ids that are not a thread-id
+   shape collapse into ONE bucket, so they run out of budget instead of
+   minting a key each. Against a per-id key every one of these is a fresh
+   bucket and nothing ever answers 429. */
+test('made-up thread ids share one limiter bucket instead of minting a key each', async () => {
+  const statuses = [];
+  for (let i = 0; i < 30; i++) {
+    const res = await fetch(`${base}/api/inbox/not-a-thread-${i}-${Math.random()}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ t: 'deadbeefdeadbeefdeadbeefdeadbeef', body: 'spray' })
+    });
+    statuses.push(res.status);
+  }
+  assert.ok(statuses.includes(429),
+    'distinct junk ids must land in one shared bucket and hit the limit; ' +
+    `saw only ${[...new Set(statuses)].join(', ')}`);
+});
+
+test('the junk-id flood does not spend a real thread\'s budget', async () => {
+  // The other half of the same property: collapsing junk into one bucket must
+  // not collapse REAL threads into it too, or one abuser would silence
+  // everybody — which is the thing per-thread keying exists to prevent.
+  const t = seed('post-flood reply');
+  const res = await fetch(`${base}/api/inbox/${t.id}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ t: auth.refToken('inbox', t.id), body: 'Still able to write.' })
+  });
+  assert.strictEqual(res.status, 200);
+});
