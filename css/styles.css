@@ -3325,6 +3325,29 @@ body.adminalert-open { overflow: hidden; }
 .inbox-msg-head time { color: var(--dark-text-muted); }
 .inbox-msg-body { margin: 0; line-height: 1.55; overflow-wrap: anywhere; }
 .inbox-composer { display: flex; flex-direction: column; gap: 10px; }
-.inbox-composer textarea { width: 100%; resize: vertical; }
+/* The same treatment every other field on the site gets (.form-field
+   textarea, above). Without it this box fell through to the browser default —
+   a light-grey panel with dark text sitting on a dark page — because the
+   guest reply form is plain markup rather than a .form-field wrapper. Same
+   custom properties, so it follows the palette rather than pinning a colour. */
+.inbox-composer textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 120px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border-strong);
+  border-radius: var(--radius-sm);
+  padding: 0.8rem 1rem;
+  color: #fff;
+  font-family: inherit;
+  font-size: 0.95rem;
+  transition: border-color 0.2s var(--ease);
+}
+.inbox-composer textarea:focus {
+  outline: none;
+  border-color: var(--accent-purple);
+  box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.15);
+}
+.inbox-composer textarea::placeholder { color: var(--dark-text-faint); }
 .inbox-composer button { align-self: flex-end; }
 .inbox-closed { color: var(--dark-text-muted); }
