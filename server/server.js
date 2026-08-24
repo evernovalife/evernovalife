@@ -2352,6 +2352,21 @@ function threadFromToken(req) {
 
 const INBOX_NOT_FOUND = { error: 'That conversation link is not valid.' };
 
+/* inbox.js throws its own refusals with a `.status` on them, and those are
+   written to be read by a stranger. Anything WITHOUT a status is not one of
+   those — it is a real fault (an ENOSPC or EACCES out of inbox.save(), say),
+   and `e.message` there carries the absolute path of inbox.json.tmp. That
+   must not be handed to an anonymous guest, and it must not be dressed up as
+   a 400 either: a 400 reads as "you typed something wrong" when in fact the
+   server dropped their message. Log the real thing, answer with a 500. */
+function inboxError(res, e, where) {
+  if (e && e.status) return res.status(e.status).json({ error: e.message });
+  console.error(`[inbox] ${where} failed:`, (e && e.stack) || e);
+  return res.status(500).json({
+    error: 'Something went wrong on our side and that did not save. Try again in a moment, or email support@evernovalife.com.'
+  });
+}
+
 app.get('/api/inbox/:id', (req, res) => {
   const t = threadFromToken(req);
   if (!t) return res.status(404).json(INBOX_NOT_FOUND);
@@ -2370,7 +2385,7 @@ app.post('/api/inbox/:id/messages', inboxPostLimiter, (req, res) => {
     sendInboxReplyAlert(updated).catch(e => console.error('[inbox] reply alert failed:', e.message));
     res.json({ success: true, thread: inbox.forGuest(updated) });
   } catch (e) {
-    res.status(e.status || 400).json({ error: e.message });
+    inboxError(res, e, 'guest reply');
   }
 });
 
@@ -2394,7 +2409,7 @@ app.post('/api/admin/inbox/:id/messages', requireAdmin, (req, res) => {
     sendInboxAnsweredEmail(updated).catch(e => console.error('[inbox] answer email failed:', e.message));
     res.json({ success: true, thread: updated });
   } catch (e) {
-    res.status(e.status || 400).json({ error: e.message });
+    inboxError(res, e, 'admin reply');
   }
 });
 
@@ -2403,7 +2418,7 @@ app.post('/api/admin/inbox/:id/close', requireAdmin, (req, res) => {
     const by = (req.user && req.user.email) || 'admin';
     res.json({ success: true, thread: inbox.close(req.params.id, { by }) });
   } catch (e) {
-    res.status(e.status || 400).json({ error: e.message });
+    inboxError(res, e, 'close');
   }
 });
 
