@@ -189,3 +189,93 @@ test('a transcript with no signature at all is rejected', async () => {
   });
   assert.strictEqual(res.status, 401);
 });
+
+/* ---- conversation_id is a filename component ----
+   The allowlist strip in the route is the only thing between a webhook body
+   and an arbitrary write path. These pin it adversarially: whatever the
+   caller sends, the file lands inside DATA_DIR/agent-transcripts and nothing
+   appears outside it. `conv_1`/`conv_evil` never proved that. */
+const TX_DIR = path.join(TMP_DATA, 'agent-transcripts');
+
+function filesIn(dir) {
+  return fs.existsSync(dir) ? fs.readdirSync(dir) : [];
+}
+
+async function postTranscript(body) {
+  const s = JSON.stringify(body);
+  return fetch(`${base}/api/agent/transcript`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'elevenlabs-signature': signed(s, 'webhook-hmac-secret') },
+    body: s
+  });
+}
+
+test('a traversing conversation_id cannot write outside the transcript directory', async () => {
+  const before = filesIn(TMP_DATA);
+  const res = await postTranscript({ conversation_id: '../../etc/passwd', transcript: [] });
+  assert.strictEqual(res.status, 200);
+
+  // Every dot and slash is dropped, so what is left is an ordinary name.
+  const written = filesIn(TX_DIR).filter(f => f.includes('etcpasswd'));
+  assert.strictEqual(written.length, 1, 'the write should land in the transcripts directory');
+  for (const f of written) {
+    const full = path.resolve(TX_DIR, f);
+    assert.ok(full.startsWith(path.resolve(TX_DIR) + path.sep), `${full} escaped the directory`);
+  }
+  // Nothing new one or two levels up, which is where the payload aimed.
+  const after = filesIn(TMP_DATA).filter(f => !before.includes(f));
+  assert.deepStrictEqual(after, [], 'nothing may be created beside the transcripts directory');
+  assert.ok(!fs.existsSync(path.join(TMP_DATA, 'passwd')));
+  assert.ok(!fs.existsSync(path.join(path.dirname(TMP_DATA), 'passwd')));
+});
+
+test('an absolute conversation_id cannot steer the write', async () => {
+  const absolute = process.platform === 'win32' ? 'C:\Windows\Temp\enl-pwn' : '/tmp/enl-pwn';
+  const res = await postTranscript({ conversation_id: absolute, transcript: [] });
+  assert.strictEqual(res.status, 200);
+
+  // path.join would have been overridden by an absolute second argument had
+  // the separators survived; they do not, so the drive letter and the path
+  // arrive as ordinary characters in a filename.
+  const written = filesIn(TX_DIR).filter(f => /enl-pwn/.test(f));
+  assert.strictEqual(written.length, 1);
+  const full = path.resolve(TX_DIR, written[0]);
+  assert.ok(full.startsWith(path.resolve(TX_DIR) + path.sep), `${full} escaped the directory`);
+  assert.ok(!fs.existsSync(absolute), 'the absolute path must not have been created');
+});
+
+test('a 10,000-character conversation_id is truncated, not a 500', async () => {
+  // Allowlisted characters only, so the strip leaves all 10,000 of them: it
+  // is the length cap, and only the length cap, that stops this becoming an
+  // ENAMETOOLONG out of writeFileSync — a 500 on a webhook, for input the
+  // caller chose.
+  const huge = 'a'.repeat(10000);
+  const res = await postTranscript({ conversation_id: huge, transcript: [] });
+  assert.strictEqual(res.status, 200, 'a long id must not become a server error');
+
+  const written = filesIn(TX_DIR).filter(f => f.includes('aaaaaaaaaa'));
+  assert.strictEqual(written.length, 1);
+  const name = written[0];
+  assert.ok(name.length < 255, `the filename should be a sane length, got ${name.length}`);
+  const full = path.resolve(TX_DIR, name);
+  assert.ok(full.startsWith(path.resolve(TX_DIR) + path.sep));
+});
+
+/* ---- what the agent is told to say ----
+   sendInboxOpenedEmail() returns silently when SMTP is unconfigured, and
+   that email is the ONLY delivery of the tokenized link. Promising it
+   anyway leaves the visitor waiting on something that will never arrive.
+   SMTP_USER/SMTP_PASS are unset under test, so mailer.CONFIGURED is false
+   here — which is the branch this pins. */
+test('with no mailer configured, escalate does not promise an email', async () => {
+  const res = await fetch(`${base}/api/agent/escalate`, {
+    method: 'POST',
+    headers: AGENT,
+    body: JSON.stringify({ email: 'nomail@example.com', body: 'Is this in stock?' })
+  });
+  assert.strictEqual(res.status, 200);
+  const data = await res.json();
+  assert.ok(data.message.includes(data.reference), 'the reference is what the visitor can act on');
+  assert.ok(!/email|confirmation|on its way/i.test(data.message),
+    `nothing may promise a mail that cannot be sent: ${data.message}`);
+});

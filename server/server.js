@@ -2459,12 +2459,28 @@ const agentLimiter = ratelimit.limit({
    than UTF-16 code units, and comparing `.length` on the strings would let
    a same-code-unit-length probe reach `timingSafeEqual` with mismatched
    buffer lengths, which throws (a 500) instead of failing with a 401. */
+/* A budget for FAILED auth only. requireAgent runs before agentLimiter, so
+   without this the static shared secret could be probed at unlimited rate.
+   Swapping the two would fix that but at a worse price: the agent bucket is
+   one shared, unkeyed budget for ALL legitimate agent traffic, so counting
+   anonymous probes into it would let a stranger starve the live feature.
+   Counting only the failures keeps a valid caller's budget untouched. */
+const agentAuthFailLimiter = ratelimit.limit({
+  name: 'agent-auth-fail',
+  windowMs: 60 * 1000,
+  max: 20,
+  message: 'Not authorised.'
+});
+
 function requireAgent(req, res, next) {
   const given = Buffer.from(String(req.get('x-agent-secret') || ''));
   const secret = Buffer.from(AGENT_SECRET);
   if (!AGENT_SECRET || given.length !== secret.length ||
       !crypto.timingSafeEqual(given, secret)) {
-    return res.status(401).json({ error: 'Not authorised.' });
+    // The limiter answers 429 itself once the budget is gone; until then it
+    // calls through to the 401 this route would have given anyway.
+    return agentAuthFailLimiter(req, res, () =>
+      res.status(401).json({ error: 'Not authorised.' }));
   }
   next();
 }
@@ -2509,16 +2525,27 @@ app.post('/api/agent/escalate', requireAgent, agentLimiter, (req, res) => {
       transcript: b.transcript
     });
     sendInboxOpenedEmail(t).catch(e => console.error('[inbox] acknowledgement failed:', e.message));
+    /* The same doorbell the dispute routes ring. Without it the console only
+       learns about an escalation on its next poll, and the pop-up/toast in
+       js/admin-alert.js never fires live at all. */
+    notifyAdmins({ type: 'inbox-opened', threadId: t.id });
     res.json({
       success: true,
       reference: t.id,
-      // The agent reads this sentence out. Keep it a sentence.
-      message: `A person has it. The reference is ${t.id}, and a confirmation is on its way to ${t.email}.`
+      /* The agent reads this sentence out, so it must not promise something
+         that did not happen: sendInboxOpenedEmail() returns silently when
+         SMTP is unconfigured, and that email is the ONLY delivery of the
+         tokenized link. With no mailer, the honest sentence is the reference
+         and nothing about email. Keep both to one sentence. */
+      message: mailer.CONFIGURED
+        ? `A person has it. The reference is ${t.id}, and a confirmation is on its way to ${t.email}.`
+        : `A person has it — quote the reference ${t.id} if you get in touch again.`
     });
   } catch (e) {
-    // The agent has to say something useful, so the error text is the
-    // message — not a code it would have to interpret.
-    res.status(e.status || 400).json({ error: e.message });
+    // inbox.js's own refusals carry a .status and are written to be read
+    // aloud; anything else is a server fault and must not have its message
+    // (a filesystem path, say) spoken to a visitor or handed to an LLM.
+    inboxError(res, e, 'escalate');
   }
 });
 
@@ -2551,7 +2578,28 @@ function verifyAgentSignature(rawBody, header) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-app.post('/api/agent/transcript', (req, res) => {
+/* This route has no shared secret in front of it — the HMAC IS the check —
+   so an unsigned flood otherwise costs a signature computation each and is
+   never counted anywhere. Its own bucket, so a burst here cannot spend the
+   product-lookup/escalate budget the live conversation depends on. */
+const agentTranscriptLimiter = ratelimit.limit({
+  name: 'agent-transcript',
+  windowMs: 60 * 1000,
+  max: 120,
+  message: 'Too many transcript posts. Try again in a minute.'
+});
+
+/* express.json's global limit is 12mb — sized for the photos on a dispute
+   report, not for a chat transcript, and every byte of this one is written
+   to disk under DATA_DIR. A transcript that large is a bug or an attack. */
+const AGENT_TRANSCRIPT_MAX_BYTES = 512 * 1024;
+
+app.post('/api/agent/transcript', agentTranscriptLimiter, (req, res) => {
+  const size = (req.rawBody && req.rawBody.length) || 0;
+  if (size > AGENT_TRANSCRIPT_MAX_BYTES) {
+    console.error(`[agent] transcript rejected: ${size} bytes`);
+    return res.status(413).json({ error: 'That transcript is too large.' });
+  }
   if (!verifyAgentSignature(req.rawBody, req.get('elevenlabs-signature'))) {
     console.error('[agent] transcript rejected: signature mismatch');
     return res.status(401).json({ error: 'Not authorised.' });
@@ -2562,7 +2610,12 @@ app.post('/api/agent/transcript', (req, res) => {
     // Allowlist only: this id ends up in a filename, and a value like
     // "../../etc/passwd" or an absolute path must not be able to steer where
     // that write lands. Anything outside [A-Za-z0-9_-] is dropped, not encoded.
-    const id = String((req.body && req.body.conversation_id) || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '');
+    // Truncated as well: the allowlist strips the separators but not the
+    // LENGTH, and a 10,000-character id survives it intact, overruns the
+    // filesystem's name limit and comes back as ENAMETOOLONG — a 500 on a
+    // webhook, for input the caller chose.
+    const id = String((req.body && req.body.conversation_id) || 'unknown')
+      .replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
     const stampName = new Date().toISOString().replace(/[:.]/g, '-');
     fs.writeFileSync(path.join(dir, `${stampName}-${id}.json`), JSON.stringify(req.body, null, 2));
     res.json({ success: true });
