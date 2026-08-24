@@ -179,45 +179,42 @@ test('the admin list carries the unread flag', async () => {
   assert.strictEqual(row.email, 'guest@example.com');
 });
 
-/* The limiter on POST /api/inbox/:id/messages is keyed per thread, which is
-   right — one noisy sender must not lock every other guest out of every
-   other conversation. But the id is raw attacker input on an UNAUTHENTICATED
-   route and the limiter runs before the token check, so the key it builds has
-   to be bounded. ratelimit.js keeps ONE global bucket Map for every limiter
-   on this server, capped at MAX_KEYS, and once it is full after a sweep it
-   calls next() — it FAILS OPEN. An unbounded keyspace here is therefore a
-   denial-of-service against login, the order-status lookup and the agent
-   bucket, not merely a hole in this route.
+/* ---- the limiter on POST /api/inbox/:id/messages ----
+   It is deliberately UNKEYED: one shared budget for every guest reply from
+   every thread. Keying it per thread was tried and reverted, because
+   ratelimit.js keeps ONE global bucket Map for every limiter on this server
+   and FAILS OPEN at MAX_KEYS — so an id-derived key on an unauthenticated
+   route (the limiter runs before the token check) is a way to switch off
+   login, the order-status lookup and the agent bucket, not a way to limit
+   this one. Shape-validating the id does not help: MSG-AAAAAAAAAAAA,
+   MSG-AAAAAAAAAAAB … are all shape-valid and each still mints a bucket.
 
-   This test cannot fill 10,000 keys in reasonable time, so it pins the
-   property that makes filling them impossible: ids that are not a thread-id
-   shape collapse into ONE bucket, so they run out of budget instead of
-   minting a key each. Against a per-id key every one of these is a fresh
-   bucket and nothing ever answers 429. */
-test('made-up thread ids share one limiter bucket instead of minting a key each', async () => {
+   So the property to pin is exactly the one a keyed limiter would break:
+   requests against DISTINCT, REAL threads from one client come out of a
+   single budget, and the limiter engages. Against the per-thread key every
+   one of these had its own bucket and nothing ever answered 429.
+
+   Kept last in this file: it deliberately exhausts the shared budget, which
+   is a ten-minute window, so anything posting a guest reply after it would
+   see a 429 that has nothing to do with what it is testing. */
+test('replies to distinct threads come out of ONE budget, and the limit engages', async () => {
+  const threads = [];
+  for (let i = 0; i < 30; i++) threads.push(seed(`shared budget ${i}`));
+
   const statuses = [];
-  for (let i = 0; i < 30; i++) {
-    const res = await fetch(`${base}/api/inbox/not-a-thread-${i}-${Math.random()}/messages`, {
+  for (const t of threads) {
+    const res = await fetch(`${base}/api/inbox/${t.id}/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ t: 'deadbeefdeadbeefdeadbeefdeadbeef', body: 'spray' })
+      body: JSON.stringify({ t: auth.refToken('inbox', t.id), body: 'Following up.' })
     });
     statuses.push(res.status);
   }
-  assert.ok(statuses.includes(429),
-    'distinct junk ids must land in one shared bucket and hit the limit; ' +
-    `saw only ${[...new Set(statuses)].join(', ')}`);
-});
 
-test('the junk-id flood does not spend a real thread\'s budget', async () => {
-  // The other half of the same property: collapsing junk into one bucket must
-  // not collapse REAL threads into it too, or one abuser would silence
-  // everybody — which is the thing per-thread keying exists to prevent.
-  const t = seed('post-flood reply');
-  const res = await fetch(`${base}/api/inbox/${t.id}/messages`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ t: auth.refToken('inbox', t.id), body: 'Still able to write.' })
-  });
-  assert.strictEqual(res.status, 200);
+  // Every one of these is a valid token on a real, open thread, so a 429 can
+  // only have come from the limiter counting them together.
+  assert.ok(statuses.includes(429),
+    'thirty replies across thirty different threads must share one budget; ' +
+    `saw only ${[...new Set(statuses)].join(', ')}`);
+  assert.strictEqual(statuses[0], 200, 'the first reply should still go through');
 });

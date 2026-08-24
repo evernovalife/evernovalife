@@ -2309,29 +2309,38 @@ const inboxPostLimiter = ratelimit.limit({
   name: 'inbox-post',
   windowMs: 10 * 60 * 1000,
   max: 20,
-  // No `key` would fall back to the client address, and this server does not
-  // set `trust proxy` — behind Render every guest shares one address, so one
-  // noisy sender would lock every other guest out of every other thread.
-  // Per-thread buckets keep that blast radius to the thread being abused.
-  //
-  // But the id is folded in ONLY when it looks like a real thread reference.
-  // This route is unauthenticated and the limiter runs BEFORE the token is
-  // verified, so req.params.id is raw attacker input at this point. The
-  // bucket map in ratelimit.js is ONE global Map shared by every limiter on
-  // this server, capped at MAX_KEYS, and when it is full after a sweep it
-  // calls next() — it FAILS OPEN. An unbounded keyspace here is therefore not
-  // a limit on this route, it is a denial-of-service against every other
-  // limiter: MAX_KEYS cheap POSTs with distinct made-up ids fill the map with
-  // entries that live for this window and switch OFF rate limiting site-wide
-  // (login, the order-status lookup, the agent bucket) until they expire.
-  // Anything that is not a thread-id shape therefore shares one bucket.
-  key: (req) => {
-    const id = String((req.params && req.params.id) || '');
-    // newThreadId() in inbox.js: 'MSG-' + base36 ms, uppercased, + 4 hex
-    // digits, uppercased. Nothing else is a real reference.
-    const safe = /^MSG-[0-9A-Z]{1,24}$/.test(id) ? id : ':invalid';
-    return ratelimit.clientKey(req) + '|' + safe;
-  },
+  /* NO `key`, deliberately — one shared bucket for all guest replies, and
+     DO NOT "improve" this by keying it. Read the whole of this before you do.
+
+     Per-visitor keying is not achievable here. The fallback key is the client
+     address, and this server never calls app.set('trust proxy'), so behind
+     Render every request arrives from the PROXY's address — identical for
+     every visitor. An address-keyed limiter on this route is already one
+     site-wide bucket in production, whatever it looks like in a test. Same
+     conclusion agentLimiter reaches, for the same reason.
+
+     Keying it on req.params.id was tried, and reverted. It looks like it buys
+     per-thread isolation; what it actually buys is a denial-of-service
+     against the entire server. ratelimit.js keeps ONE global `buckets` Map
+     shared by every limiter here, capped at MAX_KEYS, and once that cap is
+     hit after a sweep it calls next() — it FAILS OPEN. This route is
+     UNAUTHENTICATED and the limiter runs BEFORE the token is verified, so
+     req.params.id is raw attacker input at this point: MAX_KEYS cheap POSTs
+     with distinct ids fill the map with entries that live for this window and
+     switch rate limiting OFF site-wide — login, the order-status lookup, the
+     agent bucket, all of it — until they expire.
+
+     Validating the id's SHAPE does not fix that. MSG-AAAAAAAAAAAA,
+     MSG-AAAAAAAAAAAB, … are all shape-valid and each still mints its own
+     bucket; only the prefix of the junk changes. Nor does checking the thread
+     really exists: inbox.get() calls load(), which reads and JSON-parses the
+     whole of inbox.json, so that trades a keyspace amplification for an I/O
+     one — a full file parse per unauthenticated request.
+
+     An unkeyed limiter has a keyspace of one entry per client address. It is
+     bounded by construction, it does no filesystem work, and it cannot be
+     used to switch off anybody else's limiter. That is worth more than
+     isolation this route could not really have had. */
   message: 'Too many messages from this connection. Wait a few minutes and try again.'
 });
 
