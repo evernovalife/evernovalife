@@ -68,6 +68,33 @@ window.ENL_ANALYTICS = {
   websiteId: ''                       // Umami only
 };
 
+/* ------------------------------------------------------------
+   AI CHAT  (off until you fill this in)
+   The assistant that answers product and policy questions, and
+   hands the conversation to a person when it cannot.
+
+     agentId — the PUBLIC agent id from the ElevenLabs dashboard.
+               Public is the right word: it is visible in the page
+               source by design. The API key and the tool secrets
+               are server-side only and never appear here.
+
+     version — pins the vendor widget bundle (its package version on
+               unpkg, e.g. '1.2.3'). Left empty, the widget tracks
+               whatever @elevenlabs/convai-widget-embed publishes
+               next — convenient while you're setting the agent up,
+               and wrong once you're live: this script also loads on
+               the checkout and payment pages, so once a version is
+               known to work, pin it here and the shop stops
+               inheriting the vendor's latest release automatically.
+
+   Leave agentId empty and nothing loads at all — no script tag,
+   no bubble, no requests — and the site behaves exactly as it
+   did before the feature existed.
+
+     window.ENL_CHAT = { agentId: 'agent_xxxxxxxxxxxx', version: '1.2.3' };
+   ------------------------------------------------------------ */
+window.ENL_CHAT = { agentId: '', version: '' };
+
 (function () {
   var PROD_API_BASE = 'https://evernova-api.onrender.com';   // ← your Render backend
 

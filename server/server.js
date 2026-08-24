@@ -13,6 +13,7 @@
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const express = require('express');
 const cors = require('cors');
 
@@ -31,6 +32,7 @@ const mailer = require('./email.js');
 const outreach = require('./outreach.js');
 const ratelimit = require('./ratelimit.js');
 const disputes = require('./disputes.js');
+const inbox = require('./inbox.js');
 
 const app = express();
 const PORT = process.env.PORT || 4242;
@@ -71,6 +73,12 @@ app.get('/api/health', (req, res) => res.json({
      ADMIN_EMAIL those are built and then dropped, which looks identical to a
      store nobody is buying from. Boolean only — the address stays private. */
   ownerAlerts: Boolean(process.env.ADMIN_EMAIL),
+  /* Has the dispute photo ceiling been sized to this disk? Its default is
+     larger than the production disk, so without DISPUTE_TOTAL_BYTES_MAX the
+     ceiling never engages and the 80% warning never sends — the disk fills
+     while the admin console reports a comfortable single-digit percentage.
+     Boolean only — the figure itself stays private, this route is public. */
+  disputeCeilingSet: Boolean(process.env.DISPUTE_TOTAL_BYTES_MAX),
   // Auto-ship re-invoices through BTCPay, so it rides on the same config —
   // and on email, which is how the customer receives each pay link.
   autoship: btcpay.CONFIGURED,
@@ -239,7 +247,7 @@ function assertResearchDetails(shipping) {
    record is the answer to a "I never authorized this" dispute, so it is built
    HERE rather than trusted from the browser for the parts we can observe
    ourselves. Checked server-side so an order cannot be placed around the form. */
-const WEB_AUTH_VERSION = '2026-08-14';
+const WEB_AUTH_VERSION = '2026-08-24';
 const WEB_AUTH_MAX_TEXT = 4000;
 
 function buildWebAuthorization(raw, req) {
@@ -754,6 +762,7 @@ app.delete('/api/admin/users/:id', requireAdmin, (req, res) => {
   // Threads AND the images on disk — this is the only cascade that leaves
   // bytes behind if it is missed.
   try { disputes.deleteUserData(id); } catch (e) { console.error('[admin delete] dispute cleanup failed:', e.message); }
+  try { inbox.deleteForEmail(removed.email); } catch (e) { console.error('[admin delete] inbox cleanup failed:', e.message); }
   res.json({ success: true, deleted: removed });
 });
 
@@ -2221,6 +2230,10 @@ app.post('/api/disputes', auth.requireAuth, disputeOpenLimiter, (req, res) => {
       authorEmail: req.user.email,
       attachments: req.body.attachments
     });
+    /* Their receipt. Unawaited with a catch, like every other dispute mail:
+       a broken SMTP must not fail the report the customer just wrote. */
+    sendDisputeOpenedEmail(d).catch(e => console.error('[disputes] acknowledgement email failed:', e.message));
+    notifyAdmins({ type: 'dispute-opened', orderId: d.orderId, disputeId: d.id });
     res.status(201).json({ success: true, dispute: disputes.forCustomer(d), order: disputeOrderView(order) });
   } catch (err) {
     res.status(err.status || 400).json({ error: err.message, disputeId: err.disputeId });
@@ -2252,6 +2265,7 @@ app.post('/api/disputes/:id/messages', auth.requireAuth, disputePostLimiter, (re
       body: req.body.message,
       attachments: req.body.attachments
     });
+    notifyAdmins({ type: 'dispute-message', orderId: updated.orderId, disputeId: updated.id });
     res.json({ success: true, dispute: disputes.forCustomer(updated) });
   } catch (err) {
     res.status(err.status || 400).json({ error: err.message });
@@ -2275,6 +2289,349 @@ app.get('/api/disputes/:id/files/:fileId', auth.requireAuth, (req, res) => {
   res.set('Content-Disposition', 'inline');
   res.set('Cache-Control', 'private, max-age=3600');
   res.send(buf);
+});
+
+/* ============================================================
+   THE INBOX
+   Disputes need an account and an order. Most people who will
+   ever use the chat bubble have neither — they are shopping.
+   These routes are the landing pad for that, and the guest half
+   of them is deliberately unauthenticated for the same reason
+   the pay-the-balance page is: the reader is a stranger on a
+   phone, hours later, with no password to hand.
+
+   The signed token in the URL is the whole credential. It
+   unlocks exactly ONE thread, and all it can do is read that
+   conversation and add a line to it. It cannot move money,
+   reveal an account, or list anything.
+   ============================================================ */
+const inboxPostLimiter = ratelimit.limit({
+  name: 'inbox-post',
+  windowMs: 10 * 60 * 1000,
+  max: 20,
+  /* NO `key`, deliberately — one shared bucket for all guest replies, and
+     DO NOT "improve" this by keying it. Read the whole of this before you do.
+
+     Per-visitor keying is not achievable here. The fallback key is the client
+     address, and this server never calls app.set('trust proxy'), so behind
+     Render every request arrives from the PROXY's address — identical for
+     every visitor. An address-keyed limiter on this route is already one
+     site-wide bucket in production, whatever it looks like in a test. Same
+     conclusion agentLimiter reaches, for the same reason.
+
+     Keying it on req.params.id was tried, and reverted. It looks like it buys
+     per-thread isolation; what it actually buys is a denial-of-service
+     against the entire server. ratelimit.js keeps ONE global `buckets` Map
+     shared by every limiter here, capped at MAX_KEYS, and once that cap is
+     hit after a sweep it calls next() — it FAILS OPEN. This route is
+     UNAUTHENTICATED and the limiter runs BEFORE the token is verified, so
+     req.params.id is raw attacker input at this point: MAX_KEYS cheap POSTs
+     with distinct ids fill the map with entries that live for this window and
+     switch rate limiting OFF site-wide — login, the order-status lookup, the
+     agent bucket, all of it — until they expire.
+
+     Validating the id's SHAPE does not fix that. MSG-AAAAAAAAAAAA,
+     MSG-AAAAAAAAAAAB, … are all shape-valid and each still mints its own
+     bucket; only the prefix of the junk changes. Nor does checking the thread
+     really exists: inbox.get() calls load(), which reads and JSON-parses the
+     whole of inbox.json, so that trades a keyspace amplification for an I/O
+     one — a full file parse per unauthenticated request.
+
+     An unkeyed limiter has a keyspace of one entry per client address. It is
+     bounded by construction, it does no filesystem work, and it cannot be
+     used to switch off anybody else's limiter. That is worth more than
+     isolation this route could not really have had. */
+  message: 'Too many messages from this connection. Wait a few minutes and try again.'
+});
+
+function inboxToken(id) { return auth.refToken('inbox', id); }
+
+function inboxLink(t) {
+  return `${SITE()}/inbox.html?id=${encodeURIComponent(t.id)}&t=${inboxToken(t.id)}`;
+}
+
+/* A wrong token and a thread that never existed get the same answer, so
+   the endpoint cannot be used to find out which thread ids are real. */
+function threadFromToken(req) {
+  const id = String(req.params.id || '');
+  const t = String((req.query && req.query.t) || (req.body && req.body.t) || '');
+  if (!auth.verifyRefToken('inbox', id, t)) return null;
+  return inbox.get(id);
+}
+
+const INBOX_NOT_FOUND = { error: 'That conversation link is not valid.' };
+
+/* inbox.js throws its own refusals with a `.status` on them, and those are
+   written to be read by a stranger. Anything WITHOUT a status is not one of
+   those — it is a real fault (an ENOSPC or EACCES out of inbox.save(), say),
+   and `e.message` there carries the absolute path of inbox.json.tmp. That
+   must not be handed to an anonymous guest, and it must not be dressed up as
+   a 400 either: a 400 reads as "you typed something wrong" when in fact the
+   server dropped their message. Log the real thing, answer with a 500. */
+function inboxError(res, e, where) {
+  if (e && e.status) return res.status(e.status).json({ error: e.message });
+  console.error(`[inbox] ${where} failed:`, (e && e.stack) || e);
+  return res.status(500).json({
+    error: 'Something went wrong on our side and that did not save. Try again in a moment, or email support@evernovalife.com.'
+  });
+}
+
+app.get('/api/inbox/:id', (req, res) => {
+  const t = threadFromToken(req);
+  if (!t) return res.status(404).json(INBOX_NOT_FOUND);
+  // markRead() re-reads the file, so it returns a fresh object with the
+  // stamp on it — respond with THAT, not the pre-mark `t`, or the caller
+  // sees a stale customerReadAt in the same response that just set it.
+  const updated = inbox.markRead(t.id, 'customer') || t;
+  res.json({ success: true, thread: inbox.forGuest(updated) });
+});
+
+app.post('/api/inbox/:id/messages', inboxPostLimiter, (req, res) => {
+  const t = threadFromToken(req);
+  if (!t) return res.status(404).json(INBOX_NOT_FOUND);
+  try {
+    const updated = inbox.addMessage(t.id, { from: 'customer', body: req.body && req.body.body });
+    sendInboxReplyAlert(updated).catch(e => console.error('[inbox] reply alert failed:', e.message));
+    res.json({ success: true, thread: inbox.forGuest(updated) });
+  } catch (e) {
+    inboxError(res, e, 'guest reply');
+  }
+});
+
+/* ---- the admin side ---- */
+app.get('/api/admin/inbox', requireAdmin, (req, res) => {
+  res.json({ success: true, threads: inbox.list().map(inbox.summarize) });
+});
+
+app.get('/api/admin/inbox/:id', requireAdmin, (req, res) => {
+  const t = inbox.get(req.params.id);
+  if (!t) return res.status(404).json({ error: 'No conversation with that reference.' });
+  // Same reasoning as the guest route above: respond with markRead()'s own
+  // return value, not the pre-mark `t`, so adminReadAt isn't stale.
+  const updated = inbox.markRead(t.id, 'admin') || t;
+  res.json({ success: true, thread: updated, link: inboxLink(updated) });
+});
+
+app.post('/api/admin/inbox/:id/messages', requireAdmin, (req, res) => {
+  try {
+    const updated = inbox.addMessage(req.params.id, { from: 'store', body: req.body && req.body.body });
+    sendInboxAnsweredEmail(updated).catch(e => console.error('[inbox] answer email failed:', e.message));
+    res.json({ success: true, thread: updated });
+  } catch (e) {
+    inboxError(res, e, 'admin reply');
+  }
+});
+
+app.post('/api/admin/inbox/:id/close', requireAdmin, (req, res) => {
+  try {
+    const by = (req.user && req.user.email) || 'admin';
+    res.json({ success: true, thread: inbox.close(req.params.id, { by }) });
+  } catch (e) {
+    inboxError(res, e, 'close');
+  }
+});
+
+/* ============================================================
+   THE CHAT AGENT'S THREE DOORS
+   Everything the ElevenLabs agent can reach is here, and the
+   list is short on purpose. It can read the catalog, it can
+   hand a conversation to a human, and it can post back a
+   finished transcript. It cannot read an order, an account, or
+   anything with a name and address attached — handing an LLM a
+   lookup keyed on customer records is the shortest path to
+   disclosing one to whoever guessed a reference.
+   ============================================================ */
+const AGENT_SECRET = process.env.ELEVENLABS_AGENT_SECRET || '';
+const AGENT_WEBHOOK_SECRET = process.env.ELEVENLABS_WEBHOOK_SECRET || '';
+
+/* Unkeyed on purpose — every caller here is ElevenLabs' own infrastructure,
+   never the visitor's browser, so the request always arrives from
+   ElevenLabs' egress address no matter what this server's proxy trust is
+   set to (and that setting is out of scope for this route: it's global,
+   and getting the hop count wrong would let every OTHER limiter on this
+   server be evaded via a spoofed X-Forwarded-For). Per-caller keying is
+   not achievable for a server-to-server integration like this one, so the
+   bucket is deliberately one shared budget for all agent traffic — sized
+   for the whole feature (a live call doing several lookups plus escalate
+   attempts across many concurrent conversations), not for one visitor. */
+const agentLimiter = ratelimit.limit({
+  name: 'agent-tool',
+  windowMs: 60 * 1000,
+  max: 300,
+  message: 'Too many lookups. Tell the visitor to try again in a minute.'
+});
+
+/* Fails closed: no secret configured means no request gets through, ever —
+   not "open for testing", not "open until someone notices". The length
+   check compares BYTE length (via Buffer), not JS string length, because
+   `timingSafeEqual` compares buffers — a non-ASCII secret has more bytes
+   than UTF-16 code units, and comparing `.length` on the strings would let
+   a same-code-unit-length probe reach `timingSafeEqual` with mismatched
+   buffer lengths, which throws (a 500) instead of failing with a 401. */
+/* A budget for FAILED auth only. requireAgent runs before agentLimiter, so
+   without this the static shared secret could be probed at unlimited rate.
+   Swapping the two would fix that but at a worse price: the agent bucket is
+   one shared, unkeyed budget for ALL legitimate agent traffic, so counting
+   anonymous probes into it would let a stranger starve the live feature.
+   Counting only the failures keeps a valid caller's budget untouched. */
+const agentAuthFailLimiter = ratelimit.limit({
+  name: 'agent-auth-fail',
+  windowMs: 60 * 1000,
+  max: 20,
+  message: 'Not authorised.'
+});
+
+function requireAgent(req, res, next) {
+  const given = Buffer.from(String(req.get('x-agent-secret') || ''));
+  const secret = Buffer.from(AGENT_SECRET);
+  if (!AGENT_SECRET || given.length !== secret.length ||
+      !crypto.timingSafeEqual(given, secret)) {
+    // The limiter answers 429 itself once the budget is gone; until then it
+    // calls through to the 401 this route would have given anyway.
+    return agentAuthFailLimiter(req, res, () =>
+      res.status(401).json({ error: 'Not authorised.' }));
+  }
+  next();
+}
+
+/* What the agent may say about a product: the name, what it costs, and
+   whether we have it. Availability is `productStore.isAvailable()` — the
+   same function checkout uses — because `inStock` is its own admin switch
+   independent of `stockQty` (a product can be pulled from sale with stock
+   still on the shelf), and reporting stock alone would call a pulled
+   product available. */
+function agentProductView(p) {
+  return {
+    id: p.id,
+    name: p.name,
+    price: Number(p.price) || 0,
+    currency: 'USD',
+    inStock: productStore.isAvailable(p),
+    url: `${SITE()}/product.html?id=${encodeURIComponent(p.id)}`
+  };
+}
+
+app.get('/api/agent/product', requireAgent, agentLimiter, (req, res) => {
+  const q = String((req.query && req.query.q) || '').trim().toLowerCase();
+  // Unpublished = "not on the site at all" (a draft, a pulled lot, a
+  // retired SKU) — the agent is never an admin, so it gets exactly what an
+  // anonymous storefront visitor would see, same filter as GET /api/products.
+  const all = productStore.listProducts().filter(productStore.isPublished);
+  const hits = q
+    ? all.filter(p => String(p.name || '').toLowerCase().includes(q))
+    : all;
+  res.json({ success: true, products: hits.slice(0, 5).map(agentProductView) });
+});
+
+app.post('/api/agent/escalate', requireAgent, agentLimiter, (req, res) => {
+  const b = req.body || {};
+  try {
+    const t = inbox.create({
+      email: b.email,
+      name: b.name,
+      subject: b.subject,
+      body: b.body,
+      transcript: b.transcript
+    });
+    sendInboxOpenedEmail(t).catch(e => console.error('[inbox] acknowledgement failed:', e.message));
+    /* The same doorbell the dispute routes ring. Without it the console only
+       learns about an escalation on its next poll, and the pop-up/toast in
+       js/admin-alert.js never fires live at all. */
+    notifyAdmins({ type: 'inbox-opened', threadId: t.id });
+    res.json({
+      success: true,
+      reference: t.id,
+      /* The agent reads this sentence out, so it must not promise something
+         that did not happen: sendInboxOpenedEmail() returns silently when
+         SMTP is unconfigured, and that email is the ONLY delivery of the
+         tokenized link. With no mailer, the honest sentence is the reference
+         and nothing about email. Keep both to one sentence. */
+      message: mailer.CONFIGURED
+        ? `A person has it. The reference is ${t.id}, and a confirmation is on its way to ${t.email}.`
+        : `A person has it — quote the reference ${t.id} if you get in touch again.`
+    });
+  } catch (e) {
+    // inbox.js's own refusals carry a .status and are written to be read
+    // aloud; anything else is a server fault and must not have its message
+    // (a filesystem path, say) spoken to a visitor or handed to an LLM.
+    inboxError(res, e, 'escalate');
+  }
+});
+
+/* The post-call webhook. Audit evidence must not live only in a vendor
+   dashboard we could lose access to, so every finished conversation is
+   written here as well. The signature is checked against the RAW body —
+   `express.json({ verify })` at the top of this file keeps it on
+   req.rawBody precisely so webhooks like this one can. */
+// A captured signature+body pair is otherwise valid forever, which turns a
+// single leaked webhook call into a permanent replay. Reject anything
+// outside this window, in either direction (a clock running fast counts too).
+const AGENT_SIGNATURE_MAX_AGE_SEC = 30 * 60;
+
+function verifyAgentSignature(rawBody, header) {
+  if (!AGENT_WEBHOOK_SECRET || !header || !rawBody) return false;
+  const parts = String(header).split(',').reduce((acc, piece) => {
+    const [k, v] = piece.split('=');
+    if (k && v) acc[k.trim()] = v.trim();
+    return acc;
+  }, {});
+  if (!parts.t || !parts.v0) return false;
+  const t = Number(parts.t);
+  if (!Number.isFinite(t)) return false;
+  if (Math.abs(Math.floor(Date.now() / 1000) - t) > AGENT_SIGNATURE_MAX_AGE_SEC) return false;
+  const expected = crypto.createHmac('sha256', AGENT_WEBHOOK_SECRET)
+    .update(`${parts.t}.${rawBody.toString('utf8')}`)
+    .digest('hex');
+  const a = Buffer.from(parts.v0);
+  const b = Buffer.from(expected);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+/* This route has no shared secret in front of it — the HMAC IS the check —
+   so an unsigned flood otherwise costs a signature computation each and is
+   never counted anywhere. Its own bucket, so a burst here cannot spend the
+   product-lookup/escalate budget the live conversation depends on. */
+const agentTranscriptLimiter = ratelimit.limit({
+  name: 'agent-transcript',
+  windowMs: 60 * 1000,
+  max: 120,
+  message: 'Too many transcript posts. Try again in a minute.'
+});
+
+/* express.json's global limit is 12mb — sized for the photos on a dispute
+   report, not for a chat transcript, and every byte of this one is written
+   to disk under DATA_DIR. A transcript that large is a bug or an attack. */
+const AGENT_TRANSCRIPT_MAX_BYTES = 512 * 1024;
+
+app.post('/api/agent/transcript', agentTranscriptLimiter, (req, res) => {
+  const size = (req.rawBody && req.rawBody.length) || 0;
+  if (size > AGENT_TRANSCRIPT_MAX_BYTES) {
+    console.error(`[agent] transcript rejected: ${size} bytes`);
+    return res.status(413).json({ error: 'That transcript is too large.' });
+  }
+  if (!verifyAgentSignature(req.rawBody, req.get('elevenlabs-signature'))) {
+    console.error('[agent] transcript rejected: signature mismatch');
+    return res.status(401).json({ error: 'Not authorised.' });
+  }
+  try {
+    const dir = path.join(process.env.DATA_DIR || path.join(__dirname, 'data'), 'agent-transcripts');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    // Allowlist only: this id ends up in a filename, and a value like
+    // "../../etc/passwd" or an absolute path must not be able to steer where
+    // that write lands. Anything outside [A-Za-z0-9_-] is dropped, not encoded.
+    // Truncated as well: the allowlist strips the separators but not the
+    // LENGTH, and a 10,000-character id survives it intact, overruns the
+    // filesystem's name limit and comes back as ENAMETOOLONG — a 500 on a
+    // webhook, for input the caller chose.
+    const id = String((req.body && req.body.conversation_id) || 'unknown')
+      .replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
+    const stampName = new Date().toISOString().replace(/[:.]/g, '-');
+    fs.writeFileSync(path.join(dir, `${stampName}-${id}.json`), JSON.stringify(req.body, null, 2));
+    res.json({ success: true });
+  } catch (e) {
+    console.error('[agent] transcript store failed:', e.message);
+    res.status(500).json({ error: 'Could not store that.' });
+  }
 });
 
 /* ============================================================
@@ -2308,6 +2665,116 @@ function buildDisputeReplyMail(d, email, name) {
   return { to: email, subject, text, html };
 }
 
+/* The customer's receipt. Until this existed, opening a report notified
+   nobody — close the tab and nothing anywhere said you had contacted the
+   shop, which is a poor thing to discover when a parcel is missing.
+
+   No message body, for the same reason as the other two: a dispute can
+   carry an address or a courier claim, and a forwarded chain outlives the
+   tab. The photo count IS included, because a sender who attached evidence
+   deserves to see that it arrived — that is precisely what used to vanish
+   silently when a report was sent before its images finished reading. */
+function buildDisputeOpenedMail(d, email, name) {
+  const link = disputeLink(d);
+  const who = name || 'there';
+  const reason = (disputes.REASONS.find(r => r.code === d.reason) || {}).label || 'A problem with the order';
+  const first = (d.messages || [])[0] || {};
+  const photos = ((first.attachments || []).length);
+  const photoLine = photos
+    ? `${photos} photo${photos === 1 ? '' : 's'} arrived with it.`
+    : '';
+
+  const subject = `We've got your report on order ${d.orderId}`;
+  const text = `Hi ${who},\n\n` +
+    `Your report about order ${d.orderId} has reached us.\n\n` +
+    `What you told us: ${reason}\n` +
+    (photoLine ? photoLine + '\n' : '') +
+    `\nWe'll reply on the report itself, and email you when there's an answer:\n${link}\n\n` +
+    `Nothing else is needed from you for now.\n\n` +
+    `— The Ever Nova Life team`;
+  const html = `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;color:#1f2937">
+    <h2 style="color:#6d28d9;margin-bottom:4px">We've got your report</h2>
+    <p>Hi ${escapeHtmlSrv(who)}, your report about order <strong>${escapeHtmlSrv(d.orderId)}</strong> has reached us.</p>
+    <p><strong>What you told us:</strong> ${escapeHtmlSrv(reason)}</p>
+    ${photoLine ? `<p>${escapeHtmlSrv(photoLine)}</p>` : ''}
+    <p>We'll reply on the report itself, and email you when there's an answer.</p>
+    <p><a href="${link}" style="display:inline-block;background:#6d28d9;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600">See your report</a></p>
+    <p style="color:#9ca3af;font-size:12px;margin-top:24px">Nothing else is needed from you for now.</p>
+  </div>`;
+  return { to: email, subject, text, html };
+}
+
+/* The guest has no account, so email is the only way to tell them an
+   answer is waiting. The body of the answer is NOT included: an inbox
+   thread can carry an address or an order reference, and a forwarded
+   chain outlives the tab. */
+async function sendInboxAnsweredEmail(t) {
+  if (!mailer.CONFIGURED) return;
+  const link = inboxLink(t);
+  const who = t.name || 'there';
+  const subject = 'We have replied to your question';
+  const text = `Hi ${who},\n\n` +
+    `There's an answer waiting on your question ("${t.subject}").\n\n` +
+    `Read it and reply here:\n${link}\n\n` +
+    `— The Ever Nova Life team`;
+  const html = `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;color:#1f2937">
+    <h2 style="color:#6d28d9;margin-bottom:4px">We have replied</h2>
+    <p>Hi ${escapeHtmlSrv(who)}, there's an answer waiting on your question.</p>
+    <p><strong>${escapeHtmlSrv(t.subject)}</strong></p>
+    <p><a href="${link}" style="display:inline-block;background:#6d28d9;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600">Read the reply</a></p>
+  </div>`;
+  await mailer.sendMail({ to: t.email, subject, text, html });
+}
+
+/* Tell the shop a guest wrote back. The admin console polls, but the
+   owner is not always looking at it. */
+async function sendInboxReplyAlert(t) {
+  if (!mailer.CONFIGURED) return;
+  const to = (process.env.ADMIN_EMAIL || (process.env.ADMIN_EMAILS || '').split(',')[0] || '').trim();
+  if (!to) return;
+  const subject = `Reply on ${t.id} — ${t.subject}`;
+  const text = `${t.email} wrote back on ${t.id}.\n\n` +
+    `Open the console: ${SITE()}/admin.html#inbox\n`;
+  await mailer.sendMail({ to, subject, text, html: `<p>${escapeHtmlSrv(t.email)} wrote back on <strong>${escapeHtmlSrv(t.id)}</strong>.</p><p><a href="${SITE()}/admin.html#inbox">Open the console</a></p>` });
+}
+
+/* The visitor's receipt. Escalating from a chat box is a moment of
+   doubt — the person has just been told a machine cannot help them —
+   and an email that arrives immediately is what makes the handoff feel
+   real. No message body, for the reason the dispute mails give: a
+   forwarded chain outlives the tab. */
+function buildInboxOpenedMail(t) {
+  const link = inboxLink(t);
+  const who = t.name || 'there';
+  /* Fixed Subject, reference only. `t.subject` is free text the chat agent
+     relayed from a visitor, to an address nothing has verified — an LLM is
+     trivially talked into calling a tool with arguments of the caller's
+     choosing, so putting that text in a Subject line (or in the body) turns
+     this branded acknowledgement into a phishing carrier aimed at anyone.
+     The subject IS still shown, on the thread itself, behind the signed
+     token — where only the real recipient can reach it. Same reason the
+     `who` below is escaped rather than trusted. */
+  const subject = `We've got your question (${t.id})`;
+  const text = `Hi ${who},\n\n` +
+    `Your question has reached us — reference ${t.id}.\n\n` +
+    `A person will reply. You'll get an email when there's an answer, and you can read the conversation here at any time:\n${link}\n\n` +
+    `Nothing else is needed from you for now.\n\n` +
+    `— The Ever Nova Life team`;
+  const html = `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;color:#1f2937">
+    <h2 style="color:#6d28d9;margin-bottom:4px">We've got your question</h2>
+    <p>Hi ${escapeHtmlSrv(who)}, your question has reached us — reference <strong>${escapeHtmlSrv(t.id)}</strong>.</p>
+    <p>A person will reply. You'll get an email when there's an answer.</p>
+    <p><a href="${link}" style="display:inline-block;background:#6d28d9;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600">See the conversation</a></p>
+    <p style="color:#9ca3af;font-size:12px;margin-top:24px">Nothing else is needed from you for now.</p>
+  </div>`;
+  return { to: t.email, subject, text, html };
+}
+
+async function sendInboxOpenedEmail(t) {
+  if (!mailer.CONFIGURED) return;
+  await mailer.sendMail(buildInboxOpenedMail(t));
+}
+
 function buildDisputeResolvedMail(d, email, name) {
   const link = disputeLink(d);
   const who = name || 'there';
@@ -2334,6 +2801,13 @@ function buildDisputeResolvedMail(d, email, name) {
 
 /* Nothing emails the owner: the rail tally in the admin console is that
    notification, and a second channel for the same event is just noise. */
+async function sendDisputeOpenedEmail(d) {
+  if (!mailer.CONFIGURED) return;
+  const user = auth.getUserById(d.userId);
+  if (!user || !user.email) return;
+  return mailer.sendMail(buildDisputeOpenedMail(d, user.email, user.firstName));
+}
+
 async function sendDisputeReplyEmail(d) {
   if (!mailer.CONFIGURED) return;
   const user = auth.getUserById(d.userId);
@@ -2348,10 +2822,190 @@ async function sendDisputeResolvedEmail(d) {
   return mailer.sendMail(buildDisputeResolvedMail(d, user.email, user.firstName));
 }
 
+/* ============================================================
+   ADMIN SIGN-IN SUMMARY
+   "Is anything waiting for me?", answered in one small request.
+
+   The rail tallies inside the admin console only help someone who is
+   already inside it. The owner browsing their own storefront — the most
+   likely place to be — had no way to learn that a customer was waiting,
+   which is how a real dispute sat unseen. This is what the storefront
+   asks at sign-in.
+
+   COUNTS ONLY, deliberately. The page rendering it is a shop page, and
+   handing it orders or customers would put those records on a surface
+   with no reason to hold them. Reusing the console's endpoints would do
+   exactly that, and pull seven requests to render five numbers.
+
+   BTCPay is deliberately absent: its "needs attention" figure means
+   calling out to another host, and the console itself loads BTCPay on
+   demand rather than up front for that reason. A sign-in must never hang
+   on someone else's server.
+   ============================================================ */
+
+/* Which statuses mean what, for this endpoint.
+
+   NOTE: js/admin-console.js carries its own copies of these two sets
+   (OPEN / PAID, and isTestOrder). They must agree, and nothing enforces
+   that — if you change a status here, change it there too. The
+   duplication is deliberate for now: the console computes its tallies
+   from orders it has already loaded, and rewiring it to read this
+   endpoint is a bigger change than this feature warrants. */
+const SUMMARY_OPEN = ['pending', 'awaiting_payment', 'underpaid'];
+const SUMMARY_PAID = 'paid';
+/* method 'card' is the pre-2026-08 gateway that never took real money.
+   Those orders will never be paid and never be packed. */
+const isSandboxOrder = (o) => o && o.method === 'card';
+
+function adminSummary() {
+  const orders = store.listAllOrders().filter(o => !isSandboxOrder(o));
+
+  /* Threads where the customer spoke last. A thread we have already
+     answered is not waiting on us, and neither is a resolved one — the
+     same rule the console's rail tally uses. */
+  const waitingThreads = disputes.list()
+    .filter(d => disputes.summarize(d).status === 'awaiting_us').length;
+
+  /* Same rule, the other queue: an inbox thread the customer spoke last
+     on is waiting on us, and a closed one never is. */
+  const waitingInbox = inbox.list().filter(t => t.status === 'awaiting_us').length;
+
+  let lowStock = 0;
+  const threshold = outreach.config().lowStockThreshold;
+  for (const p of productStore.listProducts()) {
+    const qty = p && p.stockQty;
+    // Absent means untracked, which is not the same as none left.
+    if (qty === null || qty === undefined || !Number.isFinite(Number(qty))) continue;
+    if (Number(qty) <= threshold) lowStock++;
+  }
+
+  const summary = {
+    disputes: waitingThreads,
+    inbox: waitingInbox,
+    unpaidOrders: orders.filter(o => SUMMARY_OPEN.indexOf(o.status) !== -1).length,
+    toShip: orders.filter(o => o.status === SUMMARY_PAID).length,
+    lowStock,
+    storagePct: disputes.storageStatus().pct,
+    /* The threshold travels with the figure, never hardcoded in the browser —
+       the same rule the admin console's amber line follows, so the pop-up, the
+       console and the warning email all agree about when storage is a problem. */
+    storageAlertPct: outreach.config().storageAlertPct
+  };
+  /* Computed here rather than left to the client: the pop-up shows nothing
+     at all when this is false, and "nothing is waiting" is one decision,
+     not five the browser has to re-derive and keep in step. */
+  summary.anythingWaiting = Boolean(
+    summary.disputes || summary.inbox || summary.unpaidOrders || summary.toShip || summary.lowStock
+  );
+  return summary;
+}
+
+/* ============================================================
+   LIVE EVENTS (Server-Sent Events)
+   A reply should reach the other side the moment it is written, not on
+   the next poll. SSE rather than websockets: it is one-way, which is all
+   this needs, it is plain HTTP so nothing in front of it has to learn a
+   new protocol, and EventSource is native — no dependency, which the
+   no-new-dependencies rule requires anyway.
+
+   Polling is NOT removed on the client. A connection can be recycled by
+   the host at any time, and a notification system whose only path is one
+   socket is a notification system that goes quiet without telling anyone.
+   The stream is the fast path; the poll is the floor.
+
+   AUTHENTICATION: EventSource cannot send an Authorization header, so the
+   credential has to travel in the URL. A JWT must not — it would land in
+   server logs, proxy logs and browser history, and this file already
+   refuses to put the admin key in a query string for the same reason.
+   Instead an authenticated request mints a single-use ticket that is good
+   for sixty seconds and dies on first use.
+   ============================================================ */
+const SSE_TICKET_MS = 60 * 1000;
+const sseTickets = new Map();          // ticket -> { userId, isAdmin, expires }
+const sseByUser = new Map();           // userId -> Set<res>
+const sseAdmins = new Set();           // every signed-in admin's stream
+
+function sweepTickets(now) {
+  for (const [t, v] of sseTickets) if (v.expires <= now) sseTickets.delete(t);
+}
+
+app.post('/api/events/ticket', auth.requireAuth, (req, res) => {
+  const now = Date.now();
+  sweepTickets(now);
+  const ticket = require('crypto').randomBytes(16).toString('hex');
+  sseTickets.set(ticket, {
+    userId: req.user.id,
+    isAdmin: Boolean(req.user.isAdmin),
+    expires: now + SSE_TICKET_MS
+  });
+  res.json({ success: true, ticket, expiresInMs: SSE_TICKET_MS });
+});
+
+app.get('/api/events', (req, res) => {
+  const ticket = String(req.query.ticket || '');
+  const found = sseTickets.get(ticket);
+  sseTickets.delete(ticket);                      // single use, always
+  if (!found || found.expires <= Date.now()) {
+    return res.status(401).json({ error: 'That live-updates ticket is not valid any more.' });
+  }
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',    // no-transform: stop proxies buffering
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no'
+  });
+  res.write('retry: 5000\n\n');                   // the browser reconnects on its own
+
+  const set = sseByUser.get(found.userId) || new Set();
+  set.add(res);
+  sseByUser.set(found.userId, set);
+  if (found.isAdmin) sseAdmins.add(res);
+
+  /* A comment line every 25s. Idle connections get closed by hosts and
+     proxies, and a silently dead stream is the failure this must not have. */
+  const beat = setInterval(() => { try { res.write(': ping\n\n'); } catch (e) { /* gone */ } }, 25000);
+
+  req.on('close', () => {
+    clearInterval(beat);
+    sseAdmins.delete(res);
+    const live = sseByUser.get(found.userId);
+    if (live) { live.delete(res); if (!live.size) sseByUser.delete(found.userId); }
+  });
+});
+
+function sseSend(res, payload) {
+  try { res.write('data: ' + JSON.stringify(payload) + '\n\n'); } catch (e) { /* dropped */ }
+}
+/* Never let a broken stream break the write that triggered it — these are
+   called from routes that have already done the real work. */
+function notifyUser(userId, payload) {
+  try { (sseByUser.get(userId) || []).forEach(r => sseSend(r, payload)); }
+  catch (e) { console.error('[events] user notify failed:', e.message); }
+}
+function notifyAdmins(payload) {
+  try { sseAdmins.forEach(r => sseSend(r, payload)); }
+  catch (e) { console.error('[events] admin notify failed:', e.message); }
+}
+
+app.get('/api/admin/summary', requireAdmin, (req, res) => {
+  res.json({ success: true, ...adminSummary() });
+});
+
 /* ---- ADMIN: the dispute queue ----
    The owner works from this: every thread, newest activity first, each with
    the order and the customer already attached so the queue answers "what is
    this about?" without a second request. */
+/* The one shape every storage response carries. `alertPct` rides with the
+   figure so the console's amber line turns at exactly the percentage that
+   sends the warning email — and it has to ride on EVERY response carrying
+   storage, not just the queue: the console replaces its whole storage object
+   from whichever call answered last, so a sweep returning a figure with no
+   threshold would quietly drop the line back to the default. */
+function storageView() {
+  return { ...disputes.storageStatus(), alertPct: outreach.config().storageAlertPct };
+}
+
 app.get('/api/admin/disputes', requireAdmin, (req, res) => {
   const rows = disputes.list().map(d => {
     const user = auth.getUserById(d.userId);
@@ -2363,7 +3017,51 @@ app.get('/api/admin/disputes', requireAdmin, (req, res) => {
       order: disputeOrderView(order)
     };
   });
-  res.json({ success: true, reasons: disputes.REASONS, outcomes: disputes.OUTCOMES, disputes: rows });
+  res.json({
+    success: true,
+    reasons: disputes.REASONS,
+    outcomes: disputes.OUTCOMES,
+    /* The figure rides on the queue the console already loads, so the
+       storage line costs no extra request. See storageView() above for why
+       alertPct has to ride along on every response, not just this one. */
+    storage: storageView(),
+    disputes: rows
+  });
+});
+
+/* ---- ADMIN: reclaim attachment space ----
+   Two destructive controls, and the only ones in the console not tied to
+   deleting an account. Both drop bytes and keep the record, so a thread that
+   has been cleared still reads honestly: the message says a photo was sent,
+   and the label says it is gone. */
+app.post('/api/admin/disputes/sweep', requireAdmin, (req, res) => {
+  const out = disputes.sweepExpiredAttachments(Date.now());
+  if (out.threads) {
+    console.log(`[disputes] swept ${out.files} photo(s) from ${out.threads} resolved report(s)`);
+  }
+  res.json({ success: true, ...out, storage: storageView() });
+});
+
+app.delete('/api/admin/disputes/:id/attachments', requireAdmin, (req, res) => {
+  const out = disputes.stripAttachments(req.params.id, Date.now());
+  if (!out) return res.status(404).json({ error: 'No report with that reference.' });
+  /* A delete that failed used to answer exactly like a thread that had no
+     photos in the first place — so the console cheerfully said there was
+     nothing to remove while the pane beside it still counted the photos and
+     the bytes were still on the disk. An honest failure instead: nothing was
+     stamped, so the owner can retry, and the log has the reason. */
+  if (out.ok === false) {
+    console.error(`[disputes] could not remove the photos on ${req.params.id} — nothing was changed`);
+    return res.status(500).json({
+      error: 'Those photos could not be removed. Nothing was changed — try again, and check the server log if it keeps failing.',
+      storage: storageView()
+    });
+  }
+  if (out.files) {
+    console.log(`[disputes] ${(req.user && req.user.email) || 'admin'} removed ` +
+      `${out.files} photo(s) from ${req.params.id}`);
+  }
+  res.json({ success: true, files: out.files, bytes: out.bytes, storage: storageView() });
 });
 
 app.get('/api/admin/disputes/:id', requireAdmin, (req, res) => {
@@ -2390,6 +3088,7 @@ app.post('/api/admin/disputes/:id/messages', requireAdmin, async (req, res) => {
       attachments: req.body.attachments
     });
     sendDisputeReplyEmail(updated).catch(e => console.error('[disputes] reply email failed:', e.message));
+    notifyUser(updated.userId, { type: 'dispute-reply', orderId: updated.orderId, disputeId: updated.id });
     res.json({ success: true, dispute: updated });
   } catch (err) {
     res.status(err.status || 400).json({ error: err.message });
@@ -2406,6 +3105,7 @@ app.post('/api/admin/disputes/:id/resolve', requireAdmin, (req, res) => {
       by: (req.user && req.user.email) || 'admin'
     });
     sendDisputeResolvedEmail(updated).catch(e => console.error('[disputes] resolved email failed:', e.message));
+    notifyUser(updated.userId, { type: 'dispute-resolved', orderId: updated.orderId, disputeId: updated.id });
     res.json({ success: true, dispute: updated });
   } catch (err) {
     res.status(err.status || 400).json({ error: err.message });
@@ -3613,7 +4313,7 @@ function cartCandidates() {
 /* The whole tick. Never throws: each kind is isolated so a failure in one
    still lets the other two run. */
 async function runOutreach(now = Date.now()) {
-  const summary = { cartsNudged: 0, ordersNudged: 0, stockAlerts: 0, errors: 0 };
+  const summary = { cartsNudged: 0, ordersNudged: 0, stockAlerts: 0, storageAlerts: 0, photosExpired: 0, errors: 0 };
 
   /* ---- 1. unpaid orders ---- */
   try {
@@ -3671,9 +4371,39 @@ async function runOutreach(now = Date.now()) {
     console.error('[outreach] stock pass failed:', e.message);
   }
 
-  if (summary.cartsNudged || summary.ordersNudged || summary.stockAlerts || summary.errors) {
+  /* ---- 4. dispute photo storage ---- */
+  try {
+    /* Expire first, then look at what is left. The other order would warn at
+       85% and immediately free the space that made it 85% — a false alarm the
+       owner cannot act on, because by the time they read it the number is
+       already wrong. */
+    const swept = disputes.sweepExpiredAttachments(now);
+    summary.photosExpired = swept.files;
+    if (swept.threads) {
+      console.log(`[outreach] expired ${swept.files} photo(s) from ${swept.threads} resolved report(s)`);
+    }
+
+    const due = outreach.selectStorageAlert(disputes.storageStatus(), now);
+    if (due) {
+      try {
+        await sendDisputeStorageAlert(due);
+        summary.storageAlerts++;
+      } catch (e) {
+        summary.errors++;
+        console.error('[outreach] storage alert failed:', e.message);
+      }
+      /* Stamped either way — a broken SMTP must turn one missed warning into
+         one missed warning, not an hourly retry. */
+      outreach.markStorageAlerted(due.pct, now);
+    }
+  } catch (e) {
+    summary.errors++;
+    console.error('[outreach] storage pass failed:', e.message);
+  }
+
+  if (summary.cartsNudged || summary.ordersNudged || summary.stockAlerts || summary.storageAlerts || summary.photosExpired || summary.errors) {
     console.log(`[outreach] orders ${summary.ordersNudged} · carts ${summary.cartsNudged} · ` +
-                `stock ${summary.stockAlerts} · errors ${summary.errors}`);
+                `stock ${summary.stockAlerts} · storage ${summary.storageAlerts} · photosExpired ${summary.photosExpired} · errors ${summary.errors}`);
   }
   return summary;
 }
@@ -3839,6 +4569,54 @@ async function sendLowStockAlert({ product, level, previousLevel, threshold }) {
   });
 }
 
+/* The owner's copy of the storage figure. Split builder-from-sender like the
+   two dispute notices above, for the same reason: the message is the part
+   worth asserting, and asserting it must not need SMTP. Nothing here reads a
+   thread, so no customer address, reference or path can reach the mail — the
+   test holds that shut. */
+function buildDisputeStorageMail({ pct, usedBytes, ceilingBytes, threshold }) {
+  const to = process.env.ADMIN_EMAIL || '';
+  const mb = n => (Number(n) / (1024 * 1024)).toFixed(0) + ' MB';
+  const full = pct >= 100;
+  // Read per send, not frozen at module load — retention is env-driven and
+  // Render can change it without a redeploy.
+  const retentionNote = `${disputes.retentionDays()} days after a report is resolved`;
+  const disputesLink = `${SITE()}/admin.html#disputes`;
+  return {
+    to,
+    subject: full
+      ? 'Dispute photo storage is FULL — photos are being refused'
+      : `Dispute photo storage at ${pct}%`,
+    text: (full
+      ? `Customers can no longer attach photos to a report. Their reports still go through, and they are told to describe the problem instead — but the evidence is not reaching you.\n\n`
+      : `Dispute photos are using ${mb(usedBytes)} of the ${mb(ceilingBytes)} allowance (${pct}%, warning at ${threshold}%).\n\n`) +
+      `Photos expire on their own ${retentionNote}, and you can reclaim space now from the Disputes screen:\n` +
+      `${disputesLink}\n\n` +
+      `If the disk itself has room, raise DISPUTE_TOTAL_BYTES_MAX on the server instead.\n`,
+    /* The HTML part carried the figure and a button and neither of the two
+       facts that tell the owner what to do — and most clients render the HTML,
+       so most readings of this email were the poorer half. Both facts belong
+       here as well as in the text. */
+    html: orderEmailHtml({
+      heading: full ? 'Photo storage is full' : 'Photo storage is filling up',
+      intro: full
+        ? 'Customers can no longer attach photos to a report. Their reports still go through — but the evidence is not reaching you.'
+        : `Dispute photos are using <strong>${escapeHtmlSrv(mb(usedBytes))}</strong> of the ${escapeHtmlSrv(mb(ceilingBytes))} allowance (<strong>${escapeHtmlSrv(String(pct))}%</strong>, warning at ${escapeHtmlSrv(String(threshold))}%).`,
+      extraHtml: `<p><a href="${escapeHtmlSrv(disputesLink)}" style="display:inline-block;background:#6d28d9;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600">Open Disputes</a></p>
+        <p style="color:#6b7280;font-size:14px">Photos expire on their own <strong>${escapeHtmlSrv(retentionNote)}</strong> — the button above simply does it now, for everything already past that window.</p>
+        <p style="color:#6b7280;font-size:14px">If the disk itself has room, raise <strong>DISPUTE_TOTAL_BYTES_MAX</strong> on the server instead.</p>`
+    })
+  };
+}
+
+async function sendDisputeStorageAlert(due) {
+  const mail = buildDisputeStorageMail(due);
+  /* Same guard as the low-stock alert: without ADMIN_EMAIL this is built and
+     dropped, which is why /api/health reports whether that inbox exists. */
+  if (!mailer.CONFIGURED || !mail.to) return;
+  return mailer.sendMail(mail);
+}
+
 /* ---- serve the static site from the same origin — only when it's actually here ----
    Same-origin deploy (e.g. GoDaddy / local): ROOT holds the site → serve it.
    API-only deploy (e.g. Render, where just /server is deployed and the site lives
@@ -3901,6 +4679,14 @@ if (require.main === module) {
     console.log(`  zelle:  ${zelle.CONFIGURED ? 'ready → ' + zelle.RECIPIENT + ' (manual confirmation in admin.html)' : 'not configured (set ZELLE_RECIPIENT + ZELLE_NAME in .env)'}`);
     console.log(`  auth:   accounts ready${auth.CONFIGURED ? '' : ' (JWT_SECRET not set — set it in .env for production)'}`);
     console.log(`  ship:   auto-ship ${CRON_KEY ? 'ready (CRON_KEY set)' : 'WITHOUT a CRON_KEY — set one so the scheduled trigger can be secured'}`);
+    /* The one tunable on this server whose default is WRONG everywhere it is
+       deployed: 2 GB of photos on a 1 GB disk. Unset, the ceiling and the 80%
+       warning both sit above the disk and never fire, so the only symptom is
+       the whole store failing writes one day. Say it out loud at boot. */
+    const photoCeilingMb = Math.round(disputes.totalBytesMax() / (1024 * 1024));
+    console.log(`  photos: ${process.env.DISPUTE_TOTAL_BYTES_MAX
+      ? `dispute photo ceiling ${photoCeilingMb} MB (DISPUTE_TOTAL_BYTES_MAX set)`
+      : `dispute photo ceiling defaulting to ${photoCeilingMb} MB — set DISPUTE_TOTAL_BYTES_MAX BELOW the disk size (a 1 GB disk wants 536870912) or neither the ceiling nor the storage warning ever engages`}`);
     console.log(`  api:    http://localhost:${PORT}/api`);
     console.log(`  site:   http://localhost:${PORT}/  (serving ${ROOT})\n`);
   });
@@ -3931,6 +4717,9 @@ if (require.main === module) {
   }
 }
 
+app.buildDisputeOpenedMail = buildDisputeOpenedMail;
 app.buildDisputeReplyMail = buildDisputeReplyMail;
 app.buildDisputeResolvedMail = buildDisputeResolvedMail;
+app.buildDisputeStorageMail = buildDisputeStorageMail;
+app.buildInboxOpenedMail = buildInboxOpenedMail;
 module.exports = app;

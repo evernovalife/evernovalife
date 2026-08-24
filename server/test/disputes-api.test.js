@@ -461,3 +461,190 @@ test('the three 2 MB photos support.html advertises fit inside the body limit', 
   assert.equal(status, 201);
   assert.equal(body.dispute.messages[0].attachments.length, 3);
 });
+
+/* ============================================================
+   STORAGE — the figure, the sweep, the strip
+   ============================================================ */
+
+test('the admin queue carries the storage figure', async () => {
+  const token = await adminToken();
+  const { status, body } = await api('/api/admin/disputes', { token });
+  assert.equal(status, 200);
+  assert.ok(body.storage, 'storage rides on the existing response');
+  assert.equal(typeof body.storage.usedBytes, 'number');
+  assert.equal(typeof body.storage.ceilingBytes, 'number');
+  assert.equal(typeof body.storage.pct, 'number');
+});
+
+test('the admin queue reports the alert threshold alongside the figure, so the console and the email agree', async () => {
+  const prev = process.env.DISPUTE_STORAGE_ALERT_PCT;
+  try {
+    process.env.DISPUTE_STORAGE_ALERT_PCT = '73';
+    const token = await adminToken();
+    const { status, body } = await api('/api/admin/disputes', { token });
+    assert.equal(status, 200);
+    assert.equal(typeof body.storage.alertPct, 'number');
+    assert.equal(body.storage.alertPct, 73);
+  } finally {
+    if (prev === undefined) delete process.env.DISPUTE_STORAGE_ALERT_PCT;
+    else process.env.DISPUTE_STORAGE_ALERT_PCT = prev;
+  }
+});
+
+test('an ordinary account is refused the storage controls', async () => {
+  const mal = await signUp('mal-storage@example.com');
+  for (const [method, pathname] of [
+    ['POST', '/api/admin/disputes/sweep'],
+    ['DELETE', '/api/admin/disputes/DSP-NOPE/attachments']
+  ]) {
+    const { status } = await api(pathname, { method, token: mal.token, body: method === 'POST' ? {} : undefined });
+    assert.equal(status, 401, `${method} ${pathname} should be 401, got ${status}`);
+  }
+});
+
+test('stripping a thread frees its photos and reports what went', async () => {
+  const vera = await signUp('vera-d@example.com');
+  placeOrder(vera.user.id, 'ENL-STRIP');
+  const made = await api('/api/disputes', {
+    method: 'POST', token: vera.token,
+    body: { orderId: 'ENL-STRIP', reason: 'damaged', message: 'See photo.', attachments: [{ name: 'p.png', data: PNG }] }
+  });
+  const id = made.body.dispute.id;
+  const fileId = made.body.dispute.messages[0].attachments[0].id;
+  const token = await adminToken();
+
+  const before = (await api('/api/admin/disputes', { token })).body.storage.usedBytes;
+  const out = await api(`/api/admin/disputes/${id}/attachments`, { method: 'DELETE', token });
+  assert.equal(out.status, 200);
+  assert.equal(out.body.files, 1);
+  assert.ok(out.body.bytes > 0);
+  assert.equal(out.body.storage.usedBytes, before - out.body.bytes);
+
+  // The bytes are gone for both sides; the conversation is not.
+  assert.equal((await api(`/api/disputes/${id}/files/${fileId}`, { token: vera.token })).status, 404);
+  assert.equal((await api(`/api/admin/disputes/${id}/files/${fileId}`, { token })).status, 404);
+  const seen = await api(`/api/disputes/${id}`, { token: vera.token });
+  assert.equal(seen.body.dispute.messages[0].body, 'See photo.');
+  assert.ok(seen.body.dispute.messages[0].attachments[0].expiredAt);
+});
+
+test('stripping an unknown thread is a 404', async () => {
+  const token = await adminToken();
+  assert.equal((await api('/api/admin/disputes/DSP-NOPE/attachments', { method: 'DELETE', token })).status, 404);
+});
+
+test('the sweep runs on demand and reports zeros when nothing is due', async () => {
+  const token = await adminToken();
+  const before = (await api('/api/admin/disputes', { token })).body.storage.usedBytes;
+  const { status, body } = await api('/api/admin/disputes/sweep', { method: 'POST', token });
+  assert.equal(status, 200);
+  // Nothing in this file is ever back-dated, so no thread is old enough to be
+  // due — the sweep must find nothing and must leave the total alone.
+  assert.equal(body.threads, 0);
+  assert.equal(body.files, 0);
+  assert.equal(body.bytes, 0);
+  assert.equal(body.storage.usedBytes, before, 'a sweep with nothing due frees nothing');
+});
+
+/* The console replaces its whole `state.storage` object from whichever call
+   answered last — so if the sweep or strip route ever answered without
+   `alertPct`, the amber line would silently fall back to the default the
+   moment either control was used, and 80 is also that default, so a test
+   against the default could pass by coincidence. A non-default threshold
+   here proves the value travelled from the server, not from the fallback. */
+test('the sweep response carries the alert threshold, not just the queue', async () => {
+  const prev = process.env.DISPUTE_STORAGE_ALERT_PCT;
+  try {
+    process.env.DISPUTE_STORAGE_ALERT_PCT = '61';
+    const token = await adminToken();
+    const { status, body } = await api('/api/admin/disputes/sweep', { method: 'POST', token });
+    assert.equal(status, 200);
+    assert.equal(typeof body.storage.alertPct, 'number');
+    assert.equal(body.storage.alertPct, 61);
+  } finally {
+    if (prev === undefined) delete process.env.DISPUTE_STORAGE_ALERT_PCT;
+    else process.env.DISPUTE_STORAGE_ALERT_PCT = prev;
+  }
+});
+
+test('the strip response carries the alert threshold, not just the queue', async () => {
+  const prev = process.env.DISPUTE_STORAGE_ALERT_PCT;
+  try {
+    process.env.DISPUTE_STORAGE_ALERT_PCT = '61';
+    const vera = await signUp('vera-alertpct@example.com');
+    placeOrder(vera.user.id, 'ENL-STRIPPCT');
+    const made = await api('/api/disputes', {
+      method: 'POST', token: vera.token,
+      body: { orderId: 'ENL-STRIPPCT', reason: 'damaged', message: 'See photo.', attachments: [{ name: 'p.png', data: PNG }] }
+    });
+    const id = made.body.dispute.id;
+    const token = await adminToken();
+
+    const out = await api(`/api/admin/disputes/${id}/attachments`, { method: 'DELETE', token });
+    assert.equal(out.status, 200);
+    assert.equal(typeof out.body.storage.alertPct, 'number');
+    assert.equal(out.body.storage.alertPct, 61);
+  } finally {
+    if (prev === undefined) delete process.env.DISPUTE_STORAGE_ALERT_PCT;
+    else process.env.DISPUTE_STORAGE_ALERT_PCT = prev;
+  }
+});
+
+/* A delete that FAILS must not answer like a thread that had no photos. The
+   route used to hand back the same zeros for both, and the console said
+   "there were no photos to remove" above a pane still counting one. */
+test('a strip the disk refuses is a 500, and the photo is still there afterwards', async () => {
+  const vera = await signUp('vera-stripfail@example.com');
+  placeOrder(vera.user.id, 'ENL-STRIPFAIL');
+  const made = await api('/api/disputes', {
+    method: 'POST', token: vera.token,
+    body: { orderId: 'ENL-STRIPFAIL', reason: 'damaged', message: 'See photo.', attachments: [{ name: 'p.png', data: PNG }] }
+  });
+  const id = made.body.dispute.id;
+  const fileId = made.body.dispute.messages[0].attachments[0].id;
+  const token = await adminToken();
+
+  const realRm = fs.rmSync;
+  let out;
+  try {
+    fs.rmSync = () => { throw Object.assign(new Error('EBUSY: resource busy'), { code: 'EBUSY' }); };
+    out = await api(`/api/admin/disputes/${id}/attachments`, { method: 'DELETE', token });
+  } finally {
+    fs.rmSync = realRm;
+  }
+  assert.equal(out.status, 500, 'a failed removal is not a success with zeros');
+  assert.match(out.body.error, /could not be removed/);
+  assert.ok(!out.body.success, 'and it never claims success');
+
+  // Still downloadable, still unstamped — the pane and the disk agree.
+  assert.equal((await api(`/api/admin/disputes/${id}/files/${fileId}`, { token })).status, 200);
+  const seen = await api(`/api/admin/disputes/${id}`, { token });
+  assert.equal(seen.body.dispute.messages[0].attachments[0].expiredAt, undefined);
+
+  // And retrying once the disk cooperates works normally.
+  const retry = await api(`/api/admin/disputes/${id}/attachments`, { method: 'DELETE', token });
+  assert.equal(retry.status, 200);
+  assert.equal(retry.body.files, 1);
+});
+
+/* ---- the ceiling has to be visible from outside ----
+   Its default is bigger than the production disk, so unset it never engages
+   and the 80% warning never sends — with no symptom until the disk is full.
+   The boot log says so on every start; this is the half a monitor can read. */
+test('/api/health reports whether the dispute photo ceiling was configured', async () => {
+  const prev = process.env.DISPUTE_TOTAL_BYTES_MAX;
+  try {
+    delete process.env.DISPUTE_TOTAL_BYTES_MAX;
+    const unset = await api('/api/health');
+    assert.equal(unset.body.disputeCeilingSet, false, 'unset is reported as unset');
+
+    process.env.DISPUTE_TOTAL_BYTES_MAX = '536870912';
+    const set = await api('/api/health');
+    assert.equal(set.body.disputeCeilingSet, true, 'and set as set');
+    // Public route: the flag says whether, never how much.
+    assert.ok(!JSON.stringify(set.body).includes('536870912'), 'the value itself stays private');
+  } finally {
+    if (prev === undefined) delete process.env.DISPUTE_TOTAL_BYTES_MAX;
+    else process.env.DISPUTE_TOTAL_BYTES_MAX = prev;
+  }
+});

@@ -3,19 +3,20 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Returns — Ever Nova Life</title>
-  <meta name="description" content="Ever Nova Life 30-day returns — eligibility, how to start a return, refunds, damaged or incorrect items and non-returnable products.">
-  <link rel="canonical" href="https://evernovalife.com/returns.html">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Your conversation — Ever Nova Life</title>
+  <meta name="description" content="Read our reply and write back — no account needed.">
+  <link rel="canonical" href="https://evernovalife.com/inbox.html">
   <meta name="theme-color" content="#07040f">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Ever Nova Life">
-  <meta property="og:title" content="Returns — Ever Nova Life">
-  <meta property="og:description" content="Ever Nova Life 30-day returns — eligibility, how to start a return, refunds, damaged or incorrect items and non-returnable products.">
-  <meta property="og:url" content="https://evernovalife.com/returns.html">
+  <meta property="og:title" content="Your conversation — Ever Nova Life">
+  <meta property="og:description" content="Read our reply and write back — no account needed.">
+  <meta property="og:url" content="https://evernovalife.com/inbox.html">
   <meta property="og:image" content="https://evernovalife.com/og-image.svg">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="Returns — Ever Nova Life">
-  <meta name="twitter:description" content="Ever Nova Life 30-day returns — eligibility, how to start a return, refunds, damaged or incorrect items and non-returnable products.">
+  <meta name="twitter:title" content="Your conversation — Ever Nova Life">
+  <meta name="twitter:description" content="Read our reply and write back — no account needed.">
   <meta name="twitter:image" content="https://evernovalife.com/og-image.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -71,71 +72,30 @@
   </header>
 
   <main id="main">
+    <section class="section">
+      <div class="container inbox-wrap">
+        <h1 class="inbox-title" id="inboxTitle">Your conversation</h1>
+        <p class="inbox-sub" id="inboxSub">Loading…</p>
 
-  <!-- ===== SEARCH OVERLAY ===== -->
-  <div class="search-overlay" id="searchOverlay">
-    <form class="search-box">
-      <input type="search" placeholder="Search peptides…" aria-label="Search">
-      <button class="btn btn-primary" type="submit">Search</button>
-    </form>
-  </div>
+        <div class="inbox-thread" id="inboxThread" aria-live="polite"></div>
 
-  <section class="page-head">
-    <div class="container">
-      <div class="breadcrumb"><a href="index.html">Home</a> <span>/</span> <span>Returns</span></div>
-      <h1>30-Day <span class="gradient-text">Returns</span></h1>
-      <p>We stand behind our products with a straightforward 30-day return policy.</p>
-    </div>
-  </section>
+        <form class="inbox-composer" id="inboxComposer" hidden>
+          <label class="sr-only" for="inboxBody">Your reply</label>
+          <textarea id="inboxBody" rows="3" maxlength="4000" placeholder="Write a reply…" required></textarea>
+          <button class="btn btn-primary" type="submit" id="inboxSend">Send</button>
+        </form>
 
-  <section class="section" style="padding-top:0">
-    <div class="container">
-      <div class="content-card glass">
-        <p>Your satisfaction matters to us. We offer a 30-day satisfaction guarantee on eligible products, so if something is not right you can request a return within 30 days of delivery.</p>
+        <p class="inbox-closed" id="inboxClosed" hidden>
+          This conversation is closed. Email
+          <a href="mailto:support@evernovalife.com">support@evernovalife.com</a> to pick it back up.
+        </p>
 
-        <h2>Return Eligibility</h2>
-        <p>To qualify for a return, your item must meet all of the following conditions:</p>
-        <ul class="bullets">
-          <li>Unopened and unused.</li>
-          <li>In its original, sealed packaging.</li>
-          <li>Returned within 30 days of the delivery date.</li>
-          <li>Accompanied by proof of purchase, such as your order number or receipt.</li>
-          <li>Opened vials and reconstituted product are NOT returnable for safety and integrity reasons.</li>
-        </ul>
-
-        <h2>How to Start a Return</h2>
-        <p>Starting a return is simple — just follow these steps:</p>
-        <ul class="bullets">
-          <li>Contact our team at <a href="mailto:support@evernovalife.com">support@evernovalife.com</a> with your order number.</li>
-          <li>Receive a Return Merchandise Authorization (RMA) number and return instructions.</li>
-          <li>Ship the item back to us in its original sealed packaging.</li>
-          <li>Once received and inspected, your refund is issued within 5–7 business days to your original payment method.</li>
-        </ul>
-
-        <h2>Refunds</h2>
-        <p>Approved refunds cover the purchase price of the returned product. Original shipping charges are non-refundable unless the return is the result of our error, and return shipping costs are the customer's responsibility unless otherwise stated.</p>
-
-        <h2>Damaged or Incorrect Items</h2>
-        <p>If your order arrives damaged or you received the wrong item, please contact us within 48 hours of delivery and include photos of the product and packaging. We will arrange a free replacement at no cost to you.</p>
-
-        <h2>Non-Returnable Items</h2>
-        <p>For safety and integrity reasons, the following items cannot be returned:</p>
-        <ul class="bullets">
-          <li>Opened vials.</li>
-          <li>Clearance or final-sale items.</li>
-        </ul>
-
-        <p class="text-center">Still have questions about a return? Our team is happy to help.</p>
-        <p class="text-center"><a href="contact.html" class="btn btn-primary">Contact Support</a></p>
-
-        <p class="updated">Last updated: June 2026</p>
+        <p class="form-msg" id="inboxMsg" role="status"></p>
       </div>
-    </div>
-  </section>
-
-  <!-- ===== FOOTER ===== -->
+    </section>
   </main>
 
+  <!-- ===== FOOTER ===== -->
   <footer class="site-footer">
     <div class="container footer-grid">
       <div class="footer-brand">
@@ -190,14 +150,14 @@
     </div>
   </footer>
 
-  <script src="js/products-data.js?v=87"></script>
   <script src="js/config.js?v=87"></script>
-  <script src="js/chat.js?v=87"></script>
+  <script src="js/products-data.js?v=87"></script>
   <script src="js/cart.js?v=87"></script>
   <script src="js/promos.js?v=87"></script>
   <script src="js/main.js?v=88"></script>
   <script src="js/live.js?v=87"></script>
   <script src="js/admin-alert.js?v=87"></script>
   <script src="js/customer-alert.js?v=87"></script>
+  <script src="js/inbox.js?v=87"></script>
 </body>
 </html>

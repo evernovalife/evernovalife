@@ -92,6 +92,8 @@ test('anonymous users get 401 on all account/admin endpoints', async () => {
     ['POST', '/api/disputes'],
     ['GET', '/api/admin/disputes'],
     ['POST', '/api/admin/disputes/DSP-NOPE/resolve'],
+    ['POST', '/api/admin/disputes/sweep'],
+    ['DELETE', '/api/admin/disputes/DSP-NOPE/attachments'],
     ['POST', '/api/admin/orders/ENL-NOPE/paid'],
     ['POST', '/api/admin/orders/ENL-NOPE/cancel'],
     ['POST', '/api/products'],

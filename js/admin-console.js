@@ -65,6 +65,10 @@
     disputeThread: null,   // the full thread, loaded when one is opened
     disputeOutcomes: [],   // how a report can be closed, from the list response
     disputeTab: 'awaiting_us',
+    inbox: null,           // inbox threads — questions from people with no account
+    inboxId: '',           // which thread the right pane is showing
+    inboxThread: null,     // the full thread, loaded when one is opened
+    storage: null,         // dispute photo usage against the ceiling (includes alertPct, from the server)
     range: 30,            // days; 0 = all time
     view: 'dashboard',
     loading: false
@@ -91,7 +95,8 @@
       A.api('/api/shipping'),
       A.api('/api/admin/label-design'),
       A.api('/api/admin/promotions'),
-      A.api('/api/admin/disputes')
+      A.api('/api/admin/disputes'),
+      A.api('/api/admin/inbox')
     ]);
     state.loading = false;
 
@@ -116,7 +121,11 @@
     state.design = results[6].status === 'fulfilled' ? (results[6].value.design || null) : (state.design || null);
     state.promos = results[7].status === 'fulfilled' ? (results[7].value.promotions || []) : (state.promos || null);
     state.disputes = results[8].status === 'fulfilled' ? (results[8].value.disputes || []) : (state.disputes || []);
-    if (results[8].status === 'fulfilled') state.disputeOutcomes = results[8].value.outcomes || [];
+    if (results[8].status === 'fulfilled') {
+      state.disputeOutcomes = results[8].value.outcomes || [];
+      state.storage = results[8].value.storage || null;
+    }
+    state.inbox = results[9].status === 'fulfilled' ? (results[9].value.threads || []) : (state.inbox || []);
 
     results.forEach(function (r, i) {
       if (r.status === 'rejected' && r.reason.status !== 0) {
@@ -132,8 +141,10 @@
         if (i === 7 && r.reason.status === 404) return;
         // Disputes: a 404 means the backend predates them; the view says so.
         if (i === 8 && r.reason.status === 404) return;
+        // Inbox: a 404 means the backend predates it; the view says so.
+        if (i === 9 && r.reason.status === 404) return;
         A.toast(['Orders', 'Users', 'Auto-ship plans', 'Products', 'Health', 'Shipping rates',
-          'Label design', 'Promotions', 'Disputes'][i] + ': ' + r.reason.message, 'error');
+          'Label design', 'Promotions', 'Disputes', 'Inbox'][i] + ': ' + r.reason.message, 'error');
       }
     });
 
@@ -349,6 +360,7 @@
     btcpay: ['BTCPay', 'What the payment server says, next to what we recorded'],
     autoship: ['Auto-Ship', 'Repeating orders and their next invoice'],
     disputes: ['Disputes', 'Problems customers have reported, and how they ended'],
+    inbox: ['Inbox', 'Questions from people without an account — mostly from the chat'],
     customers: ['Customers', 'Everyone with an account']
   };
 
@@ -378,6 +390,7 @@
     else if (state.view === 'btcpay') renderBtcpay();
     else if (state.view === 'autoship') renderAutoship();
     else if (state.view === 'disputes') renderDisputes();
+    else if (state.view === 'inbox') renderInbox();
     else if (state.view === 'customers') renderCustomers();
     else renderDashboard();
 
@@ -417,6 +430,14 @@
     if (dq) {
       var n3 = (state.disputes || []).filter(function (d) { return d.unreadForAdmin; }).length;
       dq.textContent = n3 ? String(n3) : '';
+    }
+    // Threads waiting on us — the same "customer spoke last" rule as the
+    // sign-in summary, so the rail badge and the pop-up never disagree.
+    var iq = document.getElementById('navInbox');
+    if (iq) {
+      var waitingInbox = (state.inbox || []).filter(function (t) { return t.status === 'awaiting_us'; }).length;
+      iq.textContent = waitingInbox ? String(waitingInbox) : '';
+      iq.hidden = !waitingInbox;
     }
   }
 
@@ -2487,6 +2508,7 @@
       // second click wins, so a stale response must not overwrite it.
       if (state.disputeId !== id) return;
       state.disputeThread = data;
+      if (window.AdminDisputes) window.AdminDisputes.followNext();
       state.disputeOutcomes = data.outcomes || state.disputeOutcomes;
       render();
       // Opening it IS reading it — mark it and drop the rail tally.
@@ -2516,6 +2538,7 @@
       // pane that has since moved on to a different one.
       if (state.disputeId !== id) return;
       state.disputeThread = Object.assign({}, state.disputeThread, { dispute: data.dispute });
+      if (window.AdminDisputes) window.AdminDisputes.followNext();
       if (emailWorks()) A.toast('Sent. The customer has been emailed a link to it.', 'success');
       else A.toast('Saved — but email is not configured, so nothing was sent. Tell them another way, or they will not know it is here.');
       await loadAll({ quiet: true });
@@ -2542,6 +2565,7 @@
         { method: 'POST', body: { outcome: outcome, note: note ? note.value : '' } });
       if (state.disputeId !== id) return;
       state.disputeThread = Object.assign({}, state.disputeThread, { dispute: data.dispute });
+      if (window.AdminDisputes) window.AdminDisputes.followNext();
       if (emailWorks()) A.toast('Closed, and the customer has been told.', 'success');
       else A.toast('Closed — but email is not configured, so the customer has not been told. Let them know another way.');
       await loadAll({ quiet: true });
@@ -2558,8 +2582,44 @@
       var data = await A.api('/api/admin/disputes/' + encodeURIComponent(id) + '/reopen', { method: 'POST' });
       if (state.disputeId !== id) return;
       state.disputeThread = Object.assign({}, state.disputeThread, { dispute: data.dispute });
+      if (window.AdminDisputes) window.AdminDisputes.followNext();
       await loadAll({ quiet: true });
       render();
+    } catch (e) {
+      A.toast(e.message, 'error');
+      if (state.disputeId === id) btn.disabled = false;
+    }
+  }
+
+  async function sweepDisputes(btn) {
+    if (!window.confirm('Remove photos from every report resolved more than the retention window ago?\n\n' +
+        'The conversations stay. The photos are deleted from the server and cannot be recovered.')) return;
+    btn.disabled = true;
+    try {
+      var data = await A.api('/api/admin/disputes/sweep', { method: 'POST' });
+      state.storage = data.storage || state.storage;
+      A.toast(data.files
+        ? 'Removed ' + A.plural(data.files, 'photo') + ' from ' + A.plural(data.threads, 'report') + '.'
+        : 'Nothing was old enough to remove.', 'success');
+      await loadAll({ quiet: true });
+      render();
+    } catch (e) { A.toast(e.message, 'error'); btn.disabled = false; }
+  }
+
+  async function stripDisputePhotos(id, btn) {
+    if (!window.confirm('Remove every photo on this report?\n\n' +
+        'The conversation stays and still shows that photos were sent. The images themselves are ' +
+        'deleted from the server and cannot be recovered.')) return;
+    btn.disabled = true;
+    try {
+      var data = await A.api('/api/admin/disputes/' + encodeURIComponent(id) + '/attachments', { method: 'DELETE' });
+      if (state.disputeId !== id) return;      // the owner moved on mid-request
+      state.storage = data.storage || state.storage;
+      /* Zero files here means there were none — a delete that FAILED comes
+         back as an error and lands in the catch below, so this toast can
+         never claim there was nothing there while the pane still counts. */
+      A.toast(data.files ? 'Removed ' + A.plural(data.files, 'photo') + '.' : 'There were no photos to remove.', 'success');
+      await openDispute(id);                   // reload the thread so the labels update
     } catch (e) {
       A.toast(e.message, 'error');
       if (state.disputeId === id) btn.disabled = false;
@@ -2582,8 +2642,175 @@
   }
 
   /* ============================================================
+     INBOX
+     Same split as disputes, for the same reason: the view lives in
+     js/admin-inbox.js and this is only the state glue — fetching the
+     thread, sending a reply, closing it — wired through the delegated
+     click handler below. Fewer states than a dispute (no order to show,
+     no outcome to pick), so there is less here.
+     ============================================================ */
+
+  var IBX = window.AdminInbox;
+
+  function renderInbox() {
+    if (!IBX) {
+      body.innerHTML = '<div class="adm-card"><p class="adm-note" style="margin:0">' +
+        'The inbox view did not load — check that <code>js/admin-inbox.js</code> is uploaded.</p></div>';
+      return;
+    }
+    /* No auto-open. It used to pick the first thread here, which closed a
+       loop with openInboxThread()'s catch: the catch clears state.inboxId
+       and re-renders, this re-opened the same thread, the fetch failed
+       again — so one 500, one deleted thread or one network flap spun the
+       console, hammering the API and stacking toasts. renderDisputes()
+       never auto-opened for exactly this reason; match it. The queue's
+       first row is one click away, and a click cannot loop. */
+    IBX.render(state, body, {
+      open: openInboxThread, reply: replyToInboxThread, close: closeInboxThread
+    });
+  }
+
+  async function openInboxThread(id) {
+    state.inboxId = id;
+    state.inboxThread = null;
+    render();
+    try {
+      var data = await A.api('/api/admin/inbox/' + encodeURIComponent(id));
+      // A second click can land while this one is still in flight — the
+      // second click wins, so a stale response must not overwrite it.
+      if (state.inboxId !== id) return;
+      state.inboxThread = data.thread;
+      render();
+      // Opening it IS reading it (the GET marks it read server-side) —
+      // refresh the queue so the unread dot and the rail tally drop.
+      await loadAll({ quiet: true });
+      if (state.inboxId !== id) return;
+      render();
+    } catch (e) {
+      A.toast(e.message, 'error');
+      // Leaving inboxId set with no thread strands the pane on a skeleton
+      // with no way back — drop the selection so the queue is usable again.
+      if (state.inboxId === id) { state.inboxId = ''; render(); }
+    }
+  }
+
+  async function replyToInboxThread(id, btn) {
+    var box = document.getElementById('ibxReply');
+    var message = box ? box.value.trim() : '';
+    if (!message) { A.toast('Write a reply first.', 'error'); return; }
+    btn.disabled = true;
+    try {
+      var data = await A.api('/api/admin/inbox/' + encodeURIComponent(id) + '/messages',
+        { method: 'POST', body: { body: message } });
+      // The owner may have opened a different thread while this was in
+      // flight — a response for `id` must not write into (or re-render) a
+      // pane that has since moved on to a different one.
+      if (state.inboxId !== id) return;
+      state.inboxThread = data.thread;
+      if (emailWorks()) A.toast('Sent. They have been emailed a link to the conversation.', 'success');
+      else A.toast('Saved — but email is not configured, so nothing was sent. Tell them another way, or they will not know it is here.');
+      await loadAll({ quiet: true });
+      if (state.inboxId !== id) return;
+      render();
+    } catch (e) {
+      A.toast(e.message, 'error');
+      if (state.inboxId === id) btn.disabled = false;
+    }
+  }
+
+  async function closeInboxThread(id, btn) {
+    if (!window.confirm('Close this conversation? They will be told to email support if they need to reopen it.')) return;
+    btn.disabled = true;
+    try {
+      var data = await A.api('/api/admin/inbox/' + encodeURIComponent(id) + '/close', { method: 'POST', body: {} });
+      if (state.inboxId !== id) return;
+      state.inboxThread = data.thread;
+      A.toast('Closed.', 'success');
+      await loadAll({ quiet: true });
+      if (state.inboxId !== id) return;
+      render();
+    } catch (e) {
+      A.toast(e.message, 'error');
+      if (state.inboxId === id) btn.disabled = false;
+    }
+  }
+
+  /* ============================================================
      BOOT
      ============================================================ */
+  /* ---- a reply landing while the console is open ----
+     The rail tally is only as fresh as the last loadAll, which happens on a
+     deliberate action. So an owner sitting on this screen — the likeliest
+     place to be while working a queue — learned nothing until they pressed
+     Refresh. This watches for arrivals the same way the storefront does.
+
+     Deliberately quiet about the thread already on screen: saying "this
+     changed" about a conversation whose new message just rendered is noise. */
+  var WATCH_MS = 45000;
+  var lastWaiting = null;
+  var watchTimer = null;
+
+  /* Refetch the conversation currently on screen. loadAll only refreshes the
+     QUEUE — the summaries in the rail and the list — and never the open
+     thread, so a customer's reply landed in the tally while the pane in front
+     of the owner still showed the old messages. Worse, the toast was being
+     suppressed precisely BECAUSE a thread was open, so the one case where the
+     owner was actually watching gave them nothing at all. */
+  async function refreshOpenThread(id) {
+    if (!id || state.disputeId !== id) return false;
+    try {
+      var data = await A.api('/api/admin/disputes/' + encodeURIComponent(id));
+      if (state.disputeId !== id) return false;      // they moved on mid-request
+      state.disputeThread = data;
+      render();
+      /* They are looking at it, so it is read — this also stops the rail tally
+         counting a thread whose new message is on screen. */
+      A.api('/api/admin/disputes/' + encodeURIComponent(id) + '/read', { method: 'POST' })
+        .then(function () { return loadAll({ quiet: true }); })
+        .then(function () { if (state.disputeId === id) render(); })
+        .catch(function () { /* the tally catches up on the next tick */ });
+      return true;
+    } catch (e) {
+      return false;                                   // the poll below is the floor
+    }
+  }
+
+  async function watchDisputes() {
+    if (!A.hasCredentials()) return;
+    try {
+      var data = await A.api('/api/admin/summary');
+      var waiting = Number(data.disputes) || 0;
+      if (lastWaiting !== null && waiting > lastWaiting) {
+        var added = waiting - lastWaiting;
+        /* Refresh first so the rail tally and the queue agree with the toast
+           the owner is about to read. */
+        await loadAll({ quiet: true });
+        /* The open conversation is refreshed too, not just the queue around
+           it — otherwise the message the owner is being told about is the one
+           thing on screen that does not change. */
+        var shown = await refreshOpenThread(state.disputeId);
+        render();
+        var onlyTheOneOpen = added === 1 && shown &&
+          state.view === 'disputes' && !document.hidden;
+        if (!onlyTheOneOpen) {
+          A.toast(added === 1 ? 'A customer replied — one report is waiting.'
+                              : added + ' customers replied — check Disputes.', 'success');
+        }
+      }
+      lastWaiting = waiting;
+    } catch (e) {
+      /* A failed poll is not worth a toast: the console is still usable and
+         the next tick will catch up. */
+    }
+  }
+
+  function startWatching() {
+    stopWatching();
+    if (document.hidden || !A.hasCredentials()) return;
+    watchTimer = window.setInterval(watchDisputes, WATCH_MS);
+  }
+  function stopWatching() { if (watchTimer) { window.clearInterval(watchTimer); watchTimer = null; } }
+
   function readHash() {
     var h = (window.location.hash || '').replace('#', '');
     return TITLES[h] ? h : 'dashboard';
@@ -2630,6 +2857,11 @@
       else if (t.classList.contains('act-dsp-resolve')) resolveDispute(t.getAttribute('data-id'), t);
       else if (t.classList.contains('act-dsp-reopen')) reopenDispute(t.getAttribute('data-id'), t);
       else if (t.classList.contains('act-dsp-att')) openDisputeAttachment(t.getAttribute('data-dsp'), t.getAttribute('data-file'));
+      else if (t.classList.contains('act-dsp-sweep')) sweepDisputes(t);
+      else if (t.classList.contains('act-dsp-strip')) stripDisputePhotos(t.getAttribute('data-id'), t);
+      else if (t.hasAttribute('data-ibx-open')) openInboxThread(t.getAttribute('data-ibx-open'));
+      else if (t.classList.contains('act-ibx-reply')) replyToInboxThread(t.getAttribute('data-id'), t);
+      else if (t.classList.contains('act-ibx-close')) closeInboxThread(t.getAttribute('data-id'), t);
     });
 
     /* The designer previews live: every keystroke redraws the label from the
@@ -2680,7 +2912,30 @@
     state.view = readHash();
 
     if (!A.hasCredentials()) { render(); renderGate(); return; }
-    loadAll();
+    loadAll().then(function () {
+      /* Seed the baseline from what the console already loaded, so the first
+         tick compares against reality rather than announcing the backlog. */
+      lastWaiting = (state.disputes || []).filter(function (d) { return d.unreadForAdmin; }).length;
+      startWatching();
+    });
+    document.addEventListener('visibilitychange', function () {
+      if (document.hidden) stopWatching();
+      else { watchDisputes(); startWatching(); }
+    });
+    if (window.Live) {
+      window.Live.on(function (ev) {
+        if (!ev) return;
+        /* A message on the thread in front of the owner is refreshed straight
+           away and unconditionally — not routed through the waiting-count
+           watcher, which only reacts to a RISE and would miss a reply on a
+           thread already counted as waiting. */
+        if (ev.type === 'dispute-message' && ev.disputeId && ev.disputeId === state.disputeId) {
+          refreshOpenThread(ev.disputeId);
+          return;
+        }
+        if (ev.type === 'dispute-message' || ev.type === 'dispute-opened') watchDisputes();
+      });
+    }
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);

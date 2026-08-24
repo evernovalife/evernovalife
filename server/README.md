@@ -112,6 +112,9 @@ The server also serves the static site, so open **http://localhost:4242/checkout
 | POST   | `/api/admin/disputes/:id/reopen` | Admin: reopen a closed dispute                |
 | POST   | `/api/admin/disputes/:id/read` | Admin: mark a dispute thread read               |
 | GET    | `/api/admin/disputes/:id/files/:fileId` | Admin: an attached image           |
+| GET    | `/api/agent/product`   | Chat agent: catalog lookup by name (signed `x-agent-secret`) |
+| POST   | `/api/agent/escalate`  | Chat agent: hand a conversation to a person (signed `x-agent-secret`) |
+| POST   | `/api/agent/transcript` | ElevenLabs → us: signed post-call webhook, one finished conversation |
 | GET    | `/api/health`          | Liveness + which methods are configured          |
 
 ## Crypto payments — Bitcoin / Lightning (BTCPay Server)
@@ -592,6 +595,119 @@ notice to come look).
 Stored in `DATA_DIR/disputes.json` and `DATA_DIR/dispute-files/`. Resolving
 records an outcome — it never refunds or reships. Neither is seeded; neither
 is in git.
+
+```
+Storage (admin)
+  POST   /api/admin/disputes/sweep              expire photos on reports resolved past the window
+  DELETE /api/admin/disputes/:id/attachments    drop one report's photos now
+
+  All three return the same storage object: { usedBytes, ceilingBytes, pct, alertPct }.
+  alertPct is DISPUTE_STORAGE_ALERT_PCT, sent so the admin console's amber line turns at
+  exactly the percentage that sends the warning email.
+
+Tunables (all read per request, so Render can change them without a redeploy):
+  DISPUTE_TOTAL_BYTES_MAX        total photo allowance in bytes (default 2 GB — set
+                                 this to about half the actual disk; the production
+                                 disk is 1 GB, so 536870912). The default is LARGER
+                                 than that disk, so unset, the ceiling never engages
+                                 and the 80% warning never sends — the disk just
+                                 fills. The boot log says so on every start, and
+                                 /api/health reports `disputeCeilingSet` (a boolean,
+                                 never the value) so it can be checked from outside.
+  DISPUTE_PHOTO_RETENTION_DAYS   days after resolution before photos expire (default 90).
+                                 The 90 is written out in the customer copy on
+                                 purpose, so changing it here means editing it in
+                                 three places by hand: the hint under the attachment
+                                 field on BOTH support.html forms (open + reply) and
+                                 the retention paragraph in privacy.html. Miss one and
+                                 the site promises a window we do not keep.
+  DISPUTE_STORAGE_ALERT_PCT      percentage that triggers the warning email (default 80)
+
+Expiry drops the bytes and keeps the record, so a cleared thread still reads honestly.
+The sweep rides the existing /api/outreach/run cron (it runs before the storage alert is
+even selected, so a threshold email is never a stale one). If the external ping is not
+armed, the in-process hourly backstop still runs the whole pass — sweep and warning both —
+for as long as the process is up (OUTREACH_INPROCESS_CRON=0 turns that off, and a host
+that sleeps or restarts runs no timers, which is why the external ping is still the real
+trigger). An admin can also run it on demand from Run cleanup in the console
+(POST /api/admin/disputes/sweep) without waiting for either.
+```
+
+## AI chat agent (ElevenLabs)
+
+A text-only ElevenLabs agent answers catalog and policy questions from the
+site's own copy and a live product lookup, and hands off to a person — into
+the inbox behind `admin.html#inbox` — when it cannot help or is asked
+something it must refuse. Full setup (the system prompt, knowledge-base
+list, tool schemas, and go-live checklist) is in `docs/AI-CHAT.md`; this
+section is only the server side.
+
+That inbox is fed by chat escalations and by nothing else today.
+`contact.html` is still a `mailto:` form and was never wired to
+`/api/inbox`, so with the shipped default (`agentId` empty in `js/config.js`)
+the queue has no producers at all. Wiring the contact form into the same
+threads is a reasonable follow-on; it is deliberately not part of this.
+
+```
+ElevenLabs agent
+   │  GET  /api/agent/product?q=...     ── x-agent-secret header  → catalog lookup
+   │  POST /api/agent/escalate          ── x-agent-secret header  → opens an inbox thread
+   ▼
+ElevenLabs (post-call) ── POST /api/agent/transcript (signed) ──► saved to disk
+```
+
+Env vars:
+
+```
+(As with every secret here: server/.env is git-ignored and never deployed, so
+ these are read from server/.env locally and from Render's own environment
+ — Environment → Add Environment Variable — for the live site. Set both.
+ A secret that lives only in server/.env does not exist in production.)
+
+ELEVENLABS_API_KEY          Your ElevenLabs account key. Not read by this server's
+                             code — nothing in server/*.js references it. Keep it
+                             here anyway (server/.env is git-ignored) so it lives
+                             with the other secrets; use it yourself against
+                             ElevenLabs' own API/CLI when uploading the knowledge
+                             base. Since the running server never reads it, it does
+                             not need to be set on Render.
+ELEVENLABS_AGENT_SECRET     Shared secret the agent presents as the x-agent-secret
+                             header on every call to /api/agent/product and
+                             /api/agent/escalate. Set the same value in each tool's
+                             header config in the ElevenLabs dashboard. Unset means
+                             every call to either route is refused — there is no
+                             "open while testing" mode.
+ELEVENLABS_WEBHOOK_SECRET   HMAC key for the post-call webhook
+                             (POST /api/agent/transcript). ElevenLabs signs the call
+                             with an elevenlabs-signature header shaped
+                             t=<unix-seconds>,v0=<hex>, HMAC-SHA256 over
+                             "${t}.${raw body}"; a signature more than 30 minutes
+                             off the server's clock, in either direction, is
+                             rejected as a possible replay. Set the same value in
+                             the webhook's config in the dashboard.
+```
+
+Neither `ELEVENLABS_AGENT_SECRET` nor `ELEVENLABS_WEBHOOK_SECRET` ever appears
+in the browser — the widget only needs the agent's id, which is meant to be
+public (it is required to be, for ElevenLabs' embeddable widget to work at
+all: the widget only runs against agents with authentication disabled). The
+agent id itself lives in `js/config.js` (`window.ENL_CHAT.agentId`), not here.
+
+`GET /api/agent/product` returns at most 5 rows, each
+`{ id, name, price, currency, inStock, url }` — no `sku` field exists on a
+product record, so none is returned. `inStock` is the same availability rule
+checkout uses (the admin's in-stock switch and the stock count both have to
+allow it), and unpublished/retired products are filtered out before the
+search runs, same as the public storefront.
+
+The agent-tool rate limit (`agent-tool`, 300 requests/minute) is deliberately
+one shared budget, not keyed per visitor: every call to these two routes
+arrives from ElevenLabs' own infrastructure, never straight from a visitor's
+browser, so there is no per-caller identity to key it on.
+
+A verified transcript webhook call is written to
+`DATA_DIR/agent-transcripts/` as one JSON file per conversation. Not seeded;
+not in git.
 
 ## Notes & next steps
 

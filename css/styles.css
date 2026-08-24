@@ -3,6 +3,19 @@
    Dark ambient theme · Glassmorphism · Brand gradient
    ============================================================ */
 
+/* ---- the hidden attribute must actually hide ----
+   An author `display` rule beats the browser's own `[hidden] { display: none }`,
+   so the moment any element with a display rule is toggled with `.hidden = true`
+   it stays on screen and the toggle silently does nothing. That is not a
+   hypothetical: giving the report thread a grid layout broke exactly this, and
+   the page rendered both of its states at once.
+
+   `!important` is deliberate. Every author display rule outranks the attribute
+   otherwise, so a guard without it only works until the next component gets a
+   layout. */
+[hidden] { display: none !important; }
+
+
 /* ---------- Design Tokens ----------
    Palette lifted from the vial label: black substrate, gold frame + wordmark,
    electric-violet glow, chrome product type. */
@@ -3010,40 +3023,331 @@ body.pd-modal-open { overflow: hidden; }
 .dsp-resolve, .dsp-resolved { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
 .dsp-resolve input { flex: 1 1 12rem; min-width: 0; }
 
-.dsp-stream { display: flex; flex-direction: column; gap: .6rem; max-height: 60vh; overflow-y: auto; padding-right: .25rem; }
-.dsp-msg { max-width: 42rem; border-radius: 12px; padding: .6rem .75rem; border: 1px solid rgba(255,255,255,.08); }
-.dsp-msg.theirs { background: rgba(255,255,255,.04); align-self: flex-start; }
-.dsp-msg.ours { background: rgba(124,58,237,.15); border-color: rgba(124,58,237,.35); align-self: flex-end; }
-.dsp-msg.system { align-self: center; font-size: .8rem; opacity: .7; border: 0; background: none; }
-.dsp-msg-head { font-size: .78rem; opacity: .7; margin-bottom: .25rem; }
+.dsp-stream { display: flex; flex-direction: column; gap: .15rem; max-height: 58vh; overflow-y: auto;
+  padding: .75rem .5rem .75rem .25rem; border: 1px solid rgba(255,255,255,.07); border-radius: 12px;
+  background: linear-gradient(180deg, rgba(124,58,237,.05), transparent 40%); }
+
+/* A day heading, not a stamp on every line — the date only earns space when
+   it changes. */
+.dsp-day { display: flex; align-items: center; gap: .6rem; margin: .8rem 0 .5rem; }
+.dsp-day::before, .dsp-day::after { content: ""; flex: 1; height: 1px; background: rgba(255,255,255,.08); }
+.dsp-day span { font-size: .72rem; letter-spacing: .06em; text-transform: uppercase; opacity: .55; }
+
+/* One run of consecutive messages from one side. */
+.dsp-group { display: flex; gap: .5rem; align-items: flex-end; margin-bottom: .7rem; max-width: 46rem; }
+.dsp-group.ours { flex-direction: row-reverse; margin-left: auto; }
+.dsp-group-body { display: flex; flex-direction: column; gap: .2rem; min-width: 0; }
+.dsp-group.ours .dsp-group-body { align-items: flex-end; }
+
+.dsp-avatar { flex: 0 0 auto; width: 28px; height: 28px; border-radius: 50%; display: grid;
+  place-items: center; font-size: .78rem; font-weight: 700; letter-spacing: .01em;
+  background: rgba(255,255,255,.07); color: #cbd5e1; border: 1px solid rgba(255,255,255,.1); }
+.dsp-group.ours .dsp-avatar { background: rgba(124,58,237,.28); color: #ede9fe; border-color: rgba(124,58,237,.45); }
+
+.dsp-msg-head { font-size: .74rem; opacity: .6; padding: 0 .3rem; }
+.dsp-when { font-size: .7rem; opacity: .45; padding: 0 .3rem; }
+
+.dsp-bubble { border-radius: 14px; padding: .55rem .8rem; border: 1px solid rgba(255,255,255,.09);
+  background: rgba(255,255,255,.045); font-size: .92rem; line-height: 1.5; overflow-wrap: anywhere; }
+.dsp-group.theirs .dsp-bubble:first-of-type { border-top-left-radius: 5px; }
+.dsp-group.ours .dsp-bubble { background: rgba(124,58,237,.18); border-color: rgba(124,58,237,.38); }
+.dsp-group.ours .dsp-bubble:first-of-type { border-top-right-radius: 5px; }
+
+.dsp-msg.system { align-self: center; font-size: .78rem; opacity: .6; font-style: italic;
+  padding: .3rem .7rem; margin: .3rem 0; }
 .dsp-msg-body { white-space: normal; overflow-wrap: anywhere; }
 .dsp-atts { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .5rem; }
 .dsp-att { display: inline-flex; align-items: center; gap: .3rem; font-size: .8rem; padding: .25rem .5rem;
-  border-radius: 8px; border: 1px solid rgba(255,255,255,.15); background: none; color: inherit; cursor: pointer; }
+  border-radius: 8px; border: 1px solid rgba(255,255,255,.15); background: none; color: inherit;
+  cursor: pointer; transition: border-color 160ms ease, background 160ms ease; }
+.dsp-att:hover { border-color: rgba(124,58,237,.6); background: rgba(124,58,237,.12); }
 .dsp-att svg { width: 14px; height: 14px; }
-.dsp-composer { display: flex; gap: .5rem; align-items: flex-end; }
-.dsp-composer textarea { flex: 1; min-width: 0; resize: vertical; }
+.dsp-composer { display: flex; gap: .5rem; align-items: flex-end; padding: .6rem;
+  border: 1px solid rgba(255,255,255,.09); border-radius: 12px; background: rgba(255,255,255,.02); }
+.dsp-composer textarea { flex: 1; min-width: 0; resize: vertical; background: transparent;
+  border: 0; color: inherit; font: inherit; padding: .35rem .4rem; }
+.dsp-composer textarea:focus { outline: none; }
+.dsp-composer:focus-within { border-color: rgba(124,58,237,.55); }
+
+/* These were unstyled selects and inputs sitting on a dark ground, which is
+   why the resolve row read as raw browser chrome. */
+.dsp-resolve, .dsp-resolved, .dsp-strip { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center;
+  padding: .55rem .7rem; border: 1px solid rgba(255,255,255,.08); border-radius: 10px;
+  background: rgba(255,255,255,.02); font-size: .88rem; }
+.dsp-resolve select, .dsp-resolve input { background: rgba(255,255,255,.05); color: inherit;
+  border: 1px solid rgba(255,255,255,.14); border-radius: 8px; padding: .4rem .55rem;
+  font: inherit; font-size: .86rem; }
+.dsp-resolve select:focus, .dsp-resolve input:focus { outline: none; border-color: rgba(124,58,237,.6); }
+.dsp-resolve input { flex: 1 1 12rem; min-width: 0; }
+.dsp-resolve .btn, .dsp-resolved .btn, .dsp-strip .btn { margin-left: auto; }
+.dsp-resolved { border-color: rgba(34,197,94,.3); background: rgba(34,197,94,.07); }
+
+@media (prefers-reduced-motion: reduce) {
+  .dsp-att, .dsp-composer, .dsp-row { transition: none; }
+}
 
 /* Phones: the queue stacks above the thread. Per the mobile pass, nothing
    here may be wider than its column. */
 @media (max-width: 860px) {
   .dsp-wrap { grid-template-columns: 1fr; }
   .dsp-stream { max-height: none; }
-  .dsp-msg { max-width: 100%; }
+  .dsp-group { max-width: 100%; }
 }
 
 /* ===== SUPPORT — CUSTOMER DISPUTE THREAD ===== */
-.sup-stream { display: flex; flex-direction: column; gap: .6rem; margin: 1rem 0; max-height: 60vh; overflow-y: auto; }
-.sup-msg { max-width: 90%; border-radius: 12px; padding: .65rem .8rem; border: 1px solid rgba(255,255,255,.08); }
-.sup-msg.mine { background: rgba(124,58,237,.15); border-color: rgba(124,58,237,.35); align-self: flex-end; }
-.sup-msg.theirs { background: rgba(255,255,255,.04); align-self: flex-start; }
-.sup-msg.system { align-self: center; font-size: .82rem; opacity: .7; border: 0; background: none; }
-.sup-msg-head { font-size: .78rem; opacity: .7; margin-bottom: .25rem; }
-.sup-msg-body { overflow-wrap: anywhere; }
+/* ---- the report console ----
+   One bounded panel holds the whole report: the order strip, the "they
+   replied" banner, and either the opening form or the conversation. Only the
+   panel is sized to the viewport, and inside it only the message stream
+   scrolls — so nothing the thread holds can push the composer off the bottom.
+
+   The earlier version sized the thread alone at 100dvh minus a guessed 7rem
+   for its surroundings. Everything actually around it — a full-size h1, the
+   intro line, the order card, the back link and 5rem of section padding —
+   was outside that budget, so the panel was always taller than the room left
+   and the page scrolled with the composer below the fold. The budget is
+   measured now: js/support.js writes the panel's own distance from the top of
+   the document into --sup-top, so whatever sits above it is already counted. */
+.sup-page { padding: 2rem 0 1.75rem; }
+.sup-wrap { max-width: 62rem; }
+
+.sup-title { display: flex; align-items: flex-end; justify-content: space-between;
+  gap: 1rem; flex-wrap: wrap; margin-bottom: .9rem; }
+.sup-title h1 { font-size: 1.45rem; margin: 0 0 .15rem; }
+.sup-title p { margin: 0; font-size: .9rem; }
+.sup-back { font-size: .85rem; color: var(--dark-text-muted); text-decoration: none;
+  white-space: nowrap; }
+.sup-back:hover { color: #ede9fe; }
+
+.sup-panel { display: flex; flex-direction: column; overflow: hidden; padding: 0; }
+.sup-panel > * { flex: 0 0 auto; }
+/* Only the conversation state is pinned to the viewport. The opening form is
+   ordinary content and is allowed to make the page scroll. */
+.sup-panel.thread { height: calc(100dvh - var(--sup-top, 260px) - 1.5rem); min-height: 20rem; }
+
+/* The order this report is about: one strip, not a card. */
+.sup-bar { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem .8rem;
+  padding: .7rem 1rem; border-bottom: 1px solid rgba(255,255,255,.08);
+  background: rgba(255,255,255,.02); }
+.sup-order-ref { font-size: .95rem; font-weight: 700; letter-spacing: .02em; color: #d4af37; }
+.sup-bar-items { margin: 0 0 0 auto; min-width: 0; font-size: .85rem;
+  color: var(--dark-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sup-bar-track { margin: 0; font-size: .8rem; color: var(--dark-text-muted); }
+.sup-bar-track b { color: #ede9fe; font-weight: 600; }
+
+.sup-shell { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.sup-shell > * { flex: 0 0 auto; }
+
+.sup-stream { display: flex; flex-direction: column; gap: 0; padding: 1rem;
+  /* Takes whatever the fixed rows leave. min-height:0 is what makes it scroll
+     at all — a flex child defaults to min-height:auto, so without it the
+     content pushes the container taller and the PAGE scrolls instead. */
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  /* Stops the scroll handing off to the page when the stream hits an end. */
+  overscroll-behavior: contain; }
+
+/* A composer that is one row, not a form. It was a full form-card with its own
+   labels and a file field, which is why the Send button sat below the fold. */
+.sup-composer { display: flex; flex-direction: column; gap: .4rem;
+  padding: .7rem .8rem; border-top: 1px solid rgba(255,255,255,.08); }
+.sup-composer-row { display: flex; align-items: flex-end; gap: .5rem; padding: .35rem .4rem;
+  border: 1px solid rgba(255,255,255,.1); border-radius: 12px; background: rgba(255,255,255,.03); }
+.sup-composer-row:focus-within { border-color: rgba(124,58,237,.55); }
+.sup-composer textarea { flex: 1; min-width: 0; resize: none; max-height: 8rem;
+  background: transparent; border: 0; color: inherit; font: inherit; padding: .45rem .35rem; }
+.sup-composer textarea:focus { outline: none; }
+.sup-attach { display: grid; place-items: center; width: 38px; height: 38px; flex: 0 0 auto;
+  border-radius: 9px; cursor: pointer; color: #cbd5e1; border: 1px solid transparent;
+  transition: background 160ms ease, color 160ms ease; }
+.sup-attach:hover { background: rgba(124,58,237,.16); color: #ede9fe; }
+.sup-attach svg { width: 18px; height: 18px; }
+.sup-attach:focus-within { border-color: rgba(124,58,237,.6); }
+.sup-send { flex: 0 0 auto; }
+
+/* The opening form, inside the same panel. */
+.sup-open { padding: 1.1rem 1.2rem 1.3rem; display: flex; flex-direction: column; gap: 1rem; }
+.sup-open .form-field { margin-bottom: 0; }
+.sup-open .btn { align-self: flex-start; }
+/* An empty status line reserves a row of height it does not need here; the
+   panel's own gap already keeps the button clear of the field above it. */
+.sup-open .form-msg:empty, .sup-composer .form-msg:empty { display: none; }
+.sup-open .form-msg { margin-top: 0; }
+/* The escalation path shows a closed conversation and the new-report form at
+   once. The panel is no longer viewport-height there, so the stream needs its
+   own ceiling or it would grow to the length of the thread. */
+.sup-panel:not(.thread) .sup-stream { max-height: 55vh; }
+
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+/* ---- messages ----
+   Consecutive messages from one sender are one group: the name is said once,
+   the bubbles that follow carry `cont` and drop it. The date is said once per
+   day on a divider instead of on every bubble, which is what made a
+   four-message thread read like a log file. */
+.sup-msg { max-width: min(34rem, 76%); border-radius: 14px; padding: .6rem .8rem .45rem;
+  border: 1px solid rgba(255,255,255,.08); margin-top: .5rem; }
+.sup-msg.cont { margin-top: .18rem; }
+.sup-msg.mine { background: rgba(124,58,237,.16); border-color: rgba(124,58,237,.35);
+  align-self: flex-end; border-bottom-right-radius: 5px; }
+.sup-msg.theirs { background: rgba(255,255,255,.05); align-self: flex-start;
+  border-bottom-left-radius: 5px; }
+/* A continuation keeps the flat corner only on the last bubble of its run, so
+   a group reads as one block rather than a stack of tails. */
+.sup-msg.mine.cont, .sup-msg.theirs.cont { border-radius: 14px; }
+.sup-msg.system { align-self: center; max-width: 100%; text-align: center;
+  font-size: .8rem; opacity: .65; border: 0; background: none; padding: .35rem 0; }
+.sup-msg-head { font-size: .74rem; font-weight: 600; letter-spacing: .04em;
+  text-transform: uppercase; color: #cdb4fe; margin-bottom: .3rem; }
+.sup-msg.theirs .sup-msg-head { color: #e2c76a; }
+.sup-msg-body { overflow-wrap: anywhere; line-height: 1.5; }
+.sup-time { display: block; text-align: right; font-size: .68rem; opacity: .5;
+  margin-top: .25rem; font-variant-numeric: tabular-nums; }
+
+/* The date, once, where it changes. */
+.sup-day { align-self: center; margin: .9rem 0 .3rem; padding: .2rem .7rem;
+  border-radius: 999px; border: 1px solid rgba(255,255,255,.09);
+  background: rgba(255,255,255,.03); font-size: .72rem; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--dark-text-muted); }
+.sup-day:first-child { margin-top: 0; }
+
 .sup-atts { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .5rem; }
 .sup-att { font-size: .8rem; padding: .25rem .5rem; border-radius: 8px; border: 1px solid rgba(255,255,255,.15);
   background: none; color: inherit; cursor: pointer; }
-.sup-previews { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .5rem; }
-.sup-previews img { width: 76px; height: 76px; object-fit: cover; border-radius: 8px; border: 1px solid rgba(255,255,255,.15); }
-.sup-closed { border: 1px solid rgba(212,175,55,.35); background: rgba(212,175,55,.08); border-radius: 10px; padding: .75rem 1rem; }
+.sup-previews { display: flex; flex-wrap: wrap; gap: .5rem; }
+.sup-previews:empty { display: none; }
+.sup-previews img { width: 56px; height: 56px; object-fit: cover; border-radius: 8px; border: 1px solid rgba(255,255,255,.15); }
+.sup-closed { border-top: 1px solid rgba(212,175,55,.35); background: rgba(212,175,55,.08);
+  padding: .75rem 1rem; font-size: .9rem; }
+.sup-closed p { margin: 0 0 .5rem; }
+.sup-closed p:last-child { margin: 0; }
 @media (max-width: 600px) { .sup-msg { max-width: 100%; } }
+
+/* ===== ADMIN — DISPUTE STORAGE ===== */
+.dsp-storage { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: .75rem;
+  padding: .5rem .75rem; border: 1px solid rgba(255,255,255,.1); border-radius: 10px;
+  background: rgba(255,255,255,.03); font-size: .85rem; }
+.dsp-storage.warn { border-color: rgba(212,175,55,.5); background: rgba(212,175,55,.1); color: #f0d98a; }
+.dsp-strip { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; }
+.dsp-att.expired, .sup-att.expired { opacity: .65; font-style: italic; cursor: default;
+  border-style: dashed; display: inline-block; padding: .25rem .5rem; border-radius: 8px;
+  border: 1px dashed rgba(255,255,255,.2); font-size: .8rem; }
+
+/* ===== ADMIN — "waiting for you" sign-in dialog ===== */
+.adminalert, .supdialog { position: fixed; inset: 0; z-index: 1200; display: flex; align-items: center;
+  justify-content: center; padding: 1.25rem; background: rgba(7,4,15,.72); backdrop-filter: blur(3px); }
+body.adminalert-open { overflow: hidden; }
+.adminalert-panel, .supdialog-panel { width: min(26rem, 100%); background: #0f0a1d; color: #f5f3ff;
+  border: 1px solid rgba(212,175,55,.35); border-radius: 14px; padding: 1.25rem 1.35rem;
+  box-shadow: 0 24px 60px rgba(0,0,0,.55); }
+.adminalert-panel h2, .supdialog-panel h2 { margin: 0 0 .85rem; font-size: 1.05rem; letter-spacing: .02em; color: #d4af37; }
+.adminalert-list { list-style: none; margin: 0 0 1rem; padding: 0; display: flex; flex-direction: column; gap: .4rem; }
+.adminalert-list a { display: flex; align-items: center; gap: .6rem; padding: .6rem .7rem;
+  border-radius: 10px; border: 1px solid rgba(255,255,255,.1); background: rgba(255,255,255,.03);
+  color: inherit; text-decoration: none; font-size: .92rem; }
+.adminalert-list a:hover, .adminalert-list a:focus-visible { border-color: #7c3aed; background: rgba(124,58,237,.15); }
+.adminalert-list svg { width: 18px; height: 18px; flex: 0 0 auto; color: #cdb4fe; }
+.adminalert-dismiss { width: 100%; }
+
+/* The count that stays on the header's Admin button after the dialog is gone. */
+.header-admin-btn { position: relative; }
+.admin-badge { position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px;
+  padding: 0 5px; border-radius: 999px; background: #d4af37; color: #07040f;
+  font-size: .7rem; font-style: normal; font-weight: 700; line-height: 18px; text-align: center; }
+
+@media (max-width: 600px) { .adminalert-panel, .supdialog-panel { width: 100%; } }
+
+/* The customer's "we've got it" panel shares the admin dialog's chrome above;
+   only its body text needs its own rules. */
+.supdialog-panel p { margin: 0 0 .8rem; font-size: .93rem; line-height: 1.5; }
+.supdialog-panel .btn { width: 100%; }
+
+/* The "they replied" banner on a customer's report. Gold rather than violet:
+   violet is the action colour here and this is news, not a control. */
+.sup-new { display: flex; align-items: center; gap: .5rem; width: 100%; margin: 0;
+  padding: .55rem 1rem; cursor: pointer; text-align: left; border: 0;
+  border-bottom: 1px solid rgba(212,175,55,.45); background: rgba(212,175,55,.14); color: #f0d98a;
+  font-size: .88rem; font-weight: 600; transition: background 180ms ease; }
+.sup-new:hover { background: rgba(212,175,55,.22); }
+.sup-new svg { width: 17px; height: 17px; flex: 0 0 auto; }
+@media (prefers-reduced-motion: reduce) { .sup-new { transition: none; } }
+
+/* ===== A reply, found wherever the customer happens to be ===== */
+.reply-toast { position: fixed; left: 1.25rem; bottom: 1.25rem; z-index: 1100; width: min(21rem, calc(100vw - 2.5rem));
+  display: flex; align-items: flex-start; gap: .5rem; padding: .7rem .8rem; border-radius: 12px;
+  border: 1px solid rgba(212,175,55,.45); background: #120c22; color: #f5f3ff;
+  box-shadow: 0 18px 44px rgba(0,0,0,.5); animation: replyToastIn 260ms cubic-bezier(.16,1,.3,1); }
+.reply-toast a { display: flex; align-items: flex-start; gap: .55rem; flex: 1; min-width: 0;
+  color: inherit; text-decoration: none; font-size: .88rem; line-height: 1.45; }
+.reply-toast a:hover b { text-decoration: underline; }
+.reply-toast svg { width: 18px; height: 18px; flex: 0 0 auto; color: #d4af37; margin-top: .1rem; }
+.reply-toast b { color: #f0d98a; }
+.reply-toast-x { flex: 0 0 auto; background: none; border: 0; color: inherit; opacity: .5;
+  font-size: 1.2rem; line-height: 1; cursor: pointer; padding: 0 .15rem; }
+.reply-toast-x:hover { opacity: 1; }
+@keyframes replyToastIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+
+/* The dot that outlives the toast. */
+.header-actions a[aria-label="Account"] { position: relative; }
+.acct-dot { position: absolute; top: 4px; right: 4px; width: 9px; height: 9px; border-radius: 50%;
+  background: #d4af37; box-shadow: 0 0 0 2px #07040f; }
+
+@media (max-width: 600px) { .reply-toast { left: .7rem; right: .7rem; width: auto; bottom: .7rem; } }
+@media (prefers-reduced-motion: reduce) { .reply-toast { animation: none; } }
+
+/* Phones: the shell is dropped entirely. A pinned composer competing with an
+   on-screen keyboard is worse than ordinary scrolling, and the mobile pass's
+   rule is that nothing may be taller than its column. */
+@media (max-width: 700px) {
+  .sup-panel.thread { height: auto; min-height: 0; }
+  .sup-stream { flex: 0 0 auto; max-height: 60vh; padding: .8rem; }
+  .sup-bar-items { margin-left: 0; flex-basis: 100%; white-space: normal; }
+}
+@media (prefers-reduced-motion: reduce) { .sup-attach { transition: none; } }
+
+/* ---- guest conversation page (inbox.html) ---- */
+.inbox-wrap { max-width: 720px; }
+.inbox-title { margin-bottom: 4px; }
+.inbox-sub { color: var(--dark-text-muted); margin-bottom: 24px; }
+.inbox-thread { display: flex; flex-direction: column; gap: 14px; margin-bottom: 20px; }
+.inbox-msg {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.inbox-msg.is-mine { border-color: rgba(124, 58, 237, 0.35); }
+.inbox-msg-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  gap: 12px; margin-bottom: 6px; font-size: 0.85rem;
+}
+.inbox-who { font-weight: 600; }
+.inbox-msg-head time { color: var(--dark-text-muted); }
+.inbox-msg-body { margin: 0; line-height: 1.55; overflow-wrap: anywhere; }
+.inbox-composer { display: flex; flex-direction: column; gap: 10px; }
+/* The same treatment every other field on the site gets (.form-field
+   textarea, above). Without it this box fell through to the browser default —
+   a light-grey panel with dark text sitting on a dark page — because the
+   guest reply form is plain markup rather than a .form-field wrapper. Same
+   custom properties, so it follows the palette rather than pinning a colour. */
+.inbox-composer textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 120px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border-strong);
+  border-radius: var(--radius-sm);
+  padding: 0.8rem 1rem;
+  color: #fff;
+  font-family: inherit;
+  font-size: 0.95rem;
+  transition: border-color 0.2s var(--ease);
+}
+.inbox-composer textarea:focus {
+  outline: none;
+  border-color: var(--accent-purple);
+  box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.15);
+}
+.inbox-composer textarea::placeholder { color: var(--dark-text-faint); }
+.inbox-composer button { align-self: flex-end; }
+.inbox-closed { color: var(--dark-text-muted); }

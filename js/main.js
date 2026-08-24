@@ -2144,7 +2144,12 @@ function refreshHeaderUser() {
   fetch(API_BASE + '/api/auth/me', { headers: { Authorization: 'Bearer ' + token } })
     .then(res => {
       if (res.status === 401) {   // token expired/invalid → drop it, show signed-out
-        try { localStorage.removeItem('enl_token'); localStorage.removeItem('enl_user'); } catch (e) {}
+        try {
+          localStorage.removeItem('enl_token'); localStorage.removeItem('enl_user');
+          /* The session is over, so the admin "waiting for you" dialog must be
+             allowed to show again on the next sign-in. */
+          sessionStorage.removeItem('enl_admin_alert_seen');
+        } catch (e) {}
         renderHeaderAuth();
         return null;
       }
@@ -3347,7 +3352,7 @@ function validateCheckout(form) {
    screen. Bump WEB_AUTH_VERSION whenever the copy in
    checkout.html #webAuthText changes.
    ============================================================ */
-const WEB_AUTH_VERSION = '2026-08-14';
+const WEB_AUTH_VERSION = '2026-08-24';
 
 function webAuthorizationRecord() {
   const box = document.getElementById('webAuthCheck');

@@ -1,0 +1,307 @@
+#!/usr/bin/env node
+/* ============================================================
+   EVER NOVA LIFE — build the customer-service agent
+
+   Does the whole ElevenLabs side of docs/AI-CHAT.md in one run,
+   so nobody has to click through the dashboard and hand-copy a
+   system prompt:
+
+     1. uploads the policy pages from §4 to the knowledge base
+     2. creates the two webhook tools from §5
+     3. creates a text-only agent carrying the §3 prompt,
+        wired to both
+
+   The prompt and the page list are READ OUT OF docs/AI-CHAT.md,
+   never duplicated here. That document is the reviewed one; a
+   second copy in a script is a second thing to keep in step, and
+   the copy that drifts is always the one nobody is reading.
+
+   Usage:
+     node tools/setup-elevenlabs-agent.js --api-base <url> [--site <url>] [--dry-run]
+
+     --api-base  where THIS project's server answers, e.g.
+                 https://evernova-api.onrender.com — the agent's
+                 tools are pointed here, so it must be the live
+                 host and it must already be serving /api/agent/*
+     --site      the public site the knowledge-base pages are read
+                 from (default https://evernovalife.com)
+     --dry-run   print what would be created and exit
+
+   Reads ELEVENLABS_API_KEY and ELEVENLABS_AGENT_SECRET from
+   server/.env. Neither is ever printed.
+   ============================================================ */
+
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+
+const ROOT = path.join(__dirname, '..');
+
+/* server/.env read directly rather than through dotenv: that package is
+   installed under server/node_modules, and this script lives at the repo
+   root, so requiring it would tie the script to being run from one
+   directory. Only the two keys this script needs are taken, and neither
+   overrides a value already exported in the environment. */
+(function loadEnv() {
+  let raw;
+  try { raw = fs.readFileSync(path.join(ROOT, 'server', '.env'), 'utf8'); }
+  catch (e) { return; }                                  // no file is fine; the checks below report it
+  raw.split(/\r?\n/).forEach(line => {
+    const m = /^\s*([A-Z0-9_]+)\s*=\s*(.*)$/.exec(line);
+    if (!m) return;
+    const key = m[1];
+    if (process.env[key] !== undefined) return;
+    process.env[key] = m[2].trim().replace(/^(['"])(.*)\1$/, '$2');
+  });
+}());
+
+const API = 'https://api.elevenlabs.io';
+const DOC = path.join(ROOT, 'docs', 'AI-CHAT.md');
+const AGENT_NAME = 'Ever Nova Life — customer service';
+
+/* ---- arguments ---- */
+function arg(name, fallback) {
+  const i = process.argv.indexOf('--' + name);
+  return i !== -1 && process.argv[i + 1] ? process.argv[i + 1] : fallback;
+}
+const DRY = process.argv.includes('--dry-run');
+const SITE = String(arg('site', 'https://evernovalife.com')).replace(/\/+$/, '');
+const API_BASE = String(arg('api-base', '')).replace(/\/+$/, '');
+
+function die(message) {
+  console.error('\n  ' + message + '\n');
+  process.exit(1);
+}
+
+/* ---- read the prompt and the page list out of the doc ----
+   §3 is the only fenced block in that section, and §4's list is the
+   bullet list of *.html names beneath its heading. Both are pulled by
+   structure rather than by line number so an edit to the prose above
+   them doesn't silently shift what gets uploaded. */
+function readDoc() {
+  let md;
+  try { md = fs.readFileSync(DOC, 'utf8'); }
+  catch (e) { die(`Could not read ${DOC}. Run this from the project root.`); }
+  // The working copy is checked out with CRLF on Windows. Normalise once
+  // here so every pattern below can be written against \n, and so the
+  // prompt that reaches ElevenLabs has no stray carriage returns in it.
+  md = md.replace(/\r\n/g, '\n');
+
+  const promptSection = md.split(/^## 3\. /m)[1];
+  if (!promptSection) die('docs/AI-CHAT.md has no "## 3." section — has it been restructured?');
+  const fence = /```\n([\s\S]*?)```/.exec(promptSection);
+  if (!fence) die('Could not find the fenced system prompt in §3 of docs/AI-CHAT.md.');
+  const prompt = fence[1].trim();
+  if (prompt.length < 500) die('The system prompt read from §3 looks too short — check docs/AI-CHAT.md.');
+
+  const kbSection = (md.split(/^## 4\. /m)[1] || '').split(/^## 5\. /m)[0];
+  const pages = [...kbSection.matchAll(/^- `([a-z0-9-]+\.html)`/gm)].map(m => m[1]);
+  if (!pages.length) die('Could not find the knowledge-base page list in §4 of docs/AI-CHAT.md.');
+
+  return { prompt, pages };
+}
+
+/* ---- HTTP ----
+   Every failure prints the API's own response body. A setup script that
+   swallows the reason is worse than no script: the whole point is that
+   the person running it can act on what went wrong. */
+async function call(method, endpoint, body) {
+  const res = await fetch(API + endpoint, {
+    method,
+    headers: {
+      'xi-api-key': process.env.ELEVENLABS_API_KEY,
+      ...(body ? { 'Content-Type': 'application/json' } : {})
+    },
+    ...(body ? { body: JSON.stringify(body) } : {})
+  });
+  const text = await res.text();
+  let data = null;
+  try { data = JSON.parse(text); } catch (e) { /* keep the raw text */ }
+  if (!res.ok) {
+    const detail = (data && (data.detail || data.message)) || text || '(no body)';
+    throw Object.assign(
+      new Error(`${method} ${endpoint} → ${res.status}\n  ${typeof detail === 'string' ? detail : JSON.stringify(detail, null, 2)}`),
+      { status: res.status }
+    );
+  }
+  return data;
+}
+
+/* ---- the two tools from §5 ----
+   Kept here rather than parsed out of the doc: unlike the prompt, these
+   are machine shapes, and a table in Markdown is a poor source of truth
+   for a JSON schema. The doc describes them for a human; this is what is
+   actually sent. If you change one, change both. */
+function toolConfigs() {
+  const headers = { 'x-agent-secret': process.env.ELEVENLABS_AGENT_SECRET };
+  return [
+    {
+      type: 'webhook',
+      name: 'lookup_product',
+      description:
+        'Look up a product in the live catalogue to get its current price and whether it is in stock. ' +
+        'Always call this before stating any price or availability — never answer either from memory or ' +
+        'from the knowledge base. Returns at most five matches.',
+      response_timeout_secs: 10,
+      api_schema: {
+        url: `${API_BASE}/api/agent/product`,
+        method: 'GET',
+        request_headers: headers,
+        query_params_schema: {
+          properties: {
+            q: {
+              type: 'string',
+              description: 'The product name or part of it, as the visitor said it. Leave empty to list the catalogue.'
+            }
+          },
+          required: []
+        }
+      }
+    },
+    {
+      type: 'webhook',
+      name: 'escalate',
+      description:
+        'Hand the conversation to a person. Call this when you have refused something and they still need ' +
+        'help, when the knowledge base does not cover their question, when they ask for a human, or when ' +
+        'they sound frustrated. Ask for their email address BEFORE calling this. Read the returned ' +
+        'reference number back to them.',
+      response_timeout_secs: 15,
+      api_schema: {
+        url: `${API_BASE}/api/agent/escalate`,
+        method: 'POST',
+        request_headers: headers,
+        request_body_schema: {
+          type: 'object',
+          properties: {
+            email: {
+              type: 'string',
+              description: "The visitor's email address, which you must ask for before calling this."
+            },
+            name: { type: 'string', description: 'Their name, if they gave one. Optional.' },
+            subject: { type: 'string', description: 'A short line describing what they need.' },
+            body: { type: 'string', description: 'A plain summary of the question, in your own words.' },
+            transcript: {
+              type: 'array',
+              description: 'The conversation so far, oldest first.',
+              items: {
+                type: 'object',
+                properties: {
+                  role: { type: 'string', description: "Either 'user' or 'agent'." },
+                  text: { type: 'string', description: 'What was said.' },
+                  at: { type: 'string', description: 'ISO timestamp, if known.' }
+                }
+              }
+            }
+          },
+          required: ['email', 'subject', 'body']
+        }
+      }
+    }
+  ];
+}
+
+async function main() {
+  if (!process.env.ELEVENLABS_API_KEY) {
+    die('ELEVENLABS_API_KEY is not set.\n  Put it in server/.env — that file is git-ignored:\n\n    ELEVENLABS_API_KEY=sk_...');
+  }
+  if (!process.env.ELEVENLABS_AGENT_SECRET) {
+    die('ELEVENLABS_AGENT_SECRET is not set.\n  Generate one and put it in server/.env AND in Render\'s Environment tab:\n\n    node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
+  }
+  if (!API_BASE) {
+    die('Missing --api-base.\n  This is where your server answers, and the agent\'s tools are pointed at it:\n\n    node tools/setup-elevenlabs-agent.js --api-base https://evernova-api.onrender.com');
+  }
+  if (!/^https:\/\//.test(API_BASE)) die('--api-base must be an https:// URL.');
+
+  const { prompt, pages } = readDoc();
+
+  console.log('');
+  console.log('  Agent      ' + AGENT_NAME);
+  console.log('  Tools →    ' + API_BASE + '/api/agent/{product,escalate}');
+  console.log('  Knowledge  ' + pages.length + ' pages from ' + SITE);
+  pages.forEach(p => console.log('               ' + SITE + '/' + p));
+  console.log('  Prompt     §3 of docs/AI-CHAT.md, ' + prompt.split('\n').length + ' lines');
+  console.log('');
+
+  if (DRY) {
+    console.log('  --dry-run: nothing was created.\n');
+    return;
+  }
+
+  /* Fail on a bad key before creating anything half-way. */
+  process.stdout.write('  Checking the API key… ');
+  await call('GET', '/v1/convai/agents?page_size=1');
+  console.log('ok');
+
+  /* ---- 1. knowledge base ----
+     from_url, so ElevenLabs fetches the live page itself. That means the
+     site must already be published with the copy you want it to learn. */
+  const knowledge = [];
+  for (const page of pages) {
+    const url = `${SITE}/${page}`;
+    process.stdout.write(`  Uploading ${page}… `);
+    const doc = await call('POST', '/v1/convai/knowledge-base/url', { url, name: page });
+    const id = doc && (doc.id || doc.document_id);
+    if (!id) die(`No document id came back for ${page}. Response: ${JSON.stringify(doc)}`);
+    knowledge.push({ type: 'url', name: page, id, usage_mode: 'auto' });
+    console.log('ok');
+  }
+
+  /* ---- 2. tools ---- */
+  const toolIds = [];
+  for (const cfg of toolConfigs()) {
+    process.stdout.write(`  Creating tool ${cfg.name}… `);
+    const tool = await call('POST', '/v1/convai/tools', { tool_config: cfg });
+    const id = tool && (tool.id || tool.tool_id);
+    if (!id) die(`No tool id came back for ${cfg.name}. Response: ${JSON.stringify(tool)}`);
+    toolIds.push(id);
+    console.log('ok');
+  }
+
+  /* ---- 3. the agent ----
+     text_only is the whole point: this is a chat bubble, not a phone
+     line, and audio would be billed per minute. */
+  process.stdout.write('  Creating the agent… ');
+  const agent = await call('POST', '/v1/convai/agents/create', {
+    name: AGENT_NAME,
+    conversation_config: {
+      agent: {
+        prompt: {
+          prompt,
+          llm: 'gpt-4o-mini',
+          temperature: 0,
+          tool_ids: toolIds,
+          knowledge_base: knowledge
+        },
+        first_message: 'Hello — ask me anything about our catalogue, documentation, shipping or returns.',
+        language: 'en'
+      },
+      conversation: { text_only: true }
+    }
+  });
+  const agentId = agent && (agent.agent_id || agent.id);
+  if (!agentId) die(`No agent id came back. Response: ${JSON.stringify(agent)}`);
+  console.log('ok');
+
+  console.log('');
+  console.log('  Done. Agent id:  ' + agentId);
+  console.log('');
+  console.log('  Next:');
+  console.log('    1. Put it in js/config.js:');
+  console.log(`         window.ENL_CHAT = { agentId: '${agentId}', version: '' };`);
+  console.log('    2. Set ELEVENLABS_AGENT_SECRET in Render (same value as server/.env),');
+  console.log('       and confirm ' + API_BASE + '/api/agent/product returns 401 without a header.');
+  console.log('    3. Set the post-call webhook to ' + API_BASE + '/api/agent/transcript');
+  console.log('       with ELEVENLABS_WEBHOOK_SECRET — see §6 of docs/AI-CHAT.md.');
+  console.log('    4. Upload js/ and css/ to the host BEFORE the HTML (Cloudflare caches 4h).');
+  console.log('');
+}
+
+main().catch(e => {
+  console.error('\n  Failed.\n  ' + e.message);
+  console.error('\n  Nothing further was created. Fix the above and run it again.');
+  console.error('  Any knowledge-base documents already uploaded are still there —');
+  console.error('  delete them in the dashboard if you want a clean second run.\n');
+  process.exit(1);
+});

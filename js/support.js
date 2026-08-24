@@ -145,41 +145,207 @@
   }
 
   /* ---- rendering ---- */
+  /* The same names and chips the account page uses. This page used to print
+     the raw status straight from the record, so a customer read
+     "awaiting_payment" while account.html called the same order
+     "Awaiting payment" — one order, two vocabularies, and one of them
+     internal. */
+  function statusChip(status) {
+    var s = String(status || '').toLowerCase();
+    var known = {
+      paid: 'Paid', pending: 'Pending', cancelled: 'Cancelled',
+      processing: 'Processing', shipped: 'Shipped', delivered: 'Delivered',
+      awaiting_payment: 'Awaiting payment',
+      underpaid: 'Payment short'
+    };
+    var label = known[s] || (s ? s.charAt(0).toUpperCase() + s.slice(1) : 'Processing');
+    var cls = known[s] ? s.replace(/_/g, '-') : 'processing';
+    return '<span class="order-status ' + esc(cls) + '">' + esc(label) + '</span>';
+  }
+
+  /* The order this report is about, as one strip. It used to be a card with a
+     bulleted item list, which cost a third of the screen to say what fits on a
+     line — and on a report about a parcel, the conversation is the thing the
+     customer came for. The full item text stays available as a tooltip when
+     the line has to truncate. */
   function orderCard(o) {
     if (!o) return '';
     var items = (o.items || []).map(function (i) {
       var paid = (i.paidQuantity == null) ? i.quantity : i.paidQuantity;
+      /* A BOGO line ships more than it bills, so both numbers earn their place. */
       var qty = (paid !== i.quantity) ? (i.quantity + ' sent · ' + paid + ' billed') : ('×' + i.quantity);
-      return '<li>' + esc(i.name) + ' <span class="text-muted">' + esc(qty) + '</span></li>';
-    }).join('');
+      return i.name + ' ' + qty;
+    }).join(' · ');
     var track = [o.carrier, o.tracking].filter(Boolean).join(' · ');
-    return '<h2>Order ' + esc(o.orderId) + '</h2>' +
-      '<ul>' + items + '</ul>' +
-      '<p class="text-muted">' + esc(o.status || '') +
-        (track ? ' · Tracking: ' + esc(track) : '') + '</p>';
+    return '<span class="sup-order-ref">' + esc(o.orderId) + '</span>' +
+      statusChip(o.status) +
+      (track ? '<p class="sup-bar-track">Tracking <b>' + esc(track) + '</b></p>' : '') +
+      (items ? '<p class="sup-bar-items" title="' + esc(items) + '">' + esc(items) + '</p>' : '');
   }
 
-  function messageHtml(d, m) {
-    if (m.from === 'system') {
-      return '<div class="sup-msg system">' + esc(m.body) + '</div>';
-    }
+  /* ---- the conversation, written as a conversation ----
+     Every bubble used to repeat "Ever Nova Life · 8/21/2026, 11:21:33 AM",
+     which is a log line, not a message: four replies said the same date four
+     times and the seconds were never information anybody wanted. The date is
+     said once per day on a divider, the sender once per run of messages, and
+     the clock time sits quietly at the foot of each bubble. */
+  function dayKey(d) { return d.getFullYear() + '-' + d.getMonth() + '-' + d.getDate(); }
+
+  function dayLabel(d) {
+    var now = new Date();
+    var days = Math.round(
+      (new Date(now.getFullYear(), now.getMonth(), now.getDate()) -
+       new Date(d.getFullYear(), d.getMonth(), d.getDate())) / 86400000);
+    if (days === 0) return 'Today';
+    if (days === 1) return 'Yesterday';
+    var opts = { month: 'short', day: 'numeric' };
+    if (d.getFullYear() !== now.getFullYear()) opts.year = 'numeric';
+    return d.toLocaleDateString([], opts);
+  }
+
+  function timeLabel(d) { return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }
+
+  function streamHtml(d) {
+    var out = [], lastDay = '', lastFrom = '';
+    (d.messages || []).forEach(function (m) {
+      var when = new Date(m.createdAt);
+      var key = dayKey(when);
+      if (key !== lastDay) {
+        out.push('<div class="sup-day">' + esc(dayLabel(when)) + '</div>');
+        lastDay = key;
+        lastFrom = '';           // a new day always re-states who is speaking
+      }
+      if (m.from === 'system') {
+        out.push('<div class="sup-msg system">' + esc(m.body) + '</div>');
+        lastFrom = '';
+        return;
+      }
+      out.push(messageHtml(m, when, m.from === lastFrom));
+      lastFrom = m.from;
+    });
+    return out.join('');
+  }
+
+  function messageHtml(m, when, cont) {
     var atts = (m.attachments || []).map(function (a) {
+      // Expired photos keep their place in the conversation so it still reads
+      // honestly — a message saying "see the photo" above nothing would leave
+      // the customer wondering whether it ever sent.
+      if (a.expiredAt) {
+        return '<span class="sup-att expired">' + esc(a.name) + ' — photo removed</span>';
+      }
       return '<button type="button" class="sup-att" data-file="' + esc(a.id) + '">' + esc(a.name) + '</button>';
     }).join('');
-    return '<div class="sup-msg ' + (m.from === 'admin' ? 'theirs' : 'mine') + '">' +
-      '<div class="sup-msg-head">' + (m.from === 'admin' ? 'Ever Nova Life' : 'You') +
-        ' · ' + esc(new Date(m.createdAt).toLocaleString()) + '</div>' +
+    return '<div class="sup-msg ' + (m.from === 'admin' ? 'theirs' : 'mine') + (cont ? ' cont' : '') + '">' +
+      (cont ? '' : '<div class="sup-msg-head">' + (m.from === 'admin' ? 'Ever Nova Life' : 'You') + '</div>') +
       '<div class="sup-msg-body">' + esc(m.body).replace(/\n/g, '<br>') + '</div>' +
       (atts ? '<div class="sup-atts">' + atts + '</div>' : '') +
+      '<time class="sup-time" datetime="' + esc(when.toISOString()) + '">' + esc(timeLabel(when)) + '</time>' +
       '</div>';
+  }
+
+  /* ---- "they replied" ----
+     The thread already refreshes on its own every 20 seconds, but a silent
+     refresh is not an announcement: a customer waiting on a missing parcel is
+     usually on another tab. So a new reply raises a banner they can click, and
+     changes the document title, which is the only part of this that reaches a
+     tab nobody is looking at. */
+  var lastSeenId = null;          // newest message id the reader has been shown
+  var baseTitle = document.title;
+
+  function newestRealId(d) {
+    for (var i = d.messages.length - 1; i >= 0; i--) {
+      var m = d.messages[i];
+      if (m.from === 'customer' || m.from === 'admin') return m.id;
+    }
+    return null;
+  }
+  function newestIsTheirs(d) {
+    for (var i = d.messages.length - 1; i >= 0; i--) {
+      var m = d.messages[i];
+      if (m.from === 'customer' || m.from === 'admin') return m.from === 'admin';
+    }
+    return false;
+  }
+
+  function markRead() {
+    document.title = baseTitle;
+    var b = $('supNew');
+    if (b) b.hidden = true;
+  }
+
+  function announceReply() {
+    var b = $('supNew');
+    if (b) b.hidden = false;
+    /* Only the title is conditional: a tab the reader is focused on does not
+       need its name changed, but the banner shows either way. */
+    if (document.hasFocus && document.hasFocus()) return;
+    /* The count is deliberately not tracked across replies — "they replied" is
+       the whole message, and a growing number would only be read as noise. */
+    document.title = '(1) ' + baseTitle;
+  }
+
+  /* Setting scrollTop from scrollHeight in the same tick as the innerHTML
+     write reads a height the browser has not laid out yet, so the view lands
+     on the message BEFORE the new one. Wait a frame and scroll to the last
+     element itself rather than computing a number. */
+  /* ---- keeping the newest message in view ----
+     Same rule as the admin thread, and for the same reason: the follow intent
+     is a module flag, not something re-derived from the DOM on each render.
+     Reading the old stream's position broke the moment a single action caused
+     two renders — the second measured an element the first had already
+     replaced at scrollTop 0, decided the reader had scrolled away, and put
+     them back at the top. */
+  var STICK_PX = 80;
+  var followBottom = true;
+
+  function atBottom(el) {
+    return (el.scrollHeight - el.scrollTop - el.clientHeight) < STICK_PX;
+  }
+
+  function followNewest() { followBottom = true; }
+
+  function scrollToNewest() {
+    var stream = $('supStream');
+    if (!stream) return;
+
+    if (!stream.dataset || !stream.dataset.scrollWired) {
+      /* The stream element itself is not replaced here — only its innerHTML —
+         so this is wired once rather than on every render. */
+      stream.addEventListener('scroll', function () { followBottom = atBottom(stream); });
+      if (stream.dataset) stream.dataset.scrollWired = '1';
+    }
+
+    if (!followBottom) return;
+    window.requestAnimationFrame(function () {
+      var last = stream.lastElementChild;
+      if (last && last.scrollIntoView) last.scrollIntoView({ block: 'end' });
+      else stream.scrollTop = stream.scrollHeight;
+    });
   }
 
   function renderThread() {
     var d = state.dispute;
     $('supOpenForm').hidden = true;
+    $('supPanel').hidden = false;
+    $('supPanel').classList.add('thread');
     $('supThread').hidden = false;
-    $('supStream').innerHTML = d.messages.map(function (m) { return messageHtml(d, m); }).join('');
-    $('supStream').scrollTop = $('supStream').scrollHeight;
+    $('supStream').innerHTML = streamHtml(d);
+    scrollToNewest();
+    measurePanel();
+
+    /* First render just establishes where we are; only a LATER change counts as
+       news, or opening the page would announce a reply the reader is looking at. */
+    var newest = newestRealId(d);
+    if (lastSeenId !== null && newest !== lastSeenId && newestIsTheirs(d)) {
+      /* Announce it, full stop. `document.hidden` was the test here and it is
+         only true for a genuinely hidden tab — a second window side by side is
+         "visible" but unwatched, which is both how this gets tested and how a
+         customer actually leaves the page sitting. Being told about something
+         already on screen is mildly redundant; not being told is the bug. */
+      announceReply();
+    }
+    lastSeenId = newest;
 
     var closed = d.status === 'resolved';
     if (!closed) state.startingNew = false;
@@ -198,6 +364,8 @@
         'If it still is not settled, open a new report on this order — this conversation stays here.</p>' +
         '<p><button type="button" class="btn btn-ghost btn-sm" id="supStartNew">Open a new report on this order</button></p>';
     }
+    var h1 = document.querySelector('#main h1');
+    if (h1) h1.textContent = closed ? 'Your report' : 'Your report';
     $('supIntro').textContent = closed
       ? 'This report is resolved.'
       : (d.status === 'awaiting_us' ? 'We have your report and will reply here.' : 'We have replied — your turn.');
@@ -211,6 +379,11 @@
      revealed alongside the closed conversation rather than replacing it. */
   function renderOpenForm(keepThread) {
     if (!keepThread) $('supThread').hidden = true;
+    /* With the form on screen the panel is ordinary content: it sizes to what
+       it holds and the page scrolls, rather than trapping a long form inside a
+       viewport-height box. */
+    $('supPanel').classList.remove('thread');
+    $('supPanel').hidden = false;
     $('supOpenForm').hidden = false;
     // On the escalation path this runs again on every 20-second poll, so the
     // reason the customer picked is carried across the rebuild — rebuilding
@@ -220,6 +393,8 @@
     sel.innerHTML = '<option value="">Choose one…</option>' +
       state.reasons.map(function (r) { return '<option value="' + esc(r.code) + '">' + esc(r.label) + '</option>'; }).join('');
     if (chosen) sel.value = chosen;
+    var h1open = document.querySelector('#main h1');
+    if (h1open && !keepThread) h1open.textContent = 'Report a problem';
     $('supIntro').textContent = keepThread
       ? 'Tell us what is still wrong and we will open a new report on this order.'
       : 'Tell us what went wrong and we will answer here.';
@@ -261,6 +436,73 @@
   function stopPolling() { if (state.timer) { window.clearInterval(state.timer); state.timer = null; } }
 
   /* ---- actions ---- */
+  /* ---- "we've got it" ----
+     Sending a report used to just swap the form for the thread, with no
+     acknowledgement at all. This is the moment a worried customer most needs
+     to be told something definite: it arrived, this is what it is about, and
+     here is where the answer will appear.
+
+     The photo count is deliberate. A report whose images silently failed to
+     attach is the worst outcome this page has, and seeing "2 photos" is the
+     customer's own proof that the evidence went with it. */
+  var sentRestoreFocus = null;
+
+  function closeSent() {
+    var box = document.querySelector('.supdialog');
+    if (!box) return;
+    document.removeEventListener('keydown', sentKey);
+    document.body.classList.remove('adminalert-open');
+    box.remove();
+    if (sentRestoreFocus && sentRestoreFocus.focus) { try { sentRestoreFocus.focus(); } catch (e) {} }
+  }
+
+  function sentKey(e) {
+    if (e.key === 'Escape') { closeSent(); return; }
+    if (e.key !== 'Tab') return;
+    /* aria-modal marks the rest of the page inert for assistive tech but does
+       nothing to the tab order — without this, tabbing off the last control
+       lands behind the backdrop on a page the reader cannot see. */
+    var box = document.querySelector('.supdialog');
+    if (!box) return;
+    var f = Array.prototype.slice.call(box.querySelectorAll('a[href], button:not([disabled])'));
+    if (!f.length) return;
+    var first = f[0], last = f[f.length - 1];
+    if (!box.contains(document.activeElement)) { e.preventDefault(); first.focus(); return; }
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  }
+
+  function showSent(orderId, photos) {
+    sentRestoreFocus = document.activeElement;
+    var box = document.createElement('div');
+    box.className = 'supdialog';
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
+    box.setAttribute('aria-label', 'Your report has been sent');
+    /* The ORDER reference, never the DSP- id: the customer knows the order
+       they placed and has no reason to learn an internal thread id. */
+    box.innerHTML =
+      '<div class="supdialog-panel">' +
+        '<h2>Your report has been sent</h2>' +
+        '<p>We have your report about order <strong>' + esc(orderId) + '</strong>.' +
+          (photos ? ' ' + photos + ' photo' + (photos === 1 ? '' : 's') + ' went with it.' : '') + '</p>' +
+        '<p>We will reply on this page, and email you when there is an answer. ' +
+          'Nothing else is needed from you for now.</p>' +
+        '<button type="button" class="btn btn-primary supdialog-ok">See your report</button>' +
+      '</div>';
+
+    box.addEventListener('click', function (e) {
+      if (e.target === box) closeSent();
+      if (e.target.closest && e.target.closest('.supdialog-ok')) closeSent();
+    });
+
+    document.body.appendChild(box);
+    document.body.classList.add('adminalert-open');
+    document.addEventListener('keydown', sentKey);
+    var ok = box.querySelector('.supdialog-ok');
+    if (ok) ok.focus();
+  }
+
   async function submitOpen(e) {
     e.preventDefault();
     var msg = $('supOpenMsg');
@@ -284,12 +526,21 @@
       state.dispute = data.dispute;
       state.order = data.order || state.order;
       state.startingNew = false;
+      /* The site-wide watcher caches "this visitor has no reports" for the
+         session so the shop is not billed an API call per page. Opening one
+         makes that cache a lie — and a stale lie means the reply notification
+         never fires again all session, which is exactly how it went missing. */
+      try { window.sessionStorage.removeItem('enl_no_disputes'); } catch (e) {}
       $('supOrder').hidden = false;
       $('supOrder').innerHTML = orderCard(state.order);
       state.pending.length = 0;
       $('supPreviews').innerHTML = '';
       renderThread();
       startPolling();
+      /* Counted from what the server stored, not from what we tried to send —
+         so the number the customer reads is the number that actually arrived. */
+      var stored = (data.dispute.messages[0] || {}).attachments || [];
+      showSent(data.dispute.orderId, stored.length);
     } catch (e2) {
       msg.textContent = e2.message;
       btn.disabled = false;
@@ -312,6 +563,7 @@
         body: { message: $('supReply').value, attachments: state.pendingReply.slice() }
       });
       state.dispute = data.dispute;
+      followNewest();            // they just sent it; always show it
       $('supReply').value = '';
       state.pendingReply.length = 0;
       $('supReplyPreviews').innerHTML = '';
@@ -360,6 +612,18 @@
   }
 
   /* ---- boot ---- */
+  /* The console's height is the viewport minus everything above it. Measured
+     rather than budgeted: the sticky header grows when the announcement bar
+     wraps, the title block wraps at narrow widths, and the order strip is one
+     line or two depending on the order — a guessed constant is wrong on all of
+     those, and being wrong here is what pushed the composer off the screen. */
+  function measurePanel() {
+    var el = $('supPanel');
+    if (!el || el.hidden) return;
+    var top = el.getBoundingClientRect().top + (window.scrollY || window.pageYOffset || 0);
+    document.documentElement.style.setProperty('--sup-top', Math.round(top) + 'px');
+  }
+
   function init() {
     var params = new URLSearchParams(window.location.search);
     state.orderId = (params.get('order') || '').trim();
@@ -392,8 +656,43 @@
       }
     });
     document.addEventListener('visibilitychange', function () {
-      if (document.hidden) stopPolling(); else { load(true); startPolling(); }
+      if (document.hidden) { stopPolling(); return; }
+      /* Back on the tab: the title has done its job, so stop shouting. The
+         banner stays until clicked — it is what scrolls them to the reply. */
+      document.title = baseTitle;
+      load(true);
+      startPolling();
     });
+    var newBanner = $('supNew');
+    if (newBanner) {
+      newBanner.addEventListener('click', function () {
+        markRead();
+        var stream = $('supStream');
+        if (stream) stream.scrollTop = stream.scrollHeight;
+      });
+    }
+
+    measurePanel();
+    window.addEventListener('resize', measurePanel);
+
+    /* One row until it needs more, so the composer stays the size of what is
+       actually being written. */
+    var reply = $('supReply');
+    if (reply) {
+      reply.addEventListener('input', function () {
+        reply.style.height = 'auto';
+        reply.style.height = Math.min(reply.scrollHeight, 128) + 'px';
+      });
+    }
+
+    /* Instant when the stream is up, poll underneath when it is not. */
+    if (window.Live) {
+      window.Live.on(function (ev) {
+        if (!ev || !state.dispute) return;
+        if (ev.disputeId !== state.dispute.id) return;
+        if (ev.type === 'dispute-reply' || ev.type === 'dispute-resolved') load(true);
+      });
+    }
 
     load().then(startPolling);
   }
