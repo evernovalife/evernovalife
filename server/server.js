@@ -2768,6 +2768,10 @@ function adminSummary() {
   const waitingThreads = disputes.list()
     .filter(d => disputes.summarize(d).status === 'awaiting_us').length;
 
+  /* Same rule, the other queue: an inbox thread the customer spoke last
+     on is waiting on us, and a closed one never is. */
+  const waitingInbox = inbox.list().filter(t => t.status === 'awaiting_us').length;
+
   let lowStock = 0;
   const threshold = outreach.config().lowStockThreshold;
   for (const p of productStore.listProducts()) {
@@ -2779,6 +2783,7 @@ function adminSummary() {
 
   const summary = {
     disputes: waitingThreads,
+    inbox: waitingInbox,
     unpaidOrders: orders.filter(o => SUMMARY_OPEN.indexOf(o.status) !== -1).length,
     toShip: orders.filter(o => o.status === SUMMARY_PAID).length,
     lowStock,
@@ -2792,7 +2797,7 @@ function adminSummary() {
      at all when this is false, and "nothing is waiting" is one decision,
      not five the browser has to re-derive and keep in step. */
   summary.anythingWaiting = Boolean(
-    summary.disputes || summary.unpaidOrders || summary.toShip || summary.lowStock
+    summary.disputes || summary.inbox || summary.unpaidOrders || summary.toShip || summary.lowStock
   );
   return summary;
 }

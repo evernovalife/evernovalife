@@ -231,6 +231,7 @@
     { key: 'btcpay', href: 'admin.html#btcpay', label: 'BTCPay', icon: 'bitcoin', tally: 'navBtcpay' },
     { key: 'autoship', href: 'admin.html#autoship', label: 'Auto-Ship', icon: 'repeat' },
     { key: 'disputes', href: 'admin.html#disputes', label: 'Disputes', icon: 'chat', tally: 'navDisputes' },
+    { key: 'inbox', href: 'admin.html#inbox', label: 'Inbox', icon: 'chat', tally: 'navInbox' },
     { key: 'customers', href: 'admin.html#customers', label: 'Customers', icon: 'users' },
     { key: 'products', href: 'admin-products.html', label: 'Products', icon: 'box' },
     { key: 'labels', href: 'labels.html', label: 'Vial labels', icon: 'print' }

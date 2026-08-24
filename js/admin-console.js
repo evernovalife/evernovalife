@@ -65,6 +65,9 @@
     disputeThread: null,   // the full thread, loaded when one is opened
     disputeOutcomes: [],   // how a report can be closed, from the list response
     disputeTab: 'awaiting_us',
+    inbox: null,           // inbox threads — questions from people with no account
+    inboxId: '',           // which thread the right pane is showing
+    inboxThread: null,     // the full thread, loaded when one is opened
     storage: null,         // dispute photo usage against the ceiling (includes alertPct, from the server)
     range: 30,            // days; 0 = all time
     view: 'dashboard',
@@ -92,7 +95,8 @@
       A.api('/api/shipping'),
       A.api('/api/admin/label-design'),
       A.api('/api/admin/promotions'),
-      A.api('/api/admin/disputes')
+      A.api('/api/admin/disputes'),
+      A.api('/api/admin/inbox')
     ]);
     state.loading = false;
 
@@ -121,6 +125,7 @@
       state.disputeOutcomes = results[8].value.outcomes || [];
       state.storage = results[8].value.storage || null;
     }
+    state.inbox = results[9].status === 'fulfilled' ? (results[9].value.threads || []) : (state.inbox || []);
 
     results.forEach(function (r, i) {
       if (r.status === 'rejected' && r.reason.status !== 0) {
@@ -136,8 +141,10 @@
         if (i === 7 && r.reason.status === 404) return;
         // Disputes: a 404 means the backend predates them; the view says so.
         if (i === 8 && r.reason.status === 404) return;
+        // Inbox: a 404 means the backend predates it; the view says so.
+        if (i === 9 && r.reason.status === 404) return;
         A.toast(['Orders', 'Users', 'Auto-ship plans', 'Products', 'Health', 'Shipping rates',
-          'Label design', 'Promotions', 'Disputes'][i] + ': ' + r.reason.message, 'error');
+          'Label design', 'Promotions', 'Disputes', 'Inbox'][i] + ': ' + r.reason.message, 'error');
       }
     });
 
@@ -353,6 +360,7 @@
     btcpay: ['BTCPay', 'What the payment server says, next to what we recorded'],
     autoship: ['Auto-Ship', 'Repeating orders and their next invoice'],
     disputes: ['Disputes', 'Problems customers have reported, and how they ended'],
+    inbox: ['Inbox', 'Questions from people without an account — mostly from the chat'],
     customers: ['Customers', 'Everyone with an account']
   };
 
@@ -382,6 +390,7 @@
     else if (state.view === 'btcpay') renderBtcpay();
     else if (state.view === 'autoship') renderAutoship();
     else if (state.view === 'disputes') renderDisputes();
+    else if (state.view === 'inbox') renderInbox();
     else if (state.view === 'customers') renderCustomers();
     else renderDashboard();
 
@@ -421,6 +430,14 @@
     if (dq) {
       var n3 = (state.disputes || []).filter(function (d) { return d.unreadForAdmin; }).length;
       dq.textContent = n3 ? String(n3) : '';
+    }
+    // Threads waiting on us — the same "customer spoke last" rule as the
+    // sign-in summary, so the rail badge and the pop-up never disagree.
+    var iq = document.getElementById('navInbox');
+    if (iq) {
+      var waitingInbox = (state.inbox || []).filter(function (t) { return t.status === 'awaiting_us'; }).length;
+      iq.textContent = waitingInbox ? String(waitingInbox) : '';
+      iq.hidden = !waitingInbox;
     }
   }
 
@@ -2625,6 +2642,101 @@
   }
 
   /* ============================================================
+     INBOX
+     Same split as disputes, for the same reason: the view lives in
+     js/admin-inbox.js and this is only the state glue — fetching the
+     thread, sending a reply, closing it — wired through the delegated
+     click handler below. Fewer states than a dispute (no order to show,
+     no outcome to pick), so there is less here.
+     ============================================================ */
+
+  var IBX = window.AdminInbox;
+
+  function renderInbox() {
+    if (!IBX) {
+      body.innerHTML = '<div class="adm-card"><p class="adm-note" style="margin:0">' +
+        'The inbox view did not load — check that <code>js/admin-inbox.js</code> is uploaded.</p></div>';
+      return;
+    }
+    // Pick the first thread automatically the first time this view is
+    // opened, so there is something to read without an extra click — same
+    // idea as the dispute queue, just done here instead of in the view,
+    // since opening a thread is a fetch and the view only renders state.
+    if (!state.inboxId && state.inbox && state.inbox.length) {
+      openInboxThread(state.inbox[0].id);
+      return;
+    }
+    IBX.render(state, body, {
+      open: openInboxThread, reply: replyToInboxThread, close: closeInboxThread
+    });
+  }
+
+  async function openInboxThread(id) {
+    state.inboxId = id;
+    state.inboxThread = null;
+    render();
+    try {
+      var data = await A.api('/api/admin/inbox/' + encodeURIComponent(id));
+      // A second click can land while this one is still in flight — the
+      // second click wins, so a stale response must not overwrite it.
+      if (state.inboxId !== id) return;
+      state.inboxThread = data.thread;
+      render();
+      // Opening it IS reading it (the GET marks it read server-side) —
+      // refresh the queue so the unread dot and the rail tally drop.
+      await loadAll({ quiet: true });
+      if (state.inboxId !== id) return;
+      render();
+    } catch (e) {
+      A.toast(e.message, 'error');
+      // Leaving inboxId set with no thread strands the pane on a skeleton
+      // with no way back — drop the selection so the queue is usable again.
+      if (state.inboxId === id) { state.inboxId = ''; render(); }
+    }
+  }
+
+  async function replyToInboxThread(id, btn) {
+    var box = document.getElementById('ibxReply');
+    var message = box ? box.value.trim() : '';
+    if (!message) { A.toast('Write a reply first.', 'error'); return; }
+    btn.disabled = true;
+    try {
+      var data = await A.api('/api/admin/inbox/' + encodeURIComponent(id) + '/messages',
+        { method: 'POST', body: { body: message } });
+      // The owner may have opened a different thread while this was in
+      // flight — a response for `id` must not write into (or re-render) a
+      // pane that has since moved on to a different one.
+      if (state.inboxId !== id) return;
+      state.inboxThread = data.thread;
+      if (emailWorks()) A.toast('Sent. They have been emailed a link to the conversation.', 'success');
+      else A.toast('Saved — but email is not configured, so nothing was sent. Tell them another way, or they will not know it is here.');
+      await loadAll({ quiet: true });
+      if (state.inboxId !== id) return;
+      render();
+    } catch (e) {
+      A.toast(e.message, 'error');
+      if (state.inboxId === id) btn.disabled = false;
+    }
+  }
+
+  async function closeInboxThread(id, btn) {
+    if (!window.confirm('Close this conversation? They will be told to email support if they need to reopen it.')) return;
+    btn.disabled = true;
+    try {
+      var data = await A.api('/api/admin/inbox/' + encodeURIComponent(id) + '/close', { method: 'POST', body: {} });
+      if (state.inboxId !== id) return;
+      state.inboxThread = data.thread;
+      A.toast('Closed.', 'success');
+      await loadAll({ quiet: true });
+      if (state.inboxId !== id) return;
+      render();
+    } catch (e) {
+      A.toast(e.message, 'error');
+      if (state.inboxId === id) btn.disabled = false;
+    }
+  }
+
+  /* ============================================================
      BOOT
      ============================================================ */
   /* ---- a reply landing while the console is open ----
@@ -2748,6 +2860,9 @@
       else if (t.classList.contains('act-dsp-att')) openDisputeAttachment(t.getAttribute('data-dsp'), t.getAttribute('data-file'));
       else if (t.classList.contains('act-dsp-sweep')) sweepDisputes(t);
       else if (t.classList.contains('act-dsp-strip')) stripDisputePhotos(t.getAttribute('data-id'), t);
+      else if (t.hasAttribute('data-ibx-open')) openInboxThread(t.getAttribute('data-ibx-open'));
+      else if (t.classList.contains('act-ibx-reply')) replyToInboxThread(t.getAttribute('data-id'), t);
+      else if (t.classList.contains('act-ibx-close')) closeInboxThread(t.getAttribute('data-id'), t);
     });
 
     /* The designer previews live: every keystroke redraws the label from the
