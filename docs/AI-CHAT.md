@@ -25,11 +25,33 @@ not done here: it is the owner's call, not a side effect of shipping chat.
 
 ## 2. The secrets, and where each goes
 
+**Read this before the table.** "Where" means two different places depending
+on which server you mean, and getting it wrong is the most likely way to
+lose an afternoon here.
+
+- **Locally**, the server reads `server/.env` through `dotenv`.
+- **In production, there is no `.env` file at all.** `server/.env` is
+  git-ignored (`server/.gitignore`), so it is never deployed. The live API
+  runs on Render, and Render supplies environment variables from its own
+  dashboard — **Environment → Add Environment Variable**, the same place
+  `BTCPAY_WEBHOOK_SECRET` and the SMTP settings already live. See
+  `DEPLOY-RENDER.md`. Render injects them straight into `process.env`, and
+  `dotenv` simply finds no file and does nothing, which is fine.
+
+So every row below means: **`server/.env` for local development, and the
+Render dashboard for the live site.** Set both — they are separate stores
+and neither copies from the other. Changing a value on Render restarts the
+service; the agent will 401 until that restart finishes.
+
+If the agent is refused in production with a correct-looking secret, this
+is almost always the cause: the value is in `server/.env` on your machine
+and was never added on Render.
+
 | Variable | Where | What it is |
 |---|---|---|
-| `ELEVENLABS_API_KEY` | `server/.env` | Your ElevenLabs account key. This server's code does not read it — nothing in `server/*.js` references it. Keep it in `server/.env` anyway (that file is already git-ignored) so it lives with the other secrets rather than in a note somewhere, and use it yourself when uploading or updating the knowledge base via ElevenLabs' own API or CLI. |
-| `ELEVENLABS_AGENT_SECRET` | `server/.env` **and** each webhook tool's header configuration in the ElevenLabs dashboard | The shared secret the agent presents on every tool call, as the `x-agent-secret` header. The server checks this on both `/api/agent/product` and `/api/agent/escalate` and refuses the request outright if it is missing, wrong, or not yet configured — there is no "open while testing" mode. |
-| `ELEVENLABS_WEBHOOK_SECRET` | `server/.env` **and** the post-call webhook configuration in the dashboard | The HMAC key ElevenLabs signs the finished-conversation webhook with. The server verifies this signature before writing anything to disk. |
+| `ELEVENLABS_API_KEY` | `server/.env` locally; **Render dashboard** for production — though see the note, this one is optional in production | Your ElevenLabs account key. This server's code does not read it — nothing in `server/*.js` references it. Keep it in `server/.env` anyway so it lives with the other secrets rather than in a note somewhere, and use it yourself when uploading or updating the knowledge base via ElevenLabs' own API or CLI. Because the running server never reads it, you do not strictly need it on Render at all. |
+| `ELEVENLABS_AGENT_SECRET` | `server/.env` locally, **Render dashboard** for production, **and** each webhook tool's header configuration in the ElevenLabs dashboard | The shared secret the agent presents on every tool call, as the `x-agent-secret` header. The server checks this on both `/api/agent/product` and `/api/agent/escalate` and refuses the request outright if it is missing, wrong, or not yet configured — there is no "open while testing" mode. All three places must hold the same value. |
+| `ELEVENLABS_WEBHOOK_SECRET` | `server/.env` locally, **Render dashboard** for production, **and** the post-call webhook configuration in the ElevenLabs dashboard | The HMAC key ElevenLabs signs the finished-conversation webhook with. The server verifies this signature before writing anything to disk. All three places must hold the same value. |
 | `agentId` (`window.ENL_CHAT.agentId`) | `js/config.js` | The agent's id. This one is meant to be public — it ends up in the page source of every page that loads the bubble, by design. Leave it empty and the whole feature is inert: no script tag is added, no element is mounted, no request is made. See §7 for the companion `version` value. |
 
 **On the agent being public.** ElevenLabs' embeddable chat widget only works
@@ -39,8 +61,9 @@ design: the agent id being visible in page source grants no access to
 anything sensitive. The two secrets that actually matter —
 `ELEVENLABS_AGENT_SECRET` and `ELEVENLABS_WEBHOOK_SECRET` — never appear in
 the browser. They live in the agent's server-side tool configuration inside
-the ElevenLabs dashboard and in `server/.env`. Do not "fix" this later by
-flipping the agent to private; that will simply break the widget.
+the ElevenLabs dashboard, in `server/.env` locally, and in Render's
+environment for the live site. Do not "fix" this later by flipping the
+agent to private; that will simply break the widget.
 
 ## 3. The system prompt
 
@@ -257,13 +280,16 @@ else is ignored and the loader falls back to the unpinned URL.
 Work through this in order. Each line says what to do and how to tell it
 actually worked.
 
-- [ ] **Secrets set on the server.** `ELEVENLABS_API_KEY`,
-      `ELEVENLABS_AGENT_SECRET`, and `ELEVENLABS_WEBHOOK_SECRET` are all set
-      in `server/.env` on the machine actually running the server (Render,
-      not just locally), and the server has been restarted since. Confirm by
-      calling `/api/agent/product?q=test` with the correct
-      `x-agent-secret` header and getting a `200` with a `products` array
-      back — with the header wrong or missing you should get `401`.
+- [ ] **Secrets set on Render, not just locally.** `ELEVENLABS_AGENT_SECRET`
+      and `ELEVENLABS_WEBHOOK_SECRET` are set in the **Render dashboard**
+      (Environment → Add Environment Variable), and Render has finished the
+      restart that follows. `server/.env` is git-ignored and never deployed,
+      so a value that exists only there does not exist in production — see
+      §2. Confirm against the LIVE API host, not localhost: call
+      `/api/agent/product?q=test` with the correct `x-agent-secret` header
+      and expect `200` with a `products` array; with the header wrong or
+      missing, expect `401`. A `401` with a secret you believe is correct
+      means it is set locally and not on Render.
 - [ ] **Knowledge base uploaded.** All eight pages from §4 are in the
       agent's knowledge base, and `products.html` is not. Confirm by asking
       the agent something only answerable from one of the eight (a returns
@@ -279,8 +305,9 @@ actually worked.
       test conversation and checking that a new file appears in
       `server/data/agent-transcripts/` with a matching timestamp — and check
       the server log for `[agent] transcript rejected: signature mismatch`,
-      which means the secret in the dashboard does not match the one in
-      `server/.env`.
+      which means the secret in the ElevenLabs dashboard does not match the
+      one the running server has — Render's environment in production,
+      `server/.env` locally.
 - [ ] **`agentId` set in `js/config.js`.** `window.ENL_CHAT.agentId` holds
       the real agent id, not the placeholder. Confirm by opening the site
       with the browser console open — the `elevenlabs-convai` element and

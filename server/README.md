@@ -659,11 +659,18 @@ ElevenLabs (post-call) ── POST /api/agent/transcript (signed) ──► save
 Env vars:
 
 ```
+(As with every secret here: server/.env is git-ignored and never deployed, so
+ these are read from server/.env locally and from Render's own environment
+ — Environment → Add Environment Variable — for the live site. Set both.
+ A secret that lives only in server/.env does not exist in production.)
+
 ELEVENLABS_API_KEY          Your ElevenLabs account key. Not read by this server's
                              code — nothing in server/*.js references it. Keep it
                              here anyway (server/.env is git-ignored) so it lives
                              with the other secrets; use it yourself against
-                             ElevenLabs' own API/CLI when uploading the knowledge base.
+                             ElevenLabs' own API/CLI when uploading the knowledge
+                             base. Since the running server never reads it, it does
+                             not need to be set on Render.
 ELEVENLABS_AGENT_SECRET     Shared secret the agent presents as the x-agent-secret
                              header on every call to /api/agent/product and
                              /api/agent/escalate. Set the same value in each tool's
