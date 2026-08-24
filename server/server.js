@@ -13,6 +13,7 @@
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const express = require('express');
 const cors = require('cors');
 
@@ -2388,6 +2389,130 @@ app.post('/api/admin/inbox/:id/close', requireAdmin, (req, res) => {
     res.json({ success: true, thread: inbox.close(req.params.id, { by }) });
   } catch (e) {
     res.status(e.status || 400).json({ error: e.message });
+  }
+});
+
+/* ============================================================
+   THE CHAT AGENT'S THREE DOORS
+   Everything the ElevenLabs agent can reach is here, and the
+   list is short on purpose. It can read the catalog, it can
+   hand a conversation to a human, and it can post back a
+   finished transcript. It cannot read an order, an account, or
+   anything with a name and address attached — handing an LLM a
+   lookup keyed on customer records is the shortest path to
+   disclosing one to whoever guessed a reference.
+   ============================================================ */
+const AGENT_SECRET = process.env.ELEVENLABS_AGENT_SECRET || '';
+const AGENT_WEBHOOK_SECRET = process.env.ELEVENLABS_WEBHOOK_SECRET || '';
+
+const agentLimiter = ratelimit.limit({
+  name: 'agent-tool',
+  windowMs: 60 * 1000,
+  max: 60,
+  message: 'Too many lookups. Tell the visitor to try again in a minute.'
+});
+
+/* Fails closed: no secret configured means no request gets through, ever —
+   not "open for testing", not "open until someone notices". `given.length
+   !== AGENT_SECRET.length` is checked BEFORE timingSafeEqual because that
+   function throws on a length mismatch rather than returning false, and an
+   absent header is the empty string, which still has a defined length. */
+function requireAgent(req, res, next) {
+  const given = String(req.get('x-agent-secret') || '');
+  if (!AGENT_SECRET || given.length !== AGENT_SECRET.length ||
+      !crypto.timingSafeEqual(Buffer.from(given), Buffer.from(AGENT_SECRET))) {
+    return res.status(401).json({ error: 'Not authorised.' });
+  }
+  next();
+}
+
+/* What the agent may say about a product: the name, what it costs, and
+   whether we have it. `stockQty` absent means untracked, which the
+   catalog treats as available. */
+function agentProductView(p) {
+  const tracked = p.stockQty !== undefined && p.stockQty !== null && p.stockQty !== '';
+  return {
+    id: p.id,
+    name: p.name,
+    price: Number(p.price) || 0,
+    currency: 'USD',
+    inStock: tracked ? Number(p.stockQty) > 0 : true,
+    url: `${SITE()}/product.html?id=${encodeURIComponent(p.id)}`
+  };
+}
+
+app.get('/api/agent/product', requireAgent, agentLimiter, (req, res) => {
+  const q = String((req.query && req.query.q) || '').trim().toLowerCase();
+  const all = productStore.listProducts();
+  const hits = q
+    ? all.filter(p => String(p.name || '').toLowerCase().includes(q))
+    : all;
+  res.json({ success: true, products: hits.slice(0, 5).map(agentProductView) });
+});
+
+app.post('/api/agent/escalate', requireAgent, agentLimiter, (req, res) => {
+  const b = req.body || {};
+  try {
+    const t = inbox.create({
+      email: b.email,
+      name: b.name,
+      subject: b.subject,
+      body: b.body,
+      transcript: b.transcript
+    });
+    sendInboxOpenedEmail(t).catch(e => console.error('[inbox] acknowledgement failed:', e.message));
+    res.json({
+      success: true,
+      reference: t.id,
+      // The agent reads this sentence out. Keep it a sentence.
+      message: `A person has it. The reference is ${t.id}, and a confirmation is on its way to ${t.email}.`
+    });
+  } catch (e) {
+    // The agent has to say something useful, so the error text is the
+    // message — not a code it would have to interpret.
+    res.status(e.status || 400).json({ error: e.message });
+  }
+});
+
+/* The post-call webhook. Audit evidence must not live only in a vendor
+   dashboard we could lose access to, so every finished conversation is
+   written here as well. The signature is checked against the RAW body —
+   `express.json({ verify })` at the top of this file keeps it on
+   req.rawBody precisely so webhooks like this one can. */
+function verifyAgentSignature(rawBody, header) {
+  if (!AGENT_WEBHOOK_SECRET || !header || !rawBody) return false;
+  const parts = String(header).split(',').reduce((acc, piece) => {
+    const [k, v] = piece.split('=');
+    if (k && v) acc[k.trim()] = v.trim();
+    return acc;
+  }, {});
+  if (!parts.t || !parts.v0) return false;
+  const expected = crypto.createHmac('sha256', AGENT_WEBHOOK_SECRET)
+    .update(`${parts.t}.${rawBody.toString('utf8')}`)
+    .digest('hex');
+  const a = Buffer.from(parts.v0);
+  const b = Buffer.from(expected);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+app.post('/api/agent/transcript', (req, res) => {
+  if (!verifyAgentSignature(req.rawBody, req.get('elevenlabs-signature'))) {
+    console.error('[agent] transcript rejected: signature mismatch');
+    return res.status(401).json({ error: 'Not authorised.' });
+  }
+  try {
+    const dir = path.join(process.env.DATA_DIR || path.join(__dirname, 'data'), 'agent-transcripts');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    // Allowlist only: this id ends up in a filename, and a value like
+    // "../../etc/passwd" or an absolute path must not be able to steer where
+    // that write lands. Anything outside [A-Za-z0-9_-] is dropped, not encoded.
+    const id = String((req.body && req.body.conversation_id) || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '');
+    const stampName = new Date().toISOString().replace(/[:.]/g, '-');
+    fs.writeFileSync(path.join(dir, `${stampName}-${id}.json`), JSON.stringify(req.body, null, 2));
+    res.json({ success: true });
+  } catch (e) {
+    console.error('[agent] transcript store failed:', e.message);
+    res.status(500).json({ error: 'Could not store that.' });
   }
 });
 
