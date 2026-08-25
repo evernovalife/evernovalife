@@ -20,7 +20,7 @@ import sys
 
 import cv2
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.dirname(HERE)
@@ -38,6 +38,94 @@ SITE_BG = np.array([0x0f, 0x04, 0x07], np.float32)   # BGR of --dark-bg
 # Alpha ramp over the distance from the background plate. Below LO the pixel is
 # set, above HI it is bottle; the glass edges live in between.
 LO, HI = 6.0, 26.0
+
+# The acquiring bank underwrites this catalogue as research-use-only supply and
+# asked for that to be unmissable on the product photo itself — the vial label
+# carries the line, but at card size it is a few pixels tall. So the bottle is
+# framed into the upper part of the canvas and a stamped band takes the strip
+# below it. It is drawn here rather than in CSS on purpose: the requirement is
+# about the photo, and the photo travels (cart rows, order emails, screenshots
+# a reviewer takes) without the page's markup.
+RUO_TEXT = "FOR RESEARCH USE ONLY"
+BAND_BOT = 0.980                       # the pill's baseline, as a fraction of H
+BAND_INSET = 0.045                     # fraction of the canvas width, each side
+BAND_FILL = (7, 4, 15, 246)            # RGBA — the site's --dark-bg, near-solid
+BAND_EDGE = (212, 175, 55, 255)        # the brand gold
+BAND_TEXT = (247, 240, 214, 255)       # warm off-white; gold-on-black type at
+                                       # this size reads muddy once WebP is done
+TRACK = 0.09                           # letter-spacing, in ems
+# The line is set as large as the canvas width allows and the pill is then sized
+# to it, rather than the other way round — a fixed band would leave the type
+# floating in it, which is exactly the complaint this band answers.
+BAND_PAD_X, BAND_PAD_Y = 0.055, 0.62   # padding around the type, in ems
+# Bottle framing. Smaller than a full-bleed crop so the band has its own strip
+# and never sits over glass; the bottle is pushed up by the same amount.
+FILL_H, FILL_W = 0.85, 0.90
+BOTTLE_CENTER = 0.455                  # where the bbox centre lands vertically
+
+FONT_CANDIDATES = [
+    "arialbd.ttf", "Arial Bold.ttf", "DejaVuSans-Bold.ttf",
+    "LiberationSans-Bold.ttf", "Helvetica-Bold.ttf",
+    "C:/Windows/Fonts/arialbd.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+]
+
+
+def _font(size):
+    for path in FONT_CANDIDATES:
+        try:
+            return ImageFont.truetype(path, size)
+        except OSError:
+            continue
+    raise SystemExit("no bold TrueType font found — add one to FONT_CANDIDATES")
+
+
+def _tracked(draw, font, text, track):
+    """Width of `text` drawn with `track` px of extra space between glyphs."""
+    return sum(draw.textlength(c, font=font) for c in text) + track * (len(text) - 1)
+
+
+def stamp(bgra):
+    """Draw the research-use-only band into the bottom strip of a BGRA cut.
+
+    Done per output size rather than once and resized, so the type is rendered
+    at the pixel size it ships at and stays crisp on the small card image."""
+    H, W = bgra.shape[:2]
+    im = Image.fromarray(cv2.cvtColor(bgra, cv2.COLOR_BGRA2RGBA))
+    d = ImageDraw.Draw(im)
+
+    # Largest size whose tracked line still fits between the insets, padding
+    # and rounded ends included.
+    budget = W * (1 - 2 * BAND_INSET)
+    size = max(9, int(H * 0.09))
+    while size > 9:
+        font = _font(size)
+        if (_tracked(d, font, RUO_TEXT, size * TRACK)
+                + size * (2 * BAND_PAD_X + BAND_PAD_Y)) <= budget:
+            break
+        size -= 1
+    font, track = _font(size), size * TRACK
+    tw = _tracked(d, font, RUO_TEXT, track)
+
+    top, bottom = d.textbbox((0, 0), RUO_TEXT, font=font)[1::2]
+    bh = (bottom - top) + 2 * size * BAND_PAD_Y
+    bw = tw + 2 * size * BAND_PAD_X + bh
+    x0, x1 = (W - bw) / 2, (W + bw) / 2
+    y1 = H * BAND_BOT
+    y0 = y1 - bh
+    edge = max(2, int(round(size * 0.075)))
+    d.rounded_rectangle([x0, y0, x1, y1], radius=bh / 2, fill=BAND_FILL,
+                        outline=BAND_EDGE, width=edge)
+
+    # Draw glyph by glyph: PIL has no letter-spacing, and the tracking is what
+    # keeps a wide short line from reading as a dense block at card size.
+    x = (W - tw) / 2
+    y = (y0 + y1) / 2 - (top + bottom) / 2
+    for c in RUO_TEXT:
+        d.text((x, y), c, font=font, fill=BAND_TEXT)
+        x += d.textlength(c, font=font) + track
+
+    return cv2.cvtColor(np.array(im), cv2.COLOR_RGBA2BGRA)
 
 
 def plate(img):
@@ -129,11 +217,14 @@ def publish(pid):
     if img is None:
         raise SystemExit(f"missing master: assets/vials/_base/{pid}.png")
     a = matte(img)
-    rect = fit_window(a)
+    x, y, w, h = fit_window(a, FILL_H, FILL_W)
+    # fit_window centres the bottle; slide the crop down so it sits high enough
+    # for the research-use-only band to have the strip underneath to itself.
+    rect = (x, y + int(round((0.5 - BOTTLE_CENTER) * h)), w, h)
     rgba = np.dstack([img, (a * 255).round().astype(np.uint8)])
     full = take(rgba, rect)
-    cut = cv2.resize(full, (OW, OH), interpolation=cv2.INTER_AREA)
-    small = cv2.resize(full, (SW, SH), interpolation=cv2.INTER_AREA)
+    cut = stamp(cv2.resize(full, (OW, OH), interpolation=cv2.INTER_AREA))
+    small = stamp(cv2.resize(full, (SW, SH), interpolation=cv2.INTER_AREA))
     # Premultiplied edges would fringe against the dark card, so keep the colour
     # straight and let the encoder carry alpha beside it. Quality 90: the label's
     # fine type and the glass gradients are what this artwork is for, and WebP

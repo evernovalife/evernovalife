@@ -310,7 +310,7 @@ function createVialSVG(product) {
    full-frame masters stay in assets/vials/_base/; publish.py there mattes and
    crops them. VIAL_V busts Cloudflare when the artwork is replaced — bump it
    whenever the files change, since the filenames never do. */
-const VIAL_V = 9;
+const VIAL_V = 10;
 function vialPhotoSrc(id) {
   return `assets/vials/${id}.webp?v=${VIAL_V}`;
 }
@@ -384,9 +384,11 @@ function createVialPhoto(product, opts) {
       <line x1="40" y1="288" x2="160" y2="288" stroke="#c4b1e0" stroke-width="1"/>
       <text x="100" y="306" font-family="Arial, sans-serif" font-weight="600" font-size="10" fill="#1a1a1a" text-anchor="middle">LOT ${escapeHtml(product.lot || '')}</text>
       <line x1="40" y1="318" x2="160" y2="318" stroke="#c4b1e0" stroke-width="1"/>
-      <text x="100" y="341" font-family="Arial, sans-serif" font-weight="600" font-size="9.5" letter-spacing="0.3" fill="#1f2937" text-anchor="middle">For Research Use Only</text>
+      <rect x="18" y="326" width="164" height="28" rx="14" fill="#07040f" stroke="#d4af37" stroke-width="1.4"/>
+      <text x="100" y="345" font-family="Arial, sans-serif" font-weight="700" font-size="11.5" letter-spacing="0.55" fill="#f7f0d6" text-anchor="middle">FOR RESEARCH USE ONLY</text>
       <rect x="0" y="0" width="200" height="380" rx="10" fill="url(#shade_${uid})"/>
     </svg>
+    ${product.image ? '<span class="vial-ruo">For research use only</span>' : ''}
   </div>`;
 }
 

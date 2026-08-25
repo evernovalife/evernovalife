@@ -679,6 +679,20 @@ h1, h2, h3, h4 { line-height: 1.2; font-weight: 700; letter-spacing: -0.02em; }
   position: static; left: auto; top: auto; width: 100%; height: 100%;
 }
 .vial-photo-label { position: absolute; left: 9%; top: 31%; width: 82%; height: 62%; pointer-events: none; }
+/* Research-use-only stamp for a product whose photo was uploaded through the
+   admin manager. The built-in vial stills carry this band burned in by
+   publish.py; an uploaded photo can't, so the frame draws it instead and every
+   product photo on the site states the same thing. */
+.vial-ruo {
+  position: absolute; left: 4.5%; right: 4.5%; bottom: 1.2%;
+  display: block; padding: 0.34em 0.6em;
+  border: 1px solid var(--gold); border-radius: 999px;
+  background: rgba(7,4,15,0.96);
+  color: #f7f0d6; text-transform: uppercase; text-align: center;
+  font-size: clamp(5px, 5.9cqw, 13px); font-weight: 700; letter-spacing: 0.04em;
+  line-height: 1.1; white-space: nowrap; pointer-events: none;
+}
+.vial-photo:has(.vial-ruo) { container-type: inline-size; }
 .product-media .vial-photo { height: 330px; transition: transform 0.4s var(--ease); }
 .product-card:hover .product-media .vial-photo { transform: translateY(-6px) scale(1.03); }
 .product-badge {
