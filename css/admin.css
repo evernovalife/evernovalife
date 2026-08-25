@@ -54,6 +54,10 @@ body.adm {
   -webkit-backdrop-filter: blur(14px);
   border-right: 1px solid var(--adm-line);
   z-index: 40;
+  /* The rail is exactly the viewport tall. Once the section list outgrew it
+     the last items fell off the bottom with no way to reach them, so the
+     rail clips and the nav inside it takes the scrolling. */
+  overflow: hidden;
 }
 
 .adm-brand {
@@ -63,15 +67,25 @@ body.adm {
   padding: 0.35rem 0.55rem 1rem;
   color: #fff;
   text-decoration: none;
+  flex: none;
 }
 .adm-brand svg { width: 26px; height: 26px; flex: none; }
 .adm-brand b { font-size: 0.92rem; font-weight: 700; letter-spacing: 0.02em; display: block; line-height: 1.15; white-space: nowrap; }
 .adm-brand span { font-size: 0.68rem; letter-spacing: 0.18em; text-transform: uppercase; color: var(--gold); font-weight: 600; }
 
-.adm-nav { display: flex; flex-direction: column; gap: 0.15rem; }
+.adm-nav {
+  display: flex; flex-direction: column; gap: 0.15rem;
+  flex: 1 1 auto; min-height: 0;
+  overflow-y: auto; overscroll-behavior: contain;
+  scrollbar-width: thin; scrollbar-color: rgba(168, 85, 247, 0.35) transparent;
+}
+.adm-nav::-webkit-scrollbar { width: 6px; }
+.adm-nav::-webkit-scrollbar-thumb { background: rgba(168, 85, 247, 0.3); border-radius: 999px; }
+.adm-nav::-webkit-scrollbar-track { background: transparent; }
 .adm-nav-label {
   font-size: 0.64rem; letter-spacing: 0.16em; text-transform: uppercase;
   color: var(--dark-text-faint); font-weight: 700; padding: 0.9rem 0.6rem 0.35rem;
+  flex: none;
 }
 .adm-nav a {
   display: flex; align-items: center; gap: 0.65rem;
@@ -102,7 +116,11 @@ body.adm {
 }
 .adm-nav .tally:empty { display: none; }
 
-.adm-side-foot { margin-top: auto; padding: 0 0.35rem; font-size: 0.72rem; color: var(--dark-text-faint); }
+.adm-side-foot {
+  flex: none; margin-top: auto; padding: 0.75rem 0.35rem 0;
+  font-size: 0.72rem; color: var(--dark-text-faint);
+  border-top: 1px solid var(--adm-line);
+}
 .adm-side-foot a { color: var(--dark-text-muted); }
 
 .adm-main { flex: 1; min-width: 0; margin-left: var(--adm-rail); }
@@ -406,6 +424,24 @@ body.adm {
 /* ---------- views ---------- */
 .adm-view[hidden] { display: none; }
 
+/* A laptop window shorter than this can't show fourteen sections at full
+   size. Tightening the rail buys back roughly 130px, which is the difference
+   between the whole list fitting and the user having to zoom out. */
+@media (max-height: 820px) and (min-width: 1025px) {
+  .adm-side { padding: 0.7rem 0.7rem 0.9rem; }
+  .adm-brand { padding: 0.2rem 0.5rem 0.6rem; }
+  .adm-brand svg { width: 22px; height: 22px; }
+  .adm-nav-label { padding: 0.4rem 0.6rem 0.25rem; }
+  .adm-nav a { padding: 0.42rem 0.6rem; font-size: 0.84rem; }
+  .adm-side-foot { padding-top: 0.55rem; }
+}
+
+@media (max-height: 700px) and (min-width: 1025px) {
+  .adm-brand span { display: none; }
+  .adm-nav a { padding: 0.34rem 0.6rem; font-size: 0.82rem; }
+  .adm-nav a svg { width: 15px; height: 15px; }
+}
+
 /* ---------- responsive ----------
    Under 1024 the rail becomes a scrolling strip above the content. It keeps
    the same markup and the same active state — only the axis changes. */
@@ -420,7 +456,7 @@ body.adm {
   }
   .adm-brand { padding: 0 0.5rem 0 0.25rem; }
   .adm-brand span { display: none; }
-  .adm-nav { flex-direction: row; gap: 0.25rem; }
+  .adm-nav { flex-direction: row; gap: 0.25rem; flex: none; overflow: visible; min-height: 0; }
   .adm-nav-label, .adm-side-foot { display: none; }
   .adm-nav a { white-space: nowrap; padding: 0.45rem 0.7rem; }
   .adm-main { margin-left: 0; }
