@@ -310,7 +310,7 @@ function createVialSVG(product) {
    full-frame masters stay in assets/vials/_base/; publish.py there mattes and
    crops them. VIAL_V busts Cloudflare when the artwork is replaced — bump it
    whenever the files change, since the filenames never do. */
-const VIAL_V = 10;
+const VIAL_V = 11;
 function vialPhotoSrc(id) {
   return `assets/vials/${id}.webp?v=${VIAL_V}`;
 }
@@ -1321,6 +1321,11 @@ async function revealCoaDocument(root, coa) {
       } else {
         view.querySelector('.detail-coa-img').src = url;
         thumb.querySelector('img').src = url;
+        /* Drop the attribute, not just the class: Chrome's UA sheet carries
+           `[hidden] { display: none !important }`, which outranks the author
+           `.detail-view.is-active { display: flex }` the thumbnails toggle —
+           so leaving it on made clicking the certificate show nothing. */
+        view.hidden = false;
       }
     }
     return;

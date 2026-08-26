@@ -46,22 +46,27 @@ LO, HI = 6.0, 26.0
 # below it. It is drawn here rather than in CSS on purpose: the requirement is
 # about the photo, and the photo travels (cart rows, order emails, screenshots
 # a reviewer takes) without the page's markup.
-RUO_TEXT = "FOR RESEARCH USE ONLY"
-BAND_BOT = 0.980                       # the pill's baseline, as a fraction of H
-BAND_INSET = 0.045                     # fraction of the canvas width, each side
+# Set over two lines, not one: the canvas is narrow (630x1380), so a single
+# 21-character line can only be about half the size the shorter lines reach —
+# and half the size is what the bank objected to in the first place.
+RUO_LINES = ["FOR RESEARCH", "USE ONLY"]
+BAND_BOT = 0.985                       # the pill's baseline, as a fraction of H
+BAND_INSET = 0.035                     # fraction of the canvas width, each side
 BAND_FILL = (7, 4, 15, 246)            # RGBA — the site's --dark-bg, near-solid
 BAND_EDGE = (212, 175, 55, 255)        # the brand gold
 BAND_TEXT = (247, 240, 214, 255)       # warm off-white; gold-on-black type at
                                        # this size reads muddy once WebP is done
-TRACK = 0.09                           # letter-spacing, in ems
-# The line is set as large as the canvas width allows and the pill is then sized
+TRACK = 0.07                           # letter-spacing, in ems
+# The type is set as large as the canvas width allows and the pill is then sized
 # to it, rather than the other way round — a fixed band would leave the type
 # floating in it, which is exactly the complaint this band answers.
-BAND_PAD_X, BAND_PAD_Y = 0.055, 0.62   # padding around the type, in ems
+BAND_PAD_X, BAND_PAD_Y = 0.85, 0.40    # padding around the type, in ems
+BAND_LEADING = 1.14                    # line height, in ems
+BAND_RADIUS = 0.55                     # corner radius, in ems
 # Bottle framing. Smaller than a full-bleed crop so the band has its own strip
 # and never sits over glass; the bottle is pushed up by the same amount.
-FILL_H, FILL_W = 0.85, 0.90
-BOTTLE_CENTER = 0.455                  # where the bbox centre lands vertically
+FILL_H, FILL_W = 0.78, 0.88
+BOTTLE_CENTER = 0.415                  # where the bbox centre lands vertically
 
 FONT_CANDIDATES = [
     "arialbd.ttf", "Arial Bold.ttf", "DejaVuSans-Bold.ttf",
@@ -94,36 +99,44 @@ def stamp(bgra):
     im = Image.fromarray(cv2.cvtColor(bgra, cv2.COLOR_BGRA2RGBA))
     d = ImageDraw.Draw(im)
 
-    # Largest size whose tracked line still fits between the insets, padding
-    # and rounded ends included.
+    # Largest size whose widest line still fits between the insets, padding
+    # included.
     budget = W * (1 - 2 * BAND_INSET)
-    size = max(9, int(H * 0.09))
+    size = max(9, int(H * 0.12))
     while size > 9:
         font = _font(size)
-        if (_tracked(d, font, RUO_TEXT, size * TRACK)
-                + size * (2 * BAND_PAD_X + BAND_PAD_Y)) <= budget:
+        widest = max(_tracked(d, font, ln, size * TRACK) for ln in RUO_LINES)
+        if widest + 2 * size * BAND_PAD_X <= budget:
             break
         size -= 1
     font, track = _font(size), size * TRACK
-    tw = _tracked(d, font, RUO_TEXT, track)
+    widths = [_tracked(d, font, ln, track) for ln in RUO_LINES]
 
-    top, bottom = d.textbbox((0, 0), RUO_TEXT, font=font)[1::2]
-    bh = (bottom - top) + 2 * size * BAND_PAD_Y
-    bw = tw + 2 * size * BAND_PAD_X + bh
+    # Cap height of the type, measured off the glyphs actually being set, so the
+    # block is optically centred rather than centred on the font's line box.
+    boxes = [d.textbbox((0, 0), ln, font=font) for ln in RUO_LINES]
+    top, bottom = min(b[1] for b in boxes), max(b[3] for b in boxes)
+    leading = size * BAND_LEADING
+    block = (bottom - top) + leading * (len(RUO_LINES) - 1)
+
+    bh = block + 2 * size * BAND_PAD_Y
+    bw = max(widths) + 2 * size * BAND_PAD_X
     x0, x1 = (W - bw) / 2, (W + bw) / 2
     y1 = H * BAND_BOT
     y0 = y1 - bh
-    edge = max(2, int(round(size * 0.075)))
-    d.rounded_rectangle([x0, y0, x1, y1], radius=bh / 2, fill=BAND_FILL,
-                        outline=BAND_EDGE, width=edge)
+    edge = max(2, int(round(size * 0.06)))
+    d.rounded_rectangle([x0, y0, x1, y1], radius=size * BAND_RADIUS,
+                        fill=BAND_FILL, outline=BAND_EDGE, width=edge)
 
     # Draw glyph by glyph: PIL has no letter-spacing, and the tracking is what
-    # keeps a wide short line from reading as a dense block at card size.
-    x = (W - tw) / 2
-    y = (y0 + y1) / 2 - (top + bottom) / 2
-    for c in RUO_TEXT:
-        d.text((x, y), c, font=font, fill=BAND_TEXT)
-        x += d.textlength(c, font=font) + track
+    # keeps short shouted lines from reading as dense blocks at card size.
+    y = (y0 + y1) / 2 - block / 2 - top
+    for ln, tw in zip(RUO_LINES, widths):
+        x = (W - tw) / 2
+        for c in ln:
+            d.text((x, y), c, font=font, fill=BAND_TEXT)
+            x += d.textlength(c, font=font) + track
+        y += leading
 
     return cv2.cvtColor(np.array(im), cv2.COLOR_RGBA2BGRA)
 

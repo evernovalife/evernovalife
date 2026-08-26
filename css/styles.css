@@ -1956,12 +1956,13 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
   transition:width .35s var(--ease), opacity .35s var(--ease), filter .35s var(--ease);
 }
 
-/* --- The HERO: above glow & shadow, gentle float, dual depth shadow, webkit mirror reflection --- */
+/* --- The HERO: above glow & shadow, gentle float, dual depth shadow --- */
+/* No mirror reflection: the still now ends in the research-use-only band, and
+   a reflection of it renders the line again upside down under the bottle. */
 .product-media .vial-photo{
   position:relative; z-index:2;
   animation:pn-float 6s ease-in-out infinite;
   will-change:transform;
-  -webkit-box-reflect:below 4px linear-gradient(transparent 62%, rgba(0,0,0,0.16));
 }
 .product-media .vial-photo .vial-photo-img{
   filter:drop-shadow(0 16px 22px rgba(0,0,0,0.48));
@@ -2049,12 +2050,12 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
   will-change:transform, opacity;
   transition:width .3s var(--ease), opacity .3s var(--ease), filter .3s var(--ease);
 }
-/* (4) HERO wrapper — float + reflection (unchanged) */
+/* (4) HERO wrapper — float only; see the note on .product-media .vial-photo
+   for why the mirror reflection had to go. */
 .product-detail-media .vial-photo{
   position:relative; z-index:2;
   animation:pn-float 7s ease-in-out infinite;
   will-change:transform;
-  -webkit-box-reflect:below 6px linear-gradient(transparent 60%, rgba(0,0,0,0.18));
 }
 /* (5) SILHOUETTE RIM-GLOW on the inner img (depth kept + indigo rim + warm-white key) */
 .product-detail-media .vial-photo .vial-photo-img{
