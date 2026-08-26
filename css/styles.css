@@ -983,6 +983,11 @@ h1, h2, h3, h4 { line-height: 1.2; font-weight: 700; letter-spacing: -0.02em; }
   padding: 0; border: 0; background: none; cursor: zoom-in; width: 100%;
 }
 .detail-coa-img { width: 100%; height: auto; display: block; background: #fff; border-radius: var(--radius); }
+/* The pedestal glow and contact shadow are lit for a bottle standing on a dark
+   floor. Over a white certificate they read as a smudge across the page, so
+   they go dark while the report is the active view. */
+.product-detail-media:has(.detail-view-coa.is-active)::before,
+.product-detail-media:has(.detail-view-coa.is-active)::after { display: none; }
 .detail-view-coa .coa-doc-hint { opacity: 0; }
 .detail-view-coa:hover .coa-doc-hint,
 .detail-view-coa:focus-visible .coa-doc-hint { opacity: 1; }
@@ -1060,7 +1065,11 @@ body.coa-lightbox-open { overflow: hidden; }
 @keyframes coa-lb-in { from { opacity: 0; } to { opacity: 1; } }
 .coa-lightbox-scroll {
   max-width: 100%; max-height: 100%;
-  display: flex; align-items: center; justify-content: center;
+  display: flex;
+  /* `safe` matters: a centred flex item bigger than its scroll box overflows
+     past the start edge, where no scroll position can reach it. Safe centring
+     falls back to start alignment exactly when that would happen. */
+  align-items: safe center; justify-content: safe center;
   overflow: auto; border-radius: 10px;
   scrollbar-width: thin;
 }

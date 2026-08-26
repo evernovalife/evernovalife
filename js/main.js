@@ -1445,17 +1445,21 @@ function openCoaLightbox(src, alt) {
   };
   const onKey = (e) => { if (e.key === 'Escape') close(); };
 
-  // zoom toggles between fit-to-screen and natural size, keeping the clicked
-  // point under the cursor so you land on the row you were aiming at
+  // zoom toggles between fit-to-screen and natural size. A certificate is read
+  // from its masthead down, so zooming in goes to the top of the page and only
+  // the horizontal position follows the click — landing mid-document hid the
+  // lab, the client and the lot number above the fold.
   img.addEventListener('click', (e) => {
     e.stopPropagation();
-    const zoomed = box.classList.toggle('is-zoomed');
-    if (!zoomed) return;
     const r = img.getBoundingClientRect();
-    const fx = (e.clientX - r.left) / r.width;
-    const fy = (e.clientY - r.top) / r.height;
-    scroll.scrollLeft = fx * scroll.scrollWidth - scroll.clientWidth / 2;
-    scroll.scrollTop  = fy * scroll.scrollHeight - scroll.clientHeight / 2;
+    const fx = r.width ? (e.clientX - r.left) / r.width : 0.5;
+    const zoomed = box.classList.toggle('is-zoomed');
+    if (!zoomed) { scroll.scrollTop = 0; scroll.scrollLeft = 0; return; }
+    /* Measure off naturalWidth, not scrollWidth: the class flip has already
+       happened but the fitted metrics are what a synchronous read returns, and
+       anchoring on those put the view nowhere near the click. */
+    scroll.scrollTop = 0;
+    scroll.scrollLeft = fx * img.naturalWidth - scroll.clientWidth / 2;
   });
 
   box.addEventListener('click', close);                       // backdrop
