@@ -7,9 +7,9 @@
    system prompt:
 
      1. uploads the policy pages from §4 to the knowledge base
-     2. creates the two webhook tools from §5
+     2. creates the three webhook tools from §5
      3. creates a text-only agent carrying the §3 prompt,
-        wired to both
+        wired to all three
 
    The prompt and the page list are READ OUT OF docs/AI-CHAT.md,
    never duplicated here. That document is the reviewed one; a
@@ -128,7 +128,7 @@ async function call(method, endpoint, body) {
   return data;
 }
 
-/* ---- the two tools from §5 ----
+/* ---- the three tools from §5 ----
    Kept here rather than parsed out of the doc: unlike the prompt, these
    are machine shapes, and a table in Markdown is a poor source of truth
    for a JSON schema. The doc describes them for a human; this is what is
@@ -196,6 +196,32 @@ function toolConfigs() {
             }
           },
           required: ['email', 'subject', 'body']
+        }
+      }
+    },
+    {
+      type: 'webhook',
+      name: 'get_my_account',
+      description:
+        'Read the account of the person you are talking to: their recent orders and delivery status, ' +
+        'their points balance, their auto-ship plans and their cart. Call this for ANY question about ' +
+        'their own order, delivery, points, plans or cart — but only when {{signed_in}} is "true". ' +
+        'Never ask a signed-in person for an order reference; this tool already knows who they are. ' +
+        'It is read-only: it cannot cancel, pause, redeem or change anything.',
+      response_timeout_secs: 10,
+      api_schema: {
+        url: `${API_BASE}/api/agent/account`,
+        method: 'POST',
+        /* Two headers, two questions. The shared secret says the call came
+           from our agent; the account token says which visitor it is for.
+           The token is templated in by ElevenLabs, so the model never sees
+           it, cannot retype it wrongly, and cannot put it in the transcript.
+
+           There are deliberately NO parameters for the model to fill in:
+           nothing it can say points this tool at a different account. */
+        request_headers: {
+          ...headers,
+          'x-account-token': '{{account_token}}'
         }
       }
     }

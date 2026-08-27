@@ -267,9 +267,11 @@ function buildDelivery(shipping, stamp) {
 
   out += '\nWHERE WE SHIP\n-------------\nUnited States only. We do not ship internationally.\n';
   out += '\nTRACKING AN ORDER\n-----------------\n';
-  out += 'You cannot look up orders. Send the customer to the order-status page on\n';
-  out += 'the site, where they enter their order reference and the email address\n';
-  out += 'they used. If they cannot find the reference, escalate to a person.\n';
+  out += 'A signed-in customer\'s order can be read with the get_my_account tool —\n';
+  out += 'use it rather than asking them for a reference they should not need.\n';
+  out += 'Anyone not signed in goes to the order-status page on the site, where they\n';
+  out += 'enter their order reference and the email address they used. If they cannot\n';
+  out += 'find the reference, escalate to a person.\n';
   return out;
 }
 
