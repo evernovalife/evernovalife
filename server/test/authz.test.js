@@ -299,3 +299,105 @@ test('the minted agent token cannot be spent as a session token', async () => {
   const cart = await api('/api/cart', { token: agentToken });
   assert.strictEqual(cart.status, 401);
 });
+
+test('the account endpoint needs BOTH the shared secret and a valid account token', async () => {
+  const { agentToken } = await signedInWithAgentToken('agent-both@example.com');
+
+  // Right token, no shared secret.
+  const noSecret = await agentApi('/api/agent/account', { secret: null, accountToken: agentToken });
+  assert.strictEqual(noSecret.status, 401);
+
+  // Right token, wrong shared secret.
+  const wrongSecret = await agentApi('/api/agent/account', { secret: 'wrong-secret', accountToken: agentToken });
+  assert.strictEqual(wrongSecret.status, 401);
+
+  // Right shared secret, no account token.
+  const noToken = await agentApi('/api/agent/account', {});
+  assert.strictEqual(noToken.status, 401);
+
+  // Right shared secret, a session token where an account token belongs.
+  const { sessionToken } = await signedInWithAgentToken('agent-session-swap@example.com');
+  const swapped = await agentApi('/api/agent/account', { accountToken: sessionToken });
+  assert.strictEqual(swapped.status, 401);
+
+  // Both correct.
+  const ok = await agentApi('/api/agent/account', { accountToken: agentToken });
+  assert.strictEqual(ok.status, 200);
+  assert.strictEqual(ok.body.customer.firstName, 'Sam');
+  assert.ok(Array.isArray(ok.body.orders));
+});
+
+test('one customer\'s agent token never returns another customer\'s orders', async () => {
+  const alice = await signedInWithAgentToken('agent-alice@example.com', 'Alice');
+  const bob = await signedInWithAgentToken('agent-bob@example.com', 'Bob');
+
+  const asAlice = await agentApi('/api/agent/account', { accountToken: alice.agentToken });
+  assert.strictEqual(asAlice.status, 200);
+  assert.strictEqual(asAlice.body.customer.firstName, 'Alice');
+
+  const asBob = await agentApi('/api/agent/account', { accountToken: bob.agentToken });
+  assert.strictEqual(asBob.body.customer.firstName, 'Bob');
+});
+
+test('nothing in the request body can steer which account is read', async () => {
+  const alice = await signedInWithAgentToken('agent-steer-a@example.com', 'Alice');
+  const bob = await signedInWithAgentToken('agent-steer-b@example.com', 'Bob');
+
+  // Bob's token, Alice's identifiers in the body. The token wins, every time.
+  const res = await agentApi('/api/agent/account', {
+    accountToken: bob.agentToken,
+    body: { userId: 'anything', email: 'agent-steer-a@example.com', orderId: 'ENL-AAAAAAAA' }
+  });
+  assert.strictEqual(res.status, 200);
+  assert.strictEqual(res.body.customer.firstName, 'Bob');
+});
+
+test('an expired account token is refused with a sentence the agent can read out', async () => {
+  const jwtLib = require('jsonwebtoken');
+  const stale = jwtLib.sign({ sub: 'u_nobody', scope: 'agent-read' }, process.env.JWT_SECRET, { expiresIn: '-1s' });
+  const res = await agentApi('/api/agent/account', { accountToken: stale });
+  assert.strictEqual(res.status, 401);
+  assert.match(res.body.error, /sign in again/i);
+});
+
+test('at most the ten most recent orders come back, newest first', async () => {
+  const reg = await register('agent-cap@example.com');
+  const userId = reg.body.user.id;
+  const mint = await api('/api/agent/account-token', { method: 'POST', token: reg.body.token });
+
+  /* Seeded through the store directly rather than through checkout: a real
+     order needs a live payment provider, and what is under test here is the
+     cap and the ordering, not how an order comes into being. Same process,
+     same DATA_DIR, so this is the store the app is reading. */
+  const store = require('../store.js');
+  for (let n = 1; n <= 12; n++) {
+    store.addOrder(userId, {
+      orderId: 'ENL-CAP' + String(n).padStart(5, '0'),
+      createdAt: '2026-08-' + String(n).padStart(2, '0') + 'T00:00:00.000Z',
+      status: 'paid',
+      method: 'crypto',
+      items: [{ id: 1, name: 'Test item', unitPrice: 10, quantity: 1, lineTotal: 10 }],
+      total: 10,
+      email: 'agent-cap@example.com',
+      shippingAddress: null
+    });
+  }
+
+  const res = await agentApi('/api/agent/account', { accountToken: mint.body.token });
+  assert.strictEqual(res.status, 200);
+  assert.strictEqual(res.body.orders.length, 10);
+  assert.strictEqual(res.body.orders[0].orderId, 'ENL-CAP00012');
+  assert.strictEqual(res.body.orders[9].orderId, 'ENL-CAP00003');
+});
+
+test('no street address appears anywhere in the account response', async () => {
+  const { agentToken } = await signedInWithAgentToken('agent-address@example.com');
+  const res = await agentApi('/api/agent/account', { accountToken: agentToken });
+  assert.strictEqual(res.status, 200);
+  /* Scanning the whole serialized response rather than named fields, so that a
+     later change which starts returning the address somewhere new fails here
+     instead of passing. */
+  const text = JSON.stringify(res.body);
+  assert.ok(!/"(address1|address2|street|line1|line2)"/i.test(text),
+    'the response must not carry a street address in any field');
+});

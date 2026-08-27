@@ -2512,14 +2512,16 @@ app.post('/api/admin/agent/knowledge/sync', requireAdmin, async (req, res) => {
 });
 
 /* ============================================================
-   THE CHAT AGENT'S THREE DOORS
+   THE CHAT AGENT'S DOORS
    Everything the ElevenLabs agent can reach is here, and the
-   list is short on purpose. It can read the catalog, it can
-   hand a conversation to a human, and it can post back a
-   finished transcript. It cannot read an order, an account, or
-   anything with a name and address attached — handing an LLM a
-   lookup keyed on customer records is the shortest path to
-   disclosing one to whoever guessed a reference.
+   list is short on purpose. It can read the catalog, hand a
+   conversation to a human, and post back a finished transcript.
+   It can also read ONE customer's own account — but never by a
+   lookup keyed on a name, email or order reference someone typed
+   into the chat: the only key accepted is the scoped token minted
+   for that visitor's own signed-in browser (see mintAgentToken /
+   /api/agent/account below), so there is no reference to guess
+   your way into somebody else's order.
    ============================================================ */
 const AGENT_SECRET = process.env.ELEVENLABS_AGENT_SECRET || '';
 const AGENT_WEBHOOK_SECRET = process.env.ELEVENLABS_WEBHOOK_SECRET || '';
@@ -2602,6 +2604,83 @@ app.post('/api/agent/account-token', agentTokenMintLimiter, auth.requireAuth, (r
        and a greeting taken from here cannot disagree with a stale cache. */
     firstName: req.user.firstName || ''
   });
+});
+
+/* Everything returned to the agent can end up spoken aloud, written to
+   agent-transcripts/ on this disk, and stored in the vendor's conversation
+   log. Ten orders answers every real support question; an unbounded history
+   is just a bigger thing to leak. */
+const AGENT_MAX_ORDERS = 10;
+
+/* City and state, never the street line. "Where is my package" is fully
+   answerable from the carrier, the tracking number and the destination city,
+   and the street line is the highest-harm field in that transcript. */
+function agentPlace(address) {
+  const a = address || {};
+  return {
+    city: String(a.city || ''),
+    state: String(a.state || ''),
+    country: String(a.country || 'US')
+  };
+}
+
+/* paidSoFar/amountDue/canPayBalance rather than a second opinion about the
+   same numbers: the short-paid order is this shop's most common real support
+   case, and the agent must offer the SAME pay-the-balance link the email
+   offers, never a second invoice for goods already partly paid for. */
+function agentOrderView(o) {
+  return {
+    orderId: o.orderId,
+    createdAt: o.createdAt,
+    status: o.status,
+    method: o.method || '',
+    items: (o.items || []).map(i => ({ name: i.name, quantity: i.quantity })),
+    total: round2(o.total),
+    paid: paidSoFar(o),
+    due: amountDue(o),
+    shippingLabel: o.shippingLabel || '',
+    carrier: o.carrier || '',
+    tracking: o.tracking || '',
+    shippedAt: o.shippedAt || '',
+    ...agentPlace(o.shippingAddress),
+    payUrl: canPayBalance(o) ? payLinkFor(o.orderId) : ''
+  };
+}
+
+function buildAccountSnapshot(user) {
+  const orders = store.listOrders(user.id)
+    .slice()
+    .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+    .slice(0, AGENT_MAX_ORDERS)
+    .map(agentOrderView);
+
+  return {
+    customer: { firstName: user.firstName || '' },
+    orders
+  };
+}
+
+/* ---- the visitor's own account, read-only ----
+   TWO credentials answering two different questions: the shared secret says
+   "this is our agent", and the account token says "and this is who it is
+   talking to". Neither is sufficient alone.
+
+   The account is chosen by the token's subject and by nothing else. No id,
+   email or order reference is read from the body — a chat agent asking for
+   an account by name is exactly the hole this design exists to avoid. */
+app.post('/api/agent/account', requireAgent, agentLimiter, (req, res) => {
+  const payload = auth.verifyAgentToken(req.get('x-account-token') || '');
+  if (!payload) {
+    // Read out loud by the agent, so it has to be a sentence.
+    return res.status(401).json({
+      error: 'That session has expired. Ask them to sign in again on the site, then start a new chat.'
+    });
+  }
+
+  const user = auth.getUserById(payload.sub);
+  if (!user) return res.status(401).json({ error: 'That account no longer exists.' });
+
+  res.json({ success: true, ...buildAccountSnapshot(user) });
 });
 
 /* What the agent may say about a product: the name, what it costs, and
