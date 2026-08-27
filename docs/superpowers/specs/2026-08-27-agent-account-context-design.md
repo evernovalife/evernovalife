@@ -98,10 +98,16 @@ Two functions in `server/auth.js`, next to the existing `refToken` helpers:
 - `verifyAgentToken(token)` — verifies, then **requires `scope === 'agent-read'`**, and
   returns the payload or null
 
-The scope check is the point. Session tokens carry no `scope`, so a session token
-presented as an account token is rejected, and an account token presented to
-`requireAuth` is rejected in turn by that route's own verification. The two credentials
-cannot be substituted for each other in either direction.
+The scope check is the point, and it has to run in **both** directions. Session tokens
+carry no `scope`, so `verifyAgentToken` rejects one on sight. The reverse is not free:
+an account token is a valid JWT signed with the same secret and carrying a `sub`, so
+today's `verifyToken` would happily accept it and `requireAuth` would let it through
+every account route on the server — which would make the credential we hand to a vendor
+strictly more powerful than the one it replaced.
+
+So `verifyToken` gains one line: a payload carrying any `scope` is not a session token,
+and is refused. Both directions are then closed, and any future scoped token gets the
+same protection without anyone having to remember it.
 
 It reuses the existing JWT secret rather than introducing another one. A second secret
 would be a second thing to configure, a second thing to rotate, and a second thing to
@@ -123,7 +129,7 @@ Behind `auth.requireAuth`, plus its own rate-limit bucket. Signed-in browsers on
 agent never calls this.
 
     -> (no body)
-    <- 200 { "success": true, "token": "<jwt>", "ttl": 1800 }
+    <- 200 { "success": true, "token": "<jwt>", "ttl": 1800, "firstName": "Sam" }
     <- 401 if not signed in
 
 ### `POST /api/agent/account`
@@ -180,9 +186,14 @@ Details that matter:
   second one it invented.
 - **The cart is priced by the same pricing module checkout uses**, so the agent cannot
   quote a total that checkout will then disagree with.
-- **Subscriptions go through `subscriptions.publicSubscription()`**, the serializer that
-  already exists for exactly this purpose, rather than a second hand-written view that
-  would drift from it.
+- **Subscriptions go through `subscriptions.publicSubscription()` and are then
+  redacted.** That serializer is the right starting point — it already exists for exactly
+  this purpose, and a second hand-written view would drift from it — but it returns
+  `shippingAddress` and `email` in full, which the address rule below forbids. Both are
+  stripped and the address is reduced to city, state, and country, the same reduction the
+  orders list gets. The redaction picks the wanted keys rather than deleting the unwanted
+  ones: a field added to `publicSubscription` later must then be added here deliberately,
+  instead of appearing in a vendor transcript because nobody remembered this file.
 
 ## What is deliberately not returned
 
@@ -209,10 +220,16 @@ mounting: if `localStorage.enl_token` is present, call the mint endpoint, then s
 
 and if it is absent, set `{"signed_in":"false"}` and mount precisely as today.
 
-`first_name` comes from the `firstName` field of the `enl_user` object the browser
-already caches beside the session token, so the greeting costs no extra request. It is
-sent empty when that cache is missing or unparseable, and the prompt must treat an empty
+`first_name` is returned by the mint endpoint alongside the token, rather than read from
+the `enl_user` object cached in the browser. The request is already being made, the
+server already has the user record in hand, and taking it from the response keeps the
+greeting from disagreeing with a stale cache. The prompt must treat an empty
 `first_name` as "greet without a name" rather than saying the word "undefined" out loud.
+
+The minted token is cached in `sessionStorage` and reused while it has more than five
+minutes left. Without this, every page load in a browsing session mints a new token —
+which is wasteful, needlessly widens the number of live credentials, and would make a
+sanely-sized rate limit on the mint endpoint fire during ordinary shopping.
 
 The mint call must never be able to cost us the chat bubble. A failure, a timeout, a
 401 from an expired session — every one of them falls through to the signed-out
@@ -232,8 +249,17 @@ through the API. A third joins `lookup_product` and `escalate`:
   parameters at all: there is nothing for the model to fill in, which is what makes the
   tool impossible to point at another account.
 
-The prompt in `server/agent-knowledge.js` loses the "You cannot look up orders" paragraph
-and gains a branch on `{{signed_in}}`:
+The refusal lives in two places, and both have to change or the agent will contradict
+itself:
+
+- **`docs/AI-CHAT.md` §3** holds the system prompt itself. `setup-elevenlabs-agent.js`
+  parses it out of the fenced block in that section — the doc is the source of truth, not
+  a description of it. Its ORDERS paragraph ("You cannot look up orders, accounts, or
+  addresses") is what actually produced the refusal in the screenshot.
+- **`server/agent-knowledge.js`** builds the *Delivery and shipping* knowledge document,
+  whose TRACKING AN ORDER section repeats the same instruction to the retrieval layer.
+
+Both lose the refusal and gain a branch on `{{signed_in}}`:
 
 - signed in — call `get_my_account` for any question about their orders, points,
   auto-ship, or cart; greet by `{{first_name}}`; never ask for an order reference from
@@ -282,14 +308,16 @@ starts returning the full address somewhere new fails the test rather than passi
 
 ## Files touched
 
-- `server/auth.js` — `mintAgentToken`, `verifyAgentToken`, both exported
+- `server/auth.js` — `mintAgentToken` and `verifyAgentToken`, both exported, plus the
+  one-line hardening of `verifyToken` that refuses any scoped token
 - `server/server.js` — the two endpoints, alongside the existing agent routes
-- `server/agent-knowledge.js` — the prompt, `{{signed_in}}` branching
+- `server/agent-knowledge.js` — the Delivery document's TRACKING AN ORDER section
+- `docs/AI-CHAT.md` — §3 the system prompt (the live source the setup script parses),
+  and §5 the tool definitions
 - `tools/setup-elevenlabs-agent.js` — the `get_my_account` tool definition
 - `js/chat.js` — mint on mount, set `dynamic-variables`
-- `js/config.js` and every HTML page — cache-buster bump for the changed JS
+- every HTML page — cache-buster bump for `chat.js`, currently `?v=87`
 - `server/test/authz.test.js` — the cases above
-- `docs/AI-CHAT.md` — the new tool and the token, documented where the others are
 
 ## Out of scope
 
