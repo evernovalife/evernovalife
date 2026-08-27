@@ -2647,6 +2647,49 @@ function agentOrderView(o) {
   };
 }
 
+/* publicSubscription() carries the full shipping address and the account
+   email. Pick the fields the agent needs rather than deleting the ones it
+   must not have: a field added to that serializer later then has to be added
+   here deliberately, instead of arriving in a vendor's transcript because
+   nobody remembered this file. */
+function agentSubscriptionView(s) {
+  const p = subscriptions.publicSubscription(s) || {};
+  return {
+    id: p.id,
+    status: p.status,
+    items: (p.items || []).map(i => ({ name: i.name, quantity: i.quantity })),
+    intervalDays: p.intervalDays,
+    nextRunAt: p.nextRunAt || '',
+    paymentLabel: p.paymentLabel || '',
+    ...agentPlace(p.shippingAddress)
+  };
+}
+
+/* Priced off the live catalogue, never off what the browser saved into the
+   cart — a price that has moved since would otherwise be quoted by the agent
+   and then contradicted by checkout.
+
+   buildOrder() is the obvious tool and the wrong one: it THROWS on a line
+   that is unpublished or out of stock, and a cart holding one pulled product
+   must still be describable. Unavailable lines come back flagged instead. */
+function agentCartView(userId) {
+  const items = store.getCart(userId).map(line => {
+    const product = productStore.getProduct(line.id);
+    const available = Boolean(product) &&
+      productStore.isPublished(product) &&
+      product.inStock !== false &&
+      productStore.isAvailable(product);
+    return {
+      name: (product && product.name) || line.name || '',
+      quantity: line.quantity,
+      unitPrice: product ? round2(product.price) : 0,
+      available
+    };
+  });
+  const subtotal = round2(items.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0));
+  return { items, subtotal };
+}
+
 function buildAccountSnapshot(user) {
   const orders = store.listOrders(user.id)
     .slice()
@@ -2654,9 +2697,14 @@ function buildAccountSnapshot(user) {
     .slice(0, AGENT_MAX_ORDERS)
     .map(agentOrderView);
 
+  const points = loyalty.getBalance(user.id);
+
   return {
     customer: { firstName: user.firstName || '' },
-    orders
+    orders,
+    loyalty: { points, worth: round2(loyalty.pointsToDollars(points)) },
+    subscriptions: subscriptions.listForUser(user.id).map(agentSubscriptionView),
+    cart: agentCartView(user.id)
   };
 }
 

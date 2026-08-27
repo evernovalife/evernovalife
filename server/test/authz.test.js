@@ -401,3 +401,58 @@ test('no street address appears anywhere in the account response', async () => {
   assert.ok(!/"(address1|address2|street|line1|line2)"/i.test(text),
     'the response must not carry a street address in any field');
 });
+
+test('the account response carries points, auto-ship and the cart', async () => {
+  const { sessionToken, agentToken } = await signedInWithAgentToken('agent-full@example.com');
+
+  // Put something in the cart through the ordinary route first.
+  const products = await api('/api/products');
+  const first = products.body.products[0];
+  await api('/api/cart', {
+    method: 'PUT', token: sessionToken,
+    body: { items: [{ id: first.id, name: first.name, price: first.price, quantity: 2 }] }
+  });
+
+  const res = await agentApi('/api/agent/account', { accountToken: agentToken });
+  assert.strictEqual(res.status, 200);
+
+  assert.strictEqual(typeof res.body.loyalty.points, 'number');
+  assert.strictEqual(typeof res.body.loyalty.worth, 'number');
+  assert.ok(Array.isArray(res.body.subscriptions));
+
+  assert.strictEqual(res.body.cart.items.length, 1);
+  assert.strictEqual(res.body.cart.items[0].quantity, 2);
+  // Priced off the live catalogue, not off whatever the browser saved.
+  assert.strictEqual(res.body.cart.items[0].unitPrice, first.price);
+  assert.strictEqual(res.body.cart.subtotal, Math.round(first.price * 2 * 100) / 100);
+});
+
+test('a cart line the browser mispriced is corrected from the catalogue', async () => {
+  const { sessionToken, agentToken } = await signedInWithAgentToken('agent-cart-price@example.com');
+  const products = await api('/api/products');
+  const first = products.body.products[0];
+
+  // A browser claiming this costs a dollar. The agent must not repeat that.
+  await api('/api/cart', {
+    method: 'PUT', token: sessionToken,
+    body: { items: [{ id: first.id, name: 'Something cheap', price: 1, quantity: 1 }] }
+  });
+
+  const res = await agentApi('/api/agent/account', { accountToken: agentToken });
+  assert.strictEqual(res.body.cart.items[0].unitPrice, first.price);
+  assert.strictEqual(res.body.cart.items[0].name, first.name);
+});
+
+test('a cart holding an unknown product still returns, flagged unavailable', async () => {
+  const { sessionToken, agentToken } = await signedInWithAgentToken('agent-cart-ghost@example.com');
+  await api('/api/cart', {
+    method: 'PUT', token: sessionToken,
+    body: { items: [{ id: 999999, name: 'Ghost', price: 10, quantity: 1 }] }
+  });
+
+  // buildOrder() would throw here. This endpoint must not.
+  const res = await agentApi('/api/agent/account', { accountToken: agentToken });
+  assert.strictEqual(res.status, 200);
+  assert.strictEqual(res.body.cart.items.length, 1);
+  assert.strictEqual(res.body.cart.items[0].available, false);
+});
