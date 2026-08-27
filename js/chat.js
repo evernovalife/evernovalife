@@ -41,6 +41,15 @@
   var TOKEN_KEY = 'enl_agent_token';
   var REMINT_MARGIN_MS = 5 * 60 * 1000;
 
+  /* Ceiling on how long a signed-in visitor waits for the mint before the
+     bubble degrades to signed-out and mounts anyway. A request the network
+     accepts but never answers (a hung upstream, a silently-dropped
+     connection) would otherwise leave identity()'s promise unsettled
+     forever, and mount() only proceeds once it settles — so this has to be
+     short: it is a delay on a bubble that would otherwise already be on
+     screen, not a generous allowance for a slow API. */
+  var MINT_TIMEOUT_MS = 4000;
+
   function cachedToken() {
     try {
       var raw = sessionStorage.getItem(TOKEN_KEY);
@@ -71,7 +80,7 @@
     }
 
     var base = (typeof window.PEPTIDE_API_BASE === 'string') ? window.PEPTIDE_API_BASE : '';
-    return fetch(base + '/api/agent/account-token', {
+    var mint = fetch(base + '/api/agent/account-token', {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + sessionToken }
     })
@@ -82,6 +91,8 @@
           sessionStorage.setItem(TOKEN_KEY, JSON.stringify({
             token: data.token,
             firstName: data.firstName || '',
+            // 1800 mirrors the server's AGENT_TOKEN_TTL_SECONDS; it only
+            // matters here if the response comes back without a usable ttl.
             expiresAt: Date.now() + (Number(data.ttl) || 1800) * 1000
           }));
         } catch (e) {}   // caching is an optimisation, not a requirement
@@ -92,6 +103,14 @@
         };
       })
       .catch(function () { return out; });
+
+    // Races the mint against a clock rather than trusting fetch to fail on
+    // its own — a hung connection never rejects, it just never resolves.
+    var timeout = new Promise(function (resolve) {
+      window.setTimeout(function () { resolve(out); }, MINT_TIMEOUT_MS);
+    });
+
+    return Promise.race([mint, timeout]);
   }
 
   function mount() {
