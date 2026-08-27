@@ -18,6 +18,7 @@
 
    Usage:
      node tools/setup-elevenlabs-agent.js --api-base <url> [--site <url>] [--dry-run]
+     node tools/setup-elevenlabs-agent.js --update <agent_id> --api-base <url>
 
      --api-base  where THIS project's server answers, e.g.
                  https://evernova-api.onrender.com — the agent's
@@ -25,7 +26,19 @@
                  host and it must already be serving /api/agent/*
      --site      the public site the knowledge-base pages are read
                  from (default https://evernovalife.com)
+     --update    push the §3 prompt and the §5 tools to an agent that
+                 ALREADY EXISTS, in place. Use this for every run after
+                 the first — see below.
      --dry-run   print what would be created and exit
+
+   Run WITHOUT --update once, to build the agent. Run WITH it every
+   time after that. The difference matters: the no-flag path creates a
+   NEW agent and hands you a new id, and the site names exactly one
+   agent id in js/config.js — so a second agent means editing that
+   file, bumping its cache-buster and re-uploading every page, just to
+   change a sentence in the prompt. --update patches the live agent
+   instead: same id, knowledge base left attached, conversation history
+   kept.
 
    Reads ELEVENLABS_API_KEY and ELEVENLABS_AGENT_SECRET from
    server/.env. Neither is ever printed.
@@ -68,6 +81,7 @@ function arg(name, fallback) {
 const DRY = process.argv.includes('--dry-run');
 const SITE = String(arg('site', 'https://evernovalife.com')).replace(/\/+$/, '');
 const API_BASE = String(arg('api-base', '')).replace(/\/+$/, '');
+const UPDATE_ID = String(arg('update', '')).trim();
 
 function die(message) {
   console.error('\n  ' + message + '\n');
@@ -269,6 +283,99 @@ async function restyle(agentId) {
   console.log('');
 }
 
+/* Every tool in the workspace, keyed by name. Paginated because the list
+   endpoint is: a workspace that has accumulated tools across several runs
+   would otherwise be read one page deep and the older records missed. */
+async function toolsByName() {
+  const found = new Map();
+  let cursor = '';
+  for (let page = 0; page < 20; page++) {
+    const res = await call('GET', '/v1/convai/tools?page_size=100' +
+      (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''));
+    ((res && res.tools) || []).forEach(t => {
+      const name = t && t.tool_config && t.tool_config.name;
+      const id = t && (t.id || t.tool_id);
+      if (name && id && !found.has(name)) found.set(name, id);
+    });
+    if (!res || !res.has_more || !res.next_cursor) break;
+    cursor = res.next_cursor;
+  }
+  return found;
+}
+
+/* ---- --update: push the prompt and tools to the LIVE agent ----
+   The create path further down makes a new agent every run, which is right
+   exactly once. After that it is wrong in an expensive way: js/config.js
+   names one agent id, so adopting a new one means editing that file,
+   bumping its cache-buster and re-uploading all 27 pages — to change a
+   sentence. This rewrites the prompt and the tool wiring on the agent the
+   site already talks to, and touches nothing else. */
+async function updateExisting(agentId, prompt) {
+  /* Read before writing. PATCH is a partial update at the top level, but
+     `prompt` is a nested OBJECT — sending a fresh one carrying only two
+     keys risks taking knowledge_base, llm and temperature down with it.
+     One GET removes the guesswork. */
+  process.stdout.write('  Reading the agent… ');
+  const current = await call('GET', '/v1/convai/agents/' + encodeURIComponent(agentId));
+  const agentCfg = ((current || {}).conversation_config || {}).agent || {};
+  const currentPrompt = agentCfg.prompt || {};
+  const attached = (currentPrompt.knowledge_base || []).length;
+  console.log('ok');
+  console.log('    ' + attached + ' knowledge document' + (attached === 1 ? '' : 's') +
+    ' attached — left exactly as they are');
+
+  /* Matched BY NAME against what the workspace already holds, so a second
+     run re-points the same three records instead of creating a fresh set
+     each time and orphaning the previous one on no agent at all. */
+  const existing = await toolsByName();
+  const toolIds = [];
+  for (const cfg of toolConfigs()) {
+    const id = existing.get(cfg.name);
+    if (id) {
+      process.stdout.write('  Updating tool ' + cfg.name + '… ');
+      await call('PATCH', '/v1/convai/tools/' + encodeURIComponent(id), { tool_config: cfg });
+      toolIds.push(id);
+    } else {
+      process.stdout.write('  Creating tool ' + cfg.name + '… ');
+      const made = await call('POST', '/v1/convai/tools', { tool_config: cfg });
+      const newId = made && (made.id || made.tool_id);
+      if (!newId) die(`No tool id came back for ${cfg.name}. Response: ${JSON.stringify(made)}`);
+      toolIds.push(newId);
+    }
+    console.log('ok');
+  }
+
+  process.stdout.write('  Patching the agent… ');
+  await call('PATCH', '/v1/convai/agents/' + encodeURIComponent(agentId), {
+    conversation_config: {
+      agent: {
+        prompt: { ...currentPrompt, prompt, tool_ids: toolIds },
+        /* Re-sent on every update rather than assumed: an agent created
+           before these existed has none, and a conversation that starts
+           without dynamic variables would otherwise leave {{first_name}}
+           as literal text in the prompt. */
+        dynamic_variables: {
+          dynamic_variable_placeholders: {
+            signed_in: 'false',
+            first_name: '',
+            account_token: ''
+          }
+        }
+      }
+    }
+  });
+  console.log('ok');
+
+  console.log('');
+  console.log('  Done. Agent ' + agentId + ' now carries the §3 prompt and all three tools.');
+  console.log('  Nothing needs re-uploading — js/config.js already names this agent.');
+  console.log('');
+  console.log('  Check it: open the site signed in and ask "where is my order".');
+  console.log('  Then sign out, reload, and ask again — it should point at the');
+  console.log('  order-status page instead.');
+  console.log('');
+}
+
 async function main() {
   if (!process.env.ELEVENLABS_API_KEY) {
     die('ELEVENLABS_API_KEY is not set.\n  Put it in server/.env — that file is git-ignored:\n\n    ELEVENLABS_API_KEY=sk_...');
@@ -295,15 +402,20 @@ async function main() {
   const { prompt, pages } = readDoc();
 
   console.log('');
-  console.log('  Agent      ' + AGENT_NAME);
+  console.log('  Agent      ' + (UPDATE_ID ? UPDATE_ID + '  (patched in place)'
+                                           : AGENT_NAME + '  (created new)'));
   console.log('  Tools →    ' + API_BASE + '/api/agent/{product,escalate,account}');
-  console.log('  Knowledge  ' + pages.length + ' pages from ' + SITE);
-  pages.forEach(p => console.log('               ' + SITE + '/' + p));
+  if (UPDATE_ID) {
+    console.log('  Knowledge  untouched — whatever is attached to this agent stays');
+  } else {
+    console.log('  Knowledge  ' + pages.length + ' pages from ' + SITE);
+    pages.forEach(p => console.log('               ' + SITE + '/' + p));
+  }
   console.log('  Prompt     §3 of docs/AI-CHAT.md, ' + prompt.split('\n').length + ' lines');
   console.log('');
 
   if (DRY) {
-    console.log('  --dry-run: nothing was created.\n');
+    console.log('  --dry-run: nothing was ' + (UPDATE_ID ? 'changed' : 'created') + '.\n');
     return;
   }
 
@@ -311,6 +423,11 @@ async function main() {
   process.stdout.write('  Checking the API key… ');
   await call('GET', '/v1/convai/agents?page_size=1');
   console.log('ok');
+
+  if (UPDATE_ID) {
+    await updateExisting(UPDATE_ID, prompt);
+    return;
+  }
 
   /* ---- 1. knowledge base ----
      from_url, so ElevenLabs fetches the live page itself. That means the
@@ -394,7 +511,12 @@ async function main() {
 main().catch(e => {
   console.error('\n  Failed.\n  ' + e.message);
   console.error('\n  Nothing further was created. Fix the above and run it again.');
-  console.error('  Any knowledge-base documents already uploaded are still there —');
-  console.error('  delete them in the dashboard if you want a clean second run.\n');
+  if (UPDATE_ID) {
+    console.error('  --update is re-runnable: tools are matched by name, so a second');
+    console.error('  attempt re-points the same records rather than duplicating them.\n');
+  } else {
+    console.error('  Any knowledge-base documents already uploaded are still there —');
+    console.error('  delete them in the dashboard if you want a clean second run.\n');
+  }
   process.exit(1);
 });
