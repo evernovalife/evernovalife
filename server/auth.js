@@ -286,7 +286,13 @@ function claimReferralReward(userId) {
 
 function verifyToken(token) {
   try {
-    return jwt.verify(token, SECRET);
+    const payload = jwt.verify(token, SECRET);
+    /* A session token carries no scope. Anything that does was minted for one
+       narrow job and handed to somebody else — see mintAgentToken — so it must
+       not be spendable here. Without this line the token we give a third party
+       would open every requireAuth route on the server. */
+    if (payload && payload.scope) return null;
+    return payload;
   } catch (e) {
     return null;
   }
@@ -314,6 +320,35 @@ function verifyRefToken(scope, value, token) {
   const a = Buffer.from(String(token || ''));
   const b = Buffer.from(refToken(scope, value));
   return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+/* ---- scoped, read-only tokens for the chat agent ----
+   The agent is talking to someone this server cannot otherwise identify.
+   This token is how the browser says who that is — so it is deliberately
+   weaker than the session token that mints it: it is accepted by exactly
+   one read-only route, it carries a scope that stops it being spent
+   anywhere else, and it is short-lived.
+
+   Short-lived matters more than it looks. A JWT cannot be revoked without
+   a server-side token store, which this module does not keep, so signing
+   out leaves an already-minted token alive until it expires. This number
+   is the whole of that exposure, and it is bounded above by the fact that
+   the same still-signed-in browser can read the same data from the
+   account page anyway. */
+const AGENT_TOKEN_TTL_SECONDS = Number(process.env.AGENT_TOKEN_TTL_SECONDS) || 30 * 60;
+const AGENT_SCOPE = 'agent-read';
+
+function mintAgentToken(u) {
+  return jwt.sign({ sub: u.id, scope: AGENT_SCOPE }, SECRET, { expiresIn: AGENT_TOKEN_TTL_SECONDS });
+}
+
+function verifyAgentToken(token) {
+  try {
+    const payload = jwt.verify(String(token || ''), SECRET);
+    return payload && payload.scope === AGENT_SCOPE ? payload : null;
+  } catch (e) {
+    return null;
+  }
 }
 
 /* Express middleware: require a valid "Authorization: Bearer <token>"
@@ -346,6 +381,9 @@ module.exports = {
   getReferralStats,
   claimReferralReward,
   verifyToken,
+  mintAgentToken,
+  verifyAgentToken,
+  AGENT_TOKEN_TTL_SECONDS,
   refToken,
   verifyRefToken,
   requireAuth

@@ -93,7 +93,7 @@ window.ENL_ANALYTICS = {
 
      window.ENL_CHAT = { agentId: 'agent_xxxxxxxxxxxx', version: '1.2.3' };
    ------------------------------------------------------------ */
-window.ENL_CHAT = { agentId: 'agent_7901m0t5wn53egzbmyq3b3a07chk', version: '' };
+window.ENL_CHAT = { agentId: 'agent_1901m0wy1pkzf83a066ynwadj614', version: '0.17.1' };
 
 (function () {
   var PROD_API_BASE = 'https://evernova-api.onrender.com';   // ← your Render backend

@@ -2512,14 +2512,16 @@ app.post('/api/admin/agent/knowledge/sync', requireAdmin, async (req, res) => {
 });
 
 /* ============================================================
-   THE CHAT AGENT'S THREE DOORS
+   THE CHAT AGENT'S DOORS
    Everything the ElevenLabs agent can reach is here, and the
-   list is short on purpose. It can read the catalog, it can
-   hand a conversation to a human, and it can post back a
-   finished transcript. It cannot read an order, an account, or
-   anything with a name and address attached — handing an LLM a
-   lookup keyed on customer records is the shortest path to
-   disclosing one to whoever guessed a reference.
+   list is short on purpose. It can read the catalog, hand a
+   conversation to a human, and post back a finished transcript.
+   It can also read ONE customer's own account — but never by a
+   lookup keyed on a name, email or order reference someone typed
+   into the chat: the only key accepted is the scoped token minted
+   for that visitor's own signed-in browser (see mintAgentToken /
+   /api/agent/account below), so there is no reference to guess
+   your way into somebody else's order.
    ============================================================ */
 const AGENT_SECRET = process.env.ELEVENLABS_AGENT_SECRET || '';
 const AGENT_WEBHOOK_SECRET = process.env.ELEVENLABS_WEBHOOK_SECRET || '';
@@ -2573,6 +2575,177 @@ function requireAgent(req, res, next) {
   }
   next();
 }
+
+/* ---- the browser's half of the agent's identity ----
+   A signed-in visitor trades their session token for one that can do a
+   great deal less: read this one account, read-only, for half an hour.
+   That is what reaches ElevenLabs. The session token never does — it
+   authorizes checkout and a password change, and it would sit in a vendor's
+   conversation record for thirty days.
+
+   requireAuth runs BEFORE this limiter, keyed on byAccount (same pattern as
+   disputeOpenLimiter above) — not the other way round. This server never
+   calls app.set('trust proxy'), so behind Render req.ip is the proxy's
+   address, identical for every visitor; an IP-keyed limiter here would be
+   one global bucket an anonymous caller could spend to silently disable
+   signed-in chat identity for the entire customer base, with every visitor
+   quietly degrading to signed-out. Keying on the account instead means an
+   unauthenticated flood gets a cheap 401 from requireAuth and never reaches
+   the bucket at all — only a caller who already holds a valid session can
+   spend their OWN budget. 30 per 10 minutes per account is generous: js/
+   chat.js caches the token in sessionStorage and only re-mints in the last
+   five minutes of its life, so an ordinary shopping session mints once or
+   twice, not once per page. */
+const agentTokenMintLimiter = ratelimit.limit({
+  name: 'agent-token-mint',
+  windowMs: 10 * 60 * 1000,
+  max: 30,
+  key: byAccount,
+  message: 'Too many chat sessions from this connection. Wait a few minutes and try again.'
+});
+
+app.post('/api/agent/account-token', auth.requireAuth, agentTokenMintLimiter, (req, res) => {
+  res.json({
+    success: true,
+    token: auth.mintAgentToken(req.user),
+    ttl: auth.AGENT_TOKEN_TTL_SECONDS,
+    /* Returned rather than read from the browser's cached enl_user: the
+       request is already being made, this server already holds the record,
+       and a greeting taken from here cannot disagree with a stale cache. */
+    firstName: req.user.firstName || ''
+  });
+});
+
+/* Everything returned to the agent can end up spoken aloud, written to
+   agent-transcripts/ on this disk, and stored in the vendor's conversation
+   log. Ten orders answers every real support question; an unbounded history
+   is just a bigger thing to leak. */
+const AGENT_MAX_ORDERS = 10;
+
+/* City and state, never the street line. "Where is my package" is fully
+   answerable from the carrier, the tracking number and the destination city,
+   and the street line is the highest-harm field in that transcript. */
+function agentPlace(address) {
+  const a = address || {};
+  return {
+    city: String(a.city || ''),
+    state: String(a.state || ''),
+    country: String(a.country || 'US')
+  };
+}
+
+/* paidSoFar/amountDue/canPayBalance rather than a second opinion about the
+   same numbers: the short-paid order is this shop's most common real support
+   case, and the agent must offer the SAME pay-the-balance link the email
+   offers, never a second invoice for goods already partly paid for. */
+function agentOrderView(o) {
+  return {
+    orderId: o.orderId,
+    createdAt: o.createdAt,
+    status: o.status,
+    method: o.method || '',
+    items: (o.items || []).map(i => ({ name: i.name, quantity: i.quantity })),
+    total: round2(o.total),
+    paid: paidSoFar(o),
+    due: amountDue(o),
+    shippingLabel: o.shippingLabel || '',
+    carrier: o.carrier || '',
+    tracking: o.tracking || '',
+    shippedAt: o.shippedAt || '',
+    ...agentPlace(o.shippingAddress),
+    payUrl: canPayBalance(o) ? payLinkFor(o.orderId) : ''
+  };
+}
+
+/* publicSubscription() carries the full shipping address and the account
+   email. Pick the fields the agent needs rather than deleting the ones it
+   must not have: a field added to that serializer later then has to be added
+   here deliberately, instead of arriving in a vendor's transcript because
+   nobody remembered this file. */
+function agentSubscriptionView(s) {
+  const p = subscriptions.publicSubscription(s) || {};
+  return {
+    id: p.id,
+    status: p.status,
+    items: (p.items || []).map(i => ({ name: i.name, quantity: i.quantity })),
+    intervalDays: p.intervalDays,
+    nextRunAt: p.nextRunAt || '',
+    paymentLabel: p.paymentLabel || '',
+    ...agentPlace(p.shippingAddress)
+  };
+}
+
+/* Priced off the live catalogue, never off what the browser saved into the
+   cart — a price that has moved since would otherwise be quoted by the agent
+   and then contradicted by checkout.
+
+   buildOrder() is the obvious tool and the wrong one: it THROWS on a line
+   that is unpublished or out of stock, and a cart holding one pulled product
+   must still be describable. Unavailable lines come back flagged instead. */
+function agentCartView(userId) {
+  const items = store.getCart(userId).map(line => {
+    const product = productStore.getProduct(line.id);
+    const available = Boolean(product) &&
+      productStore.isPublished(product) &&
+      product.inStock !== false &&
+      productStore.isAvailable(product);
+    return {
+      name: (product && product.name) || line.name || '',
+      quantity: line.quantity,
+      unitPrice: product ? round2(product.price) : 0,
+      available
+    };
+  });
+  const subtotal = round2(items.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0));
+  return { items, subtotal };
+}
+
+function buildAccountSnapshot(user) {
+  const orders = store.listOrders(user.id)
+    .slice()
+    .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+    .slice(0, AGENT_MAX_ORDERS)
+    .map(agentOrderView);
+
+  const points = loyalty.getBalance(user.id);
+
+  return {
+    customer: { firstName: user.firstName || '' },
+    orders,
+    loyalty: { points, worth: round2(loyalty.pointsToDollars(points)) },
+    subscriptions: subscriptions.listForUser(user.id).map(agentSubscriptionView),
+    cart: agentCartView(user.id)
+  };
+}
+
+/* ---- the visitor's own account, read-only ----
+   TWO credentials answering two different questions: the shared secret says
+   "this is our agent", and the account token says "and this is who it is
+   talking to". Neither is sufficient alone.
+
+   The account is chosen by the token's subject and by nothing else. No id,
+   email or order reference is read from the body — a chat agent asking for
+   an account by name is exactly the hole this design exists to avoid. */
+app.post('/api/agent/account', requireAgent, agentLimiter, (req, res) => {
+  const payload = auth.verifyAgentToken(req.get('x-account-token') || '');
+  if (!payload) {
+    // Reaching this line already means the caller held the shared agent
+    // secret (requireAgent above), so a bad/expired account token is a much
+    // cheaper probe than that — but it must still spend a budget of its own
+    // rather than the shared agent-tool bucket live conversations depend on,
+    // the same reasoning requireAgent applies to its own 401.
+    return agentAuthFailLimiter(req, res, () =>
+      // Read out loud by the agent, so it has to be a sentence.
+      res.status(401).json({
+        error: 'That session has expired. Ask them to sign in again on the site, then start a new chat.'
+      }));
+  }
+
+  const user = auth.getUserById(payload.sub);
+  if (!user) return res.status(401).json({ error: 'That account no longer exists.' });
+
+  res.json({ success: true, ...buildAccountSnapshot(user) });
+});
 
 /* What the agent may say about a product: the name, what it costs, and
    whether we have it. Availability is `productStore.isAvailable()` — the
@@ -2667,6 +2840,30 @@ function verifyAgentSignature(rawBody, header) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+/* The post-call payload echoes back conversation_initiation_client_data.
+   dynamic_variables, which is exactly where the x-account-token header was
+   templated from (see tools/setup-elevenlabs-agent.js) — so account_token
+   arrives here still live and would otherwise be written to disk verbatim.
+   Templating it into the header only kept it out of the model's own
+   context; it says nothing about the vendor's own record of the call, which
+   is what this route is about to persist. Shallow-copies rather than
+   mutating req.body: the signature above is checked against req.rawBody,
+   not this object, but nothing downstream of this handler should end up
+   holding a "transcript" that quietly differs from what was written to
+   disk. Absent or differently-shaped input (no dynamic_variables, no
+   account_token, not even an object) is left untouched rather than throw. */
+function redactedTranscriptBody(body) {
+  if (!body || typeof body !== 'object') return body;
+  const civd = body.conversation_initiation_client_data;
+  const dv = civd && typeof civd === 'object' ? civd.dynamic_variables : null;
+  if (!dv || typeof dv !== 'object' || !('account_token' in dv)) return body;
+  return Object.assign({}, body, {
+    conversation_initiation_client_data: Object.assign({}, civd, {
+      dynamic_variables: Object.assign({}, dv, { account_token: '[redacted]' })
+    })
+  });
+}
+
 /* This route has no shared secret in front of it — the HMAC IS the check —
    so an unsigned flood otherwise costs a signature computation each and is
    never counted anywhere. Its own bucket, so a burst here cannot spend the
@@ -2706,7 +2903,7 @@ app.post('/api/agent/transcript', agentTranscriptLimiter, (req, res) => {
     const id = String((req.body && req.body.conversation_id) || 'unknown')
       .replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
     const stampName = new Date().toISOString().replace(/[:.]/g, '-');
-    fs.writeFileSync(path.join(dir, `${stampName}-${id}.json`), JSON.stringify(req.body, null, 2));
+    fs.writeFileSync(path.join(dir, `${stampName}-${id}.json`), JSON.stringify(redactedTranscriptBody(req.body), null, 2));
     res.json({ success: true });
   } catch (e) {
     console.error('[agent] transcript store failed:', e.message);

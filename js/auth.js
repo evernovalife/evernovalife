@@ -32,6 +32,12 @@
            is what makes that true — without clearing it here, an owner who
            signs out and back in would never see it again. */
         sessionStorage.removeItem('enl_admin_alert_seen');
+        /* Belt-and-braces: js/chat.js's cached agent token is already bound
+           to a fingerprint of enl_token, so it stops matching the instant
+           this account signs out. Dropping it here too means the next
+           sign-in on this tab starts clean rather than relying on that
+           fingerprint check alone. */
+        sessionStorage.removeItem('enl_agent_token');
       } catch (e) {}
     },
 

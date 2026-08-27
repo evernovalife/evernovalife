@@ -11,9 +11,12 @@ The bubble in the corner of the site is a text-only ElevenLabs agent. It
 answers questions from our own published pages and from a live catalog
 lookup, and when it cannot help — or is asked something it must refuse — it
 hands the conversation to a person. That handoff opens a thread in
-`admin.html#inbox`. Nothing about the agent's design lets it look up an
-order, an account, or anyone's address; it only ever sees the catalog and the
-words the visitor types to it.
+`admin.html#inbox`. A signed-in visitor's own account — their orders,
+delivery status, points, auto-ship plans and cart — can also be read, via
+the `get_my_account` tool (§5), scoped strictly to the account the visitor
+is signed into; a signed-out visitor gets none of that and the agent still
+cannot look up anyone else's order, account, or address from the words
+they type.
 
 **Who feeds that inbox, today.** Chat escalations, and nothing else.
 `contact.html` is still a plain `mailto:` form — it has never been wired to
@@ -102,11 +105,32 @@ Do not soften it, do not add a caveat and then answer anyway, and do not
 speculate about what a researcher "might" do. If someone rephrases the
 question, refuse again.
 
-ORDERS
-You cannot look up orders, accounts, or addresses. Someone asking about
-an existing order should be pointed at the order-status page on the site,
-where they enter their reference and email address. If they need more
-than that, escalate.
+ORDERS AND ACCOUNTS
+Whether you can look this up depends on {{signed_in}}.
+
+If {{signed_in}} is "true", the person is signed in on the site and you
+can read their account. Call get_my_account for anything about their
+orders, delivery, points, auto-ship plans or cart. Never ask a signed-in
+person for an order reference, and never ask for their email address to
+find their account — you already have it. If you go on to escalate them
+to a person, you may still ask where to reach them, same as anyone else.
+Greet them by {{first_name}} if it is not empty; if it is empty, greet
+them without a name.
+
+If {{signed_in}} is anything else, you cannot look up orders, accounts or
+addresses. Point them at the order-status page on the site, where they
+enter their reference and the email address they ordered with. If they
+cannot find the reference, escalate.
+
+If get_my_account says the session has expired, read that sentence back
+to them and offer to escalate.
+
+You can only READ. You cannot cancel an order, pause an auto-ship, spend
+points, or change anything. When someone asks for a change, tell them
+where on the site to do it, or escalate.
+
+If an order is short-paid, get_my_account returns a payUrl. Give them
+that link and no other. Never suggest paying again from scratch.
 
 PRICES AND STOCK
 Always call lookup_product. Never state a price or stock level from
@@ -161,8 +185,10 @@ agent can read from.
 
 ## 5. Tool definitions
 
-Two tools, both webhook-type tools in the ElevenLabs dashboard, both send
-`x-agent-secret: <ELEVENLABS_AGENT_SECRET>` as a header.
+Three tools, all webhook-type tools in the ElevenLabs dashboard, all send
+`x-agent-secret: <ELEVENLABS_AGENT_SECRET>` as a header — `get_my_account`
+also sends a second header, `x-account-token`, described under its own
+heading below.
 
 ### `lookup_product`
 
@@ -227,6 +253,27 @@ Two tools, both webhook-type tools in the ElevenLabs dashboard, both send
   error, no response at all), fall back to the system prompt's instruction:
   tell them to email support@evernovalife.com directly.
 
+### `get_my_account`
+
+Read-only. Returns the signed-in visitor's recent orders (status, items, totals,
+balance outstanding, carrier, tracking, and a pay-the-balance link when one is
+genuinely owed), their points balance, their auto-ship plans and their cart.
+
+    POST {API_BASE}/api/agent/account
+    x-agent-secret:  <ELEVENLABS_AGENT_SECRET>
+    x-account-token: {{account_token}}
+
+No request parameters. The account is chosen by the token and by nothing else,
+which is what makes the tool impossible to point at somebody else's orders.
+
+`{{account_token}}` is set by `js/chat.js` at widget mount, from
+`POST /api/agent/account-token`, which a signed-in browser calls with its own
+session token. The token is scoped `agent-read`, expires in 30 minutes, and is
+refused by every `requireAuth` route on the server.
+
+Addresses come back as city, state and country only. There is no street line in
+this response, deliberately — see the design doc.
+
 ## 6. Post-call webhook
 
 - **Method / URL:** `POST https://<api-host>/api/agent/transcript`
@@ -280,6 +327,23 @@ else is ignored and the loader falls back to the unpinned URL.
 Work through this in order. Each line says what to do and how to tell it
 actually worked.
 
+- [ ] **Three stages, in order — not two.** (1) Deploy the server BEFORE
+      uploading `js/chat.js`. The browser will call `/api/agent/account-token`
+      as soon as the new file lands, and Cloudflare caches JS for four hours
+      — uploading the asset before the API exists binds a 4-hour-cached file
+      to an endpoint that 404s. (2) After the JS is uploaded, **wait out that
+      four-hour cache** before the third stage — check `cf-cache-status` on
+      `js/chat.js` if you need to confirm it has actually rolled over. (3)
+      Only then run `tools/setup-elevenlabs-agent.js` to push the live system
+      prompt and tool config. Running it earlier — while Cloudflare can still
+      be serving the OLD `js/chat.js` that predates this feature and sets no
+      `dynamic-variables` at all — puts every visitor who lands on cached JS
+      into a conversation whose prompt references `{{first_name}}` and whose
+      `get_my_account` tool call carries `x-account-token: {{account_token}}`
+      with neither variable ever set, for as long as the stale asset keeps
+      being served.
+- [ ] `ELEVENLABS_AGENT_SECRET` must be set on the server, or `requireAgent`
+      fails closed and `get_my_account` returns 401 to every conversation.
 - [ ] **Secrets set on Render, not just locally.** `ELEVENLABS_AGENT_SECRET`
       and `ELEVENLABS_WEBHOOK_SECRET` are set in the **Render dashboard**
       (Environment → Add Environment Variable), and Render has finished the
