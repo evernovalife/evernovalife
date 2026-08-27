@@ -120,6 +120,23 @@ function readDoc() {
    Every failure prints the API's own response body. A setup script that
    swallows the reason is worse than no script: the whole point is that
    the person running it can act on what went wrong. */
+/* A validation error echoes the offending request straight back, headers
+   and all — which means our own shared secret arrives in the response body
+   and lands on the terminal, in a screenshot, in the issue someone pastes
+   it into. The header above promises these are never printed; this is what
+   makes that true. */
+function scrub(text) {
+  let out = String(text);
+  [
+    ['ELEVENLABS_AGENT_SECRET', process.env.ELEVENLABS_AGENT_SECRET],
+    ['ELEVENLABS_API_KEY', process.env.ELEVENLABS_API_KEY],
+    ['ELEVENLABS_WEBHOOK_SECRET', process.env.ELEVENLABS_WEBHOOK_SECRET]
+  ].forEach(([name, value]) => {
+    if (value && value.length > 8) out = out.split(value).join('<' + name + ' redacted>');
+  });
+  return out;
+}
+
 async function call(method, endpoint, body) {
   const res = await fetch(API + endpoint, {
     method,
@@ -135,7 +152,7 @@ async function call(method, endpoint, body) {
   if (!res.ok) {
     const detail = (data && (data.detail || data.message)) || text || '(no body)';
     throw Object.assign(
-      new Error(`${method} ${endpoint} → ${res.status}\n  ${typeof detail === 'string' ? detail : JSON.stringify(detail, null, 2)}`),
+      new Error(scrub(`${method} ${endpoint} → ${res.status}\n  ${typeof detail === 'string' ? detail : JSON.stringify(detail, null, 2)}`)),
       { status: res.status }
     );
   }
@@ -236,6 +253,17 @@ function toolConfigs() {
         request_headers: {
           ...headers,
           'x-account-token': '{{account_token}}'
+        },
+        /* Empty, but required: ElevenLabs rejects a POST tool without a
+           body schema (422, "POST method requires request_body_schema").
+           No properties is the point — there is nothing here for the model
+           to fill in, so nothing it can say points this tool at somebody
+           else's account. The server ignores the body entirely and reads
+           the account from the token. */
+        request_body_schema: {
+          type: 'object',
+          properties: {},
+          required: []
         }
       }
     }
