@@ -327,10 +327,21 @@ else is ignored and the loader falls back to the unpinned URL.
 Work through this in order. Each line says what to do and how to tell it
 actually worked.
 
-- [ ] Deploy the server BEFORE uploading `js/chat.js`. The browser will call
-      `/api/agent/account-token` as soon as the new file lands, and Cloudflare
-      caches JS for four hours — uploading the asset before the API exists
-      binds a 4-hour-cached file to an endpoint that 404s.
+- [ ] **Three stages, in order — not two.** (1) Deploy the server BEFORE
+      uploading `js/chat.js`. The browser will call `/api/agent/account-token`
+      as soon as the new file lands, and Cloudflare caches JS for four hours
+      — uploading the asset before the API exists binds a 4-hour-cached file
+      to an endpoint that 404s. (2) After the JS is uploaded, **wait out that
+      four-hour cache** before the third stage — check `cf-cache-status` on
+      `js/chat.js` if you need to confirm it has actually rolled over. (3)
+      Only then run `tools/setup-elevenlabs-agent.js` to push the live system
+      prompt and tool config. Running it earlier — while Cloudflare can still
+      be serving the OLD `js/chat.js` that predates this feature and sets no
+      `dynamic-variables` at all — puts every visitor who lands on cached JS
+      into a conversation whose prompt references `{{first_name}}` and whose
+      `get_my_account` tool call carries `x-account-token: {{account_token}}`
+      with neither variable ever set, for as long as the stale asset keeps
+      being served.
 - [ ] `ELEVENLABS_AGENT_SECRET` must be set on the server, or `requireAgent`
       fails closed and `get_my_account` returns 401 to every conversation.
 - [ ] **Secrets set on Render, not just locally.** `ELEVENLABS_AGENT_SECRET`

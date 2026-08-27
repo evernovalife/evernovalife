@@ -50,12 +50,26 @@
      screen, not a generous allowance for a slow API. */
   var MINT_TIMEOUT_MS = 4000;
 
-  function cachedToken() {
+  /* The signature segment of the session JWT — the last chunk after the
+     final dot, or just the tail of the string if the token isn't in that
+     shape. It differs per account and per login (a re-login re-signs the
+     token even for the same account), so it is enough to tell "this cached
+     agent token belongs to the session that is active right now" without
+     storing the session token itself a second time. */
+  function sessionFingerprint(sessionToken) {
+    return String(sessionToken || '').slice(-24);
+  }
+
+  function cachedToken(sessionToken) {
     try {
       var raw = sessionStorage.getItem(TOKEN_KEY);
       if (!raw) return null;
       var saved = JSON.parse(raw);
-      if (!saved || !saved.token || !saved.expiresAt) return null;
+      if (!saved || !saved.token || !saved.expiresAt || !saved.fp) return null;
+      // Bound to the session that minted it. A different account (or the
+      // same account signed in again) fingerprints differently, and that is
+      // a cache miss, not an error — identity() re-mints for the new session.
+      if (saved.fp !== sessionFingerprint(sessionToken)) return null;
       if (saved.expiresAt - Date.now() < REMINT_MARGIN_MS) return null;
       return saved;
     } catch (e) { return null; }   // private mode, quota, corrupt JSON
@@ -65,12 +79,12 @@
      resolves signed-out rather than rejecting, because nothing about this
      feature is worth costing the visitor their chat bubble. */
   function identity() {
-    var out = { signed_in: 'false' };
+    var out = { signed_in: 'false', first_name: '', account_token: '' };
     var sessionToken = '';
     try { sessionToken = localStorage.getItem('enl_token') || ''; } catch (e) {}
     if (!sessionToken || typeof fetch === 'undefined') return Promise.resolve(out);
 
-    var saved = cachedToken();
+    var saved = cachedToken(sessionToken);
     if (saved) {
       return Promise.resolve({
         signed_in: 'true',
@@ -91,6 +105,7 @@
           sessionStorage.setItem(TOKEN_KEY, JSON.stringify({
             token: data.token,
             firstName: data.firstName || '',
+            fp: sessionFingerprint(sessionToken),
             // 1800 mirrors the server's AGENT_TOKEN_TTL_SECONDS; it only
             // matters here if the response comes back without a usable ttl.
             expiresAt: Date.now() + (Number(data.ttl) || 1800) * 1000

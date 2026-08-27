@@ -87,8 +87,15 @@ The two headers answer two different questions, and both must pass. The shared s
 alone cannot read an account; the account token alone cannot reach the endpoint.
 
 The token travels as a header template, so it is filled in by ElevenLabs' tool layer.
-The model never receives it, never has to repeat it, and cannot mangle it — which also
-keeps it out of the transcript.
+The model never receives it, never has to repeat it, and cannot mangle it — which keeps
+it out of the model's own context. It does NOT keep it out of ElevenLabs' post-call
+webhook payload: that payload echoes back `conversation_initiation_client_data.
+dynamic_variables`, which is where the header was templated from, so the live token
+still reaches `POST /api/agent/transcript`. That route redacts `account_token` out of
+`conversation_initiation_client_data.dynamic_variables` before writing the transcript
+to disk — the raw body is still what the HMAC signature is checked against, only the
+stored copy is touched — so the credential does not end up sitting in
+`server/data/agent-transcripts/*.json` after the conversation ends.
 
 ## The token
 

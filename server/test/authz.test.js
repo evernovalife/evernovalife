@@ -391,15 +391,46 @@ test('at most the ten most recent orders come back, newest first', async () => {
 });
 
 test('no street address appears anywhere in the account response', async () => {
-  const { agentToken } = await signedInWithAgentToken('agent-address@example.com');
-  const res = await agentApi('/api/agent/account', { accountToken: agentToken });
+  const reg = await register('agent-address@example.com');
+  const userId = reg.body.user.id;
+  const mint = await api('/api/agent/account-token', { method: 'POST', token: reg.body.token });
+
+  /* Seeded directly through the store, like the order-cap test above — a real
+     order needs a live payment provider, and what this test needs is a real
+     STREET ADDRESS actually present in the record the endpoint reads from.
+     Without this, a freshly registered account with no orders has no
+     address-shaped data anywhere, and the scan below would pass against an
+     empty response no matter what the endpoint does with a real one. */
+  const store = require('../store.js');
+  store.addOrder(userId, {
+    orderId: 'ENL-ADDR00001',
+    createdAt: '2026-08-01T00:00:00.000Z',
+    status: 'paid',
+    method: 'crypto',
+    items: [{ id: 1, name: 'Test item', unitPrice: 10, quantity: 1, lineTotal: 10 }],
+    total: 10,
+    email: 'agent-address@example.com',
+    shippingAddress: { line1: '9 Nowhere Lane', city: 'Austin', state: 'TX', country: 'US' }
+  });
+
+  const res = await agentApi('/api/agent/account', { accountToken: mint.body.token });
   assert.strictEqual(res.status, 200);
-  /* Scanning the whole serialized response rather than named fields, so that a
-     later change which starts returning the address somewhere new fails here
-     instead of passing. */
   const text = JSON.stringify(res.body);
+
+  /* Key-name scan: catches the street line coming back under its own field
+     name, wherever in the response shape that happens. */
   assert.ok(!/"(address1|address2|street|line1|line2)"/i.test(text),
-    'the response must not carry a street address in any field');
+    'the response must not carry a street-address field, under any name');
+
+  /* Value scan: catches the same leak under a RENAMED field, which the
+     key-name scan above cannot — a later change that starts returning
+     `line1`'s value under some new key would still fail here. City/state are
+     expected to survive (agentPlace() keeps them for "where is my package");
+     only the street line must be gone. */
+  assert.ok(!text.includes('9 Nowhere Lane'),
+    'the response must not carry the street-address value anywhere');
+  assert.ok(text.includes('Austin') && text.includes('TX'),
+    'the response should still carry the destination city/state');
 });
 
 test('the account response carries points, auto-ship and the cart', async () => {

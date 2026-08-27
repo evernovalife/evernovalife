@@ -353,7 +353,21 @@ async function main() {
           knowledge_base: knowledge
         },
         first_message: 'Hello — ask me anything about our catalogue, documentation, shipping or returns.',
-        language: 'en'
+        language: 'en',
+        /* Safe defaults for a conversation that starts without dynamic
+           variables set at all — the dashboard's own test chat, or any
+           client that skips them. Mirrors the signed-out object js/chat.js
+           always sends ({ signed_in: 'false', first_name: '', account_token: ''
+           }), so a conversation missing the attribute behaves exactly like
+           a real signed-out visitor instead of leaving {{first_name}} and
+           {{account_token}} as literal text in the prompt/tool header. */
+        dynamic_variables: {
+          dynamic_variable_placeholders: {
+            signed_in: 'false',
+            first_name: '',
+            account_token: ''
+          }
+        }
       },
       conversation: { text_only: true }
     },

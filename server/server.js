@@ -2583,18 +2583,28 @@ function requireAgent(req, res, next) {
    authorizes checkout and a password change, and it would sit in a vendor's
    conversation record for thirty days.
 
-   The limiter runs BEFORE requireAuth so an anonymous flood is capped too,
-   and it is sized for real browsing: js/chat.js caches the token in
-   sessionStorage and only re-mints in the last five minutes of its life, so
-   an ordinary shopping session mints once or twice, not once per page. */
+   requireAuth runs BEFORE this limiter, keyed on byAccount (same pattern as
+   disputeOpenLimiter above) — not the other way round. This server never
+   calls app.set('trust proxy'), so behind Render req.ip is the proxy's
+   address, identical for every visitor; an IP-keyed limiter here would be
+   one global bucket an anonymous caller could spend to silently disable
+   signed-in chat identity for the entire customer base, with every visitor
+   quietly degrading to signed-out. Keying on the account instead means an
+   unauthenticated flood gets a cheap 401 from requireAuth and never reaches
+   the bucket at all — only a caller who already holds a valid session can
+   spend their OWN budget. 30 per 10 minutes per account is generous: js/
+   chat.js caches the token in sessionStorage and only re-mints in the last
+   five minutes of its life, so an ordinary shopping session mints once or
+   twice, not once per page. */
 const agentTokenMintLimiter = ratelimit.limit({
   name: 'agent-token-mint',
   windowMs: 10 * 60 * 1000,
   max: 30,
+  key: byAccount,
   message: 'Too many chat sessions from this connection. Wait a few minutes and try again.'
 });
 
-app.post('/api/agent/account-token', agentTokenMintLimiter, auth.requireAuth, (req, res) => {
+app.post('/api/agent/account-token', auth.requireAuth, agentTokenMintLimiter, (req, res) => {
   res.json({
     success: true,
     token: auth.mintAgentToken(req.user),
@@ -2719,10 +2729,16 @@ function buildAccountSnapshot(user) {
 app.post('/api/agent/account', requireAgent, agentLimiter, (req, res) => {
   const payload = auth.verifyAgentToken(req.get('x-account-token') || '');
   if (!payload) {
-    // Read out loud by the agent, so it has to be a sentence.
-    return res.status(401).json({
-      error: 'That session has expired. Ask them to sign in again on the site, then start a new chat.'
-    });
+    // Reaching this line already means the caller held the shared agent
+    // secret (requireAgent above), so a bad/expired account token is a much
+    // cheaper probe than that — but it must still spend a budget of its own
+    // rather than the shared agent-tool bucket live conversations depend on,
+    // the same reasoning requireAgent applies to its own 401.
+    return agentAuthFailLimiter(req, res, () =>
+      // Read out loud by the agent, so it has to be a sentence.
+      res.status(401).json({
+        error: 'That session has expired. Ask them to sign in again on the site, then start a new chat.'
+      }));
   }
 
   const user = auth.getUserById(payload.sub);
@@ -2824,6 +2840,30 @@ function verifyAgentSignature(rawBody, header) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+/* The post-call payload echoes back conversation_initiation_client_data.
+   dynamic_variables, which is exactly where the x-account-token header was
+   templated from (see tools/setup-elevenlabs-agent.js) — so account_token
+   arrives here still live and would otherwise be written to disk verbatim.
+   Templating it into the header only kept it out of the model's own
+   context; it says nothing about the vendor's own record of the call, which
+   is what this route is about to persist. Shallow-copies rather than
+   mutating req.body: the signature above is checked against req.rawBody,
+   not this object, but nothing downstream of this handler should end up
+   holding a "transcript" that quietly differs from what was written to
+   disk. Absent or differently-shaped input (no dynamic_variables, no
+   account_token, not even an object) is left untouched rather than throw. */
+function redactedTranscriptBody(body) {
+  if (!body || typeof body !== 'object') return body;
+  const civd = body.conversation_initiation_client_data;
+  const dv = civd && typeof civd === 'object' ? civd.dynamic_variables : null;
+  if (!dv || typeof dv !== 'object' || !('account_token' in dv)) return body;
+  return Object.assign({}, body, {
+    conversation_initiation_client_data: Object.assign({}, civd, {
+      dynamic_variables: Object.assign({}, dv, { account_token: '[redacted]' })
+    })
+  });
+}
+
 /* This route has no shared secret in front of it — the HMAC IS the check —
    so an unsigned flood otherwise costs a signature computation each and is
    never counted anywhere. Its own bucket, so a burst here cannot spend the
@@ -2863,7 +2903,7 @@ app.post('/api/agent/transcript', agentTranscriptLimiter, (req, res) => {
     const id = String((req.body && req.body.conversation_id) || 'unknown')
       .replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
     const stampName = new Date().toISOString().replace(/[:.]/g, '-');
-    fs.writeFileSync(path.join(dir, `${stampName}-${id}.json`), JSON.stringify(req.body, null, 2));
+    fs.writeFileSync(path.join(dir, `${stampName}-${id}.json`), JSON.stringify(redactedTranscriptBody(req.body), null, 2));
     res.json({ success: true });
   } catch (e) {
     console.error('[agent] transcript store failed:', e.message);
