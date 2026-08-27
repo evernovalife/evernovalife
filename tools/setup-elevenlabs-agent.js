@@ -373,11 +373,21 @@ async function updateExisting(agentId, prompt) {
     console.log('ok');
   }
 
+  /* GET hands back the tool wiring TWICE: `tool_ids`, and a deprecated
+     inline `tools` array holding the same tools expanded. PATCH accepts
+     one or the other and rejects a body carrying both ("Cannot specify
+     both tools and tool IDs"), so the legacy view has to come out of the
+     object we merged from. Dropped rather than updated: `tool_ids` is the
+     supported field, and leaving `tools` behind would also mean shipping
+     the old two-tool list back over the new three. */
+  const mergedPrompt = { ...currentPrompt, prompt, tool_ids: toolIds };
+  delete mergedPrompt.tools;
+
   process.stdout.write('  Patching the agent… ');
   await call('PATCH', '/v1/convai/agents/' + encodeURIComponent(agentId), {
     conversation_config: {
       agent: {
-        prompt: { ...currentPrompt, prompt, tool_ids: toolIds },
+        prompt: mergedPrompt,
         /* Re-sent on every update rather than assumed: an agent created
            before these existed has none, and a conversation that starts
            without dynamic variables would otherwise leave {{first_name}}
