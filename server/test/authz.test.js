@@ -27,6 +27,7 @@ process.env.DATA_DIR = TMP_DATA;
 process.env.JWT_SECRET = 'test-secret-authz';
 process.env.ADMIN_EMAILS = 'boss@evernovalife.com';
 process.env.ALLOWED_ORIGINS = '*';
+process.env.ELEVENLABS_AGENT_SECRET = 'test-agent-secret';
 delete process.env.ADMIN_KEY; // exercise account-based admin only
 
 const app = require('../server.js');
@@ -252,4 +253,49 @@ test('an anonymous caller cannot create a promotion', async () => {
     body: { name: 'Free money', type: 'cart', mode: 'percent', value: 100 }
   });
   assert.ok(res.status === 401 || res.status === 403);
+});
+
+/* ============================================================
+   The chat agent's account context
+   ============================================================ */
+
+/* Like api(), but for the agent's own routes: the shared secret proves the
+   caller is our agent, and x-account-token says who it is talking to. */
+async function agentApi(pathname, { secret = 'test-agent-secret', accountToken, body } = {}) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (secret !== null) headers['x-agent-secret'] = secret;
+  if (accountToken !== undefined) headers['x-account-token'] = accountToken;
+  const res = await fetch(base + pathname, {
+    method: 'POST', headers, body: JSON.stringify(body || {})
+  });
+  let parsed = null;
+  try { parsed = await res.json(); } catch { /* no JSON body */ }
+  return { status: res.status, body: parsed };
+}
+
+/* A registered account plus a freshly minted agent token for it. */
+async function signedInWithAgentToken(email, firstName = 'Sam') {
+  const reg = await register(email, 'password123', firstName, 'Tester');
+  const mint = await api('/api/agent/account-token', { method: 'POST', token: reg.body.token });
+  return { sessionToken: reg.body.token, agentToken: mint.body.token, mint };
+}
+
+test('a signed-in browser can mint an agent token, and an anonymous one cannot', async () => {
+  const { mint } = await signedInWithAgentToken('agent-mint@example.com', 'Sam');
+  assert.strictEqual(mint.status, 200);
+  assert.ok(mint.body.token, 'a token should come back');
+  assert.strictEqual(mint.body.ttl, 1800);
+  assert.strictEqual(mint.body.firstName, 'Sam');
+
+  const anon = await api('/api/agent/account-token', { method: 'POST' });
+  assert.strictEqual(anon.status, 401);
+});
+
+test('the minted agent token cannot be spent as a session token', async () => {
+  const { agentToken } = await signedInWithAgentToken('agent-replay@example.com');
+  // Two ordinary account routes, both behind requireAuth. Neither may open.
+  const orders = await api('/api/orders', { token: agentToken });
+  assert.strictEqual(orders.status, 401);
+  const cart = await api('/api/cart', { token: agentToken });
+  assert.strictEqual(cart.status, 401);
 });

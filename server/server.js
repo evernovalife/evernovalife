@@ -2574,6 +2574,36 @@ function requireAgent(req, res, next) {
   next();
 }
 
+/* ---- the browser's half of the agent's identity ----
+   A signed-in visitor trades their session token for one that can do a
+   great deal less: read this one account, read-only, for half an hour.
+   That is what reaches ElevenLabs. The session token never does — it
+   authorizes checkout and a password change, and it would sit in a vendor's
+   conversation record for thirty days.
+
+   The limiter runs BEFORE requireAuth so an anonymous flood is capped too,
+   and it is sized for real browsing: js/chat.js caches the token in
+   sessionStorage and only re-mints in the last five minutes of its life, so
+   an ordinary shopping session mints once or twice, not once per page. */
+const agentTokenMintLimiter = ratelimit.limit({
+  name: 'agent-token-mint',
+  windowMs: 10 * 60 * 1000,
+  max: 30,
+  message: 'Too many chat sessions from this connection. Wait a few minutes and try again.'
+});
+
+app.post('/api/agent/account-token', agentTokenMintLimiter, auth.requireAuth, (req, res) => {
+  res.json({
+    success: true,
+    token: auth.mintAgentToken(req.user),
+    ttl: auth.AGENT_TOKEN_TTL_SECONDS,
+    /* Returned rather than read from the browser's cached enl_user: the
+       request is already being made, this server already holds the record,
+       and a greeting taken from here cannot disagree with a stale cache. */
+    firstName: req.user.firstName || ''
+  });
+});
+
 /* What the agent may say about a product: the name, what it costs, and
    whether we have it. Availability is `productStore.isAvailable()` — the
    same function checkout uses — because `inStock` is its own admin switch
