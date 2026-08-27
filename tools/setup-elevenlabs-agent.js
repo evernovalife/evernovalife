@@ -296,7 +296,7 @@ async function main() {
 
   console.log('');
   console.log('  Agent      ' + AGENT_NAME);
-  console.log('  Tools →    ' + API_BASE + '/api/agent/{product,escalate}');
+  console.log('  Tools →    ' + API_BASE + '/api/agent/{product,escalate,account}');
   console.log('  Knowledge  ' + pages.length + ' pages from ' + SITE);
   pages.forEach(p => console.log('               ' + SITE + '/' + p));
   console.log('  Prompt     §3 of docs/AI-CHAT.md, ' + prompt.split('\n').length + ' lines');
