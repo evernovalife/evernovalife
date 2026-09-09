@@ -1237,6 +1237,24 @@ body.coa-lightbox-open { overflow: hidden; }
 .form-msg.success { color: var(--accent-mint); }
 .form-msg.error { color: var(--accent-coral); }
 
+/* ---- Checkout autofill notice ----
+   Prefilled boxes are only helpful if the buyer knows they were prefilled,
+   and can undo it in one click. */
+.autofill-note {
+  margin: 0 0 1.25rem; padding: 0.7rem 0.9rem;
+  font-size: 0.82rem; line-height: 1.5;
+  color: var(--dark-text);
+  background: rgba(168, 85, 247, 0.08);
+  border: 1px solid rgba(168, 85, 247, 0.28);
+  border-radius: 10px;
+}
+.autofill-clear {
+  background: none; border: 0; padding: 0;
+  font: inherit; color: var(--accent-purple);
+  text-decoration: underline; cursor: pointer;
+}
+.autofill-clear:hover { color: #fff; }
+
 /* ---- Payment methods (crypto, Zelle) ---- */
 .alt-pay-divider {
   display: flex; align-items: center; gap: 0.75rem;

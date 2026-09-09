@@ -2199,7 +2199,7 @@ function checkoutSetMsg(text, kind) {
 function collectCheckout(form) {
   const v = name => (form.elements[name] && form.elements[name].value || '').trim();
   const cc = v('country');
-  return {
+  const checkout = {
     email: v('email'),
     name: (v('firstName') + ' ' + v('lastName')).trim(),
     // Required research qualification — recorded with the order.
@@ -2214,6 +2214,171 @@ function collectCheckout(form) {
     // truth — and the server re-checks it either way.
     countryCode: /^[A-Z]{2}$/.test(cc) ? cc : 'US'
   };
+  /* Every payment path funnels through here, so this is the one honest place
+     to remember what the buyer typed — including guests, who have no account
+     for us to read it back from. */
+  saveCheckoutProfile(checkout);
+  return checkout;
+}
+
+/* ============================================================
+   CHECKOUT AUTOFILL
+   Nobody should retype an address we already hold. Three sources,
+   weakest first so the better one overwrites it:
+     1. the details this browser last checked out with (guests too),
+     2. the signed-in account's name + email,
+     3. the shipping address on that account's most recent order.
+   A field the buyer has already typed is never touched, and nothing
+   here blocks the page — if the account lookup is slow or offline
+   the form simply stays as it was.
+   ============================================================ */
+const CHECKOUT_PROFILE_KEY = 'enl_checkout_profile';
+
+/* Contact + address only. Never the tick-boxes, the payment choice or the
+   points redemption — those are decisions, and each order gets its own. */
+function saveCheckoutProfile(checkout) {
+  if (!checkout || !checkout.email) return;
+  try {
+    localStorage.setItem(CHECKOUT_PROFILE_KEY, JSON.stringify({
+      email: checkout.email,
+      name: checkout.name,
+      institution: checkout.institution,
+      researchField: checkout.researchField,
+      address: checkout.address,
+      city: checkout.city,
+      state: checkout.state,
+      postalCode: checkout.postalCode,
+      countryCode: checkout.countryCode,
+      savedAt: new Date().toISOString()
+    }));
+  } catch (e) { /* private mode / storage full — autofill is a convenience */ }
+}
+
+function readCheckoutProfile() {
+  try { return JSON.parse(localStorage.getItem(CHECKOUT_PROFILE_KEY) || 'null'); }
+  catch (e) { return null; }
+}
+
+/* "Jane Q Doe" → { firstName: 'Jane', lastName: 'Q Doe' }. The form asks for
+   two names, the order stores one string; the split has to go back the way
+   collectCheckout joined it. */
+function splitName(full) {
+  const parts = String(full || '').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return { firstName: '', lastName: '' };
+  return { firstName: parts[0], lastName: parts.slice(1).join(' ') };
+}
+
+/* Write values into empty fields. Returns how many actually landed, so the
+   caller knows whether to say anything to the buyer. */
+function fillCheckoutFields(form, data) {
+  if (!form || !data) return 0;
+  let filled = 0;
+  Object.keys(data).forEach(name => {
+    const value = String(data[name] == null ? '' : data[name]).trim();
+    if (!value) return;
+    const el = form.elements[name];
+    if (!el || el.value.trim()) return;   // already typed → leave it alone
+    /* A <select> can only hold one of its own options. An address whose state
+       or research field isn't on our list is silently skipped rather than
+       jammed in, which would leave the control showing nothing. */
+    if (el.tagName === 'SELECT' && !Array.prototype.some.call(el.options, o => o.value === value)) return;
+    el.value = value;
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    filled++;
+  });
+  return filled;
+}
+
+/* Flatten either shape (a saved profile or an order's shippingAddress) into
+   the form's field names. */
+function checkoutFieldsFrom(src) {
+  if (!src) return null;
+  const { firstName, lastName } = splitName(src.name);
+  return {
+    email: src.email || '',
+    firstName,
+    lastName,
+    institution: src.institution || '',
+    researchField: src.researchField || '',
+    address: src.address || '',
+    city: src.city || '',
+    state: src.state || '',
+    postalCode: src.postalCode || '',
+    country: src.countryCode || src.country || ''
+  };
+}
+
+function checkoutAutofillNote(text) {
+  const form = document.getElementById('checkoutForm');
+  if (!form) return;
+  let note = document.getElementById('checkoutAutofillNote');
+  if (!note) {
+    note = document.createElement('p');
+    note.id = 'checkoutAutofillNote';
+    note.className = 'autofill-note';
+    note.setAttribute('role', 'status');
+    form.insertBefore(note, form.firstElementChild);
+  }
+  note.innerHTML = '';
+  note.append(text + ' ');
+  const clear = document.createElement('button');
+  clear.type = 'button';
+  clear.className = 'autofill-clear';
+  clear.textContent = 'Clear and start fresh';
+  clear.addEventListener('click', () => {
+    ['email', 'firstName', 'lastName', 'institution', 'researchField',
+      'address', 'city', 'state', 'postalCode'].forEach(name => {
+      const el = form.elements[name];
+      if (el) el.value = '';
+    });
+    try { localStorage.removeItem(CHECKOUT_PROFILE_KEY); } catch (e) {}
+    note.remove();
+    const email = form.elements['email'];
+    if (email) email.focus();
+  });
+  note.appendChild(clear);
+}
+
+async function initCheckoutAutofill(form) {
+  if (!form) return;
+  let filled = 0;
+  let fromAccount = false;
+
+  // 1. what this browser last used — instant, and the only source a guest has
+  filled += fillCheckoutFields(form, checkoutFieldsFrom(readCheckoutProfile()));
+
+  // 2. the signed-in account's own name and email
+  let user = null;
+  try { user = JSON.parse(localStorage.getItem('enl_user') || 'null'); } catch (e) {}
+  if (user) {
+    fromAccount = true;
+    filled += fillCheckoutFields(form, {
+      email: user.email || '',
+      firstName: user.firstName || '',
+      lastName: user.lastName || ''
+    });
+  }
+
+  if (filled) checkoutAutofillNote(fromAccount
+    ? 'Filled in from your account — check it\'s still right.'
+    : 'Filled in from your last order on this device — check it\'s still right.');
+
+  // 3. the address on the most recent order, for everything the account can't say
+  let token = '';
+  try { token = localStorage.getItem('enl_token') || ''; } catch (e) {}
+  if (!token) return;
+  let orders = [];
+  try {
+    const res = await fetch(API_BASE + '/api/orders', { headers: authHeader() });
+    if (!res.ok) return;
+    const data = await res.json().catch(() => ({}));
+    orders = Array.isArray(data.orders) ? data.orders : [];
+  } catch (e) { return; }   // offline → whatever we already filled in stands
+
+  const recent = orders.find(o => o && o.shippingAddress && o.shippingAddress.address);
+  if (!recent) return;
+  const more = fillCheckoutFields(form, checkoutFieldsFrom(recent.shippingAddress));
+  if (more || filled) checkoutAutofillNote('Filled in from your account — check it\'s still right.');
 }
 
 /* ============================================================
@@ -3221,6 +3386,9 @@ function initCheckoutPage() {
 
   // a checkout form should never reload the page on Enter
   form.addEventListener('submit', e => e.preventDefault());
+
+  // Everything we already know about this buyer, back in the boxes.
+  initCheckoutAutofill(form);
 
   // clear a field's error as the user fixes it
   form.querySelectorAll('.form-field input, .form-field select, .form-field textarea').forEach(inp => {
