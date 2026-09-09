@@ -21,6 +21,7 @@ const { buildOrder } = require('./pricing.js');
 const promotions = require('./promotions.js');
 const btcpay = require('./btcpay.js');
 const zelle = require('./zelle.js');
+const finagy = require('./finagy.js');
 const auth = require('./auth.js');
 const store = require('./store.js');
 const loyalty = require('./loyalty.js');
@@ -68,6 +69,11 @@ app.get('/api/health', (req, res) => res.json({
   ok: true,
   crypto: btcpay.CONFIGURED,      // BTCPay (Bitcoin / Lightning) ready?
   zelle: zelle.CONFIGURED,        // Zelle (manual bank transfer) ready?
+  ach: finagy.CONFIGURED,         // Finagy / AllayPay bank debit ready?
+  /* True only while ACH is pointed at Finagy's test host. The checkout says so
+     on the button, because a staging debit looks identical to a real one right
+     up until the money doesn't arrive. */
+  achSandbox: finagy.CONFIGURED && !finagy.IS_PRODUCTION,
   auth: true,                     // email/password accounts always available
   email: mailer.CONFIGURED,       // reset + welcome emails (Gmail SMTP) ready?
   /* Is there an inbox for owner alerts (new order, paid, underpaid)? Without
@@ -93,7 +99,8 @@ app.get('/api/health', (req, res) => res.json({
     stockCounts: true,            // PATCH /api/products/:id/stock exists
     orderLookup: true,            // POST /api/orders/lookup exists (guest order status)
     outreach: true,               // POST /api/outreach/run exists (nudges + stock alerts)
-    disputes: true                // customer dispute threads exist (support.html)
+    disputes: true,               // customer dispute threads exist (support.html)
+    ach: true                     // POST /api/ach/checkout + /confirm + /poll exist
   }
 }));
 
@@ -313,6 +320,13 @@ function buildDeclarations(raw, req) {
   };
 }
 
+/* The 50 states plus DC — everywhere this store ships. Deliberately excludes
+   the territories (PR, VI, GU, AS, MP): they are US postal destinations but
+   carry their own shipping rates and customs paperwork, and nobody has priced
+   them. Adding one means adding a rate, not just a code. */
+const US_STATES = new Set(('AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI ' +
+  'MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY').split(' '));
+
 function assertUsShipping(shipping) {
   const raw = String((shipping && (shipping.countryCode || shipping.country)) || '')
     .trim().toUpperCase();
@@ -321,6 +335,28 @@ function assertUsShipping(shipping) {
   }
   if (!US_COUNTRY.test(raw)) {
     throw new Error('We ship within the United States only. Please use a U.S. delivery address.');
+  }
+
+  /* The state has to be a real USPS code, not merely non-empty.
+
+     Checking "is the country US" and then accepting any text for the state let
+     a Philippine province through a US-only checkout, and the damage surfaced
+     two systems downstream: our ACH processor truncates the state to two
+     characters, rejects "BA" as not a state, and the buyer sees an unexplained
+     failure on a page we do not control. A US-only store should say so HERE,
+     in words, at the moment the address is entered.
+
+     Not a duplicate of the dropdown in checkout.html — that dropdown is a
+     convenience for honest buyers and nothing at all to anyone posting
+     straight at the API. */
+  const state = String((shipping && shipping.state) || '').trim().toUpperCase();
+  if (!state) {
+    throw new Error('Please select the U.S. state for your delivery address.');
+  }
+  if (!US_STATES.has(state)) {
+    const shown = String((shipping && shipping.state) || '').trim().slice(0, 40);
+    throw new Error(`"${shown}" is not a U.S. state. We ship to the 50 states and ` +
+      `Washington DC only — please choose your state from the list.`);
   }
 }
 
@@ -1089,16 +1125,30 @@ function findOpenTwin({ userId, email, order, now }) {
 function duplicateOrderResponse(twin) {
   const due = amountDue(twin);
   const short = String(twin.status).toLowerCase() === 'underpaid';
+  /* An unpaid ACH order can be picked up where it was left off — its session
+     key expires in five minutes, so being sent back to it is the NORMAL case,
+     not an edge one. Telling that buyer to "check your email" would be a lie:
+     the bank-payment email describes a debit in flight, and before the resume
+     link existed there was genuinely nowhere for them to go. */
+  const resumable = canResumeAch(twin);
   return {
     error: short
       ? `You already have an order for these items (${twin.orderId}) with $${due.toFixed(2)} still to pay. ` +
         `Pay the balance on that one instead — a second order would bill you for the whole cart again.`
-      : `You already have an order for these items (${twin.orderId}) waiting to be paid. ` +
-        `Finish that one — the payment details are in your email — rather than starting a second.`,
+      : resumable
+        ? `You already have an order for these items (${twin.orderId}) waiting to be paid. ` +
+          `Pick that one up where you left off rather than starting a second.`
+        : `You already have an order for these items (${twin.orderId}) waiting to be paid. ` +
+          `Finish that one — the payment details are in your email — rather than starting a second.`,
     duplicateOf: twin.orderId,
     orderStatus: twin.status,
     due,
-    payUrl: canPayBalance(twin) ? payLinkFor(twin.orderId) : '',
+    payUrl: canPayBalance(twin) ? payLinkFor(twin.orderId)
+      : resumable ? achResumeLink(twin.orderId) : '',
+    // Which kind of "finish it" this is, so the browser can word its prompt
+    // honestly: paying a shortfall and restarting a bank form are not the same
+    // action, and neither is "go and read your email".
+    payKind: canPayBalance(twin) ? 'balance' : resumable ? 'ach-resume' : '',
     // The browser may offer to place it anyway; the server does not decide for
     // a buyer who really does want two.
     canPlaceAnyway: true
@@ -2142,6 +2192,605 @@ app.post('/api/zelle/checkout', auth.requireAuth, async (req, res) => {
   } catch (err) {
     console.error('[zelle checkout] failed:', err.message);
     res.status(err.status === 409 ? 409 : 400).json({ error: err.message });
+  }
+});
+
+/* ============================================================
+   ACH CHECKOUT — bank debit through Finagy (AllayPay's processor)
+
+   The third rail, and the one that behaves least like the others.
+   A card authorizes in a second and a crypto invoice settles in
+   minutes; an ACH debit is a request that the buyer's bank may
+   honour tonight, in three days, or never — and may reverse up to
+   60 days after it clears.
+
+   So there are three moving parts here, not one:
+
+     /api/ach/checkout   prices the cart, opens the order `pending`,
+                         and mints a 5-minute Finagy session key
+     /api/ach/confirm    the buyer came back from Finagy's page. We
+                         record WHICH transaction is ours. We do not
+                         believe anything else it says.
+     /api/ach/poll       the cron job that actually decides. Asks
+                         Finagy for the real status of every open ACH
+                         order and moves it: settled → paid, returned
+                         → returned, voided → cancelled.
+
+   Why /confirm is not allowed to mark an order paid: Finagy sends the
+   buyer back with the result in QUERY PARAMETERS, unsigned. Anyone
+   who can read their own URL bar can replay it with code=200 against
+   somebody else's reference. Even an honest redirect says
+   status=PENDING, because at that instant the money genuinely has not
+   moved. The only trustworthy answer comes from asking Finagy
+   directly, server to server, which is what the poller does.
+
+   Nothing ships before Finagy reports status 16 (Settled).
+   ============================================================ */
+
+/* Where Finagy sends the buyer back to. Their `redirectSuccess` and
+   `redirectFail` fields are capped at 64 characters — short enough that a long
+   site URL plus a query string will not fit, so the order reference is NOT
+   carried here. The browser already knows it, and hands it to /api/ach/confirm
+   itself. */
+function achReturnUrls(req) {
+  const base = (process.env.SITE_URL || req.headers.origin || '').replace(/\/+$/, '');
+  if (!base) throw new Error('SITE_URL is not set, so there is nowhere for Finagy to send the buyer back to.');
+  return {
+    redirectSuccess: `${base}/checkout.html?paid=ach`,
+    redirectFail: `${base}/checkout.html?ach=cancelled`
+  };
+}
+
+/* An ACH order that never became a transaction. The buyer reached Finagy's
+   page and closed it, or the session key aged out while they looked for their
+   checkbook. Its stock and points are held against a payment that will never
+   arrive, so after this long they go back. Generous on purpose: a real buyer
+   fetching bank details from another room is a normal reason to be slow. */
+const ACH_ABANDON_HOURS = Number(process.env.ACH_ABANDON_HOURS || 6);
+
+/* ---- open an ACH payment for the (server-priced) cart ---- */
+app.post('/api/ach/checkout', auth.requireAuth, async (req, res) => {
+  if (!finagy.CONFIGURED) {
+    return res.status(500).json({ error: 'Bank payments are not set up yet (missing FINAGY_* keys in server/.env).' });
+  }
+  try {
+    const body = req.body || {};
+    assertResearchDetails(body.shipping);
+    assertUsShipping(body.shipping);                            // ACH is a US-only network
+    const webAuthorization = buildWebAuthorization(body.webAuthorization, req);
+    const declarations = buildDeclarations(body.declarations, req);
+
+    /* Points behave exactly as they do on crypto: folded into the amount, and
+       HELD now. Unlike Zelle there is a real amount under our control here, so
+       there is something for a discount to reduce. */
+    const discount = plannedDiscount(req.user, body.pointsToRedeem);
+    const order = buildOrder(body.items, { discount, shippingMethod: body.shippingMethod });
+
+    const buyerEmail = body.email || req.user.email;
+
+    if (!body.allowDuplicate) {
+      const twin = findOpenTwin({ userId: req.user.id, email: buyerEmail, order });
+      if (twin) return res.status(409).json(duplicateOrderResponse(twin));
+    }
+
+    const urls = achReturnUrls(req);
+    const orderId = newOrderId();
+
+    // Same rule as every other method: take the stock synchronously, before the
+    // first await, and put it back if anything after this point fails.
+    const stockReserved = reserveOrderStock(order);
+
+    let session;
+    try {
+      /* Minted as late as possible — it is only valid for five minutes and the
+         buyer still has a bank page to fill in. */
+      session = await finagy.createSessionKey(order.total);
+    } catch (e) {
+      releaseOrderStock(null, stockReserved);
+      throw e;
+    }
+
+    let hpp;
+    try {
+      hpp = finagy.hppConfig({
+        sessionKey: session.sessionKey,
+        orderId,
+        shipping: body.shipping,
+        email: buyerEmail,
+        redirectSuccess: urls.redirectSuccess,
+        redirectFail: urls.redirectFail
+      });
+    } catch (e) {
+      releaseOrderStock(null, stockReserved);
+      throw e;
+    }
+
+    const pointsRedeemed = reserveLoyaltyPoints(req.user.id, order, orderId);
+    try {
+      store.addOrder(req.user.id, buildOrderRecord({
+        orderId, order, method: 'ach', status: 'pending',
+        email: buyerEmail, shipping: body.shipping,
+        pointsRedeemed, stockReserved, webAuthorization, declarations
+      }));
+      /* What Finagy knows about this order, kept apart from the order fields so
+         a reconcile can see the gateway's own view without guessing. `achStatus`
+         is our name for their numeric status; it stays 'opened' until the
+         poller hears otherwise. */
+      store.updateOrderStatus(orderId, null, {
+        achStatus: 'opened',
+        achSessionKey: session.sessionKey,
+        achSandbox: !finagy.IS_PRODUCTION,
+        achOpenedAt: new Date().toISOString()
+      });
+      store.clearCart(req.user.id);
+    } catch (e) {
+      console.error('[ach checkout] could not save order:', e.message);
+      releaseOrderStock(null, stockReserved);
+      return res.status(500).json({ error: 'We could not record your order. Nothing has been debited — please try again.' });
+    }
+
+    res.status(201).json({
+      success: true,
+      orderId,
+      total: order.total,
+      discount: order.discount,
+      pointsRedeemed,
+      sandbox: !finagy.IS_PRODUCTION,
+      scriptUrl: finagy.HPP_SCRIPT,
+      /* Safe to hand to the browser: the session key is single-use, expires in
+         five minutes and is already bound server-side to an amount the browser
+         cannot change. The API key never leaves this process. */
+      hpp
+    });
+
+    sendAchOpenedEmail({ email: buyerEmail, orderId, order })
+      .catch(err => console.error('[ach email] failed:', err.message));
+    notifyAdminOfAchOrder({ orderId, order, email: buyerEmail })
+      .catch(err => console.error('[ach admin-notify] failed:', err.message));
+  } catch (err) {
+    console.error('[ach checkout] failed:', err.message);
+    res.status(err.status === 409 ? 409 : 400).json({ error: err.message });
+  }
+});
+
+/* ---- the buyer came back from Finagy's hosted page ----
+
+   This route exists to learn ONE fact the poller cannot: Finagy's own
+   transaction id (`payment_id`), which arrives only in the redirect. Storing it
+   makes every later lookup exact instead of hopeful.
+
+   Everything else in the query string is treated as a claim by an untrusted
+   party, because that is what it is. The order's status is set from what
+   Finagy tells us server-side, never from `code` or `status`. */
+app.post('/api/ach/confirm', auth.requireAuth, async (req, res) => {
+  if (!finagy.CONFIGURED) return res.status(400).json({ error: 'Bank payments are not configured on this server.' });
+  try {
+    const { orderId, paymentId, sessionKey } = req.body || {};
+    const found = ownOrder(req.user.id, orderId);
+    if (!found) return res.status(404).json({ error: 'No such order on this account.' });
+    if (found.method !== 'ach') return res.status(400).json({ error: 'That order was not placed with a bank payment.' });
+
+    /* Bind the redirect to the session key we minted for this order. Without
+       it, a stray payment_id could be pinned onto somebody else's reference. */
+    if (sessionKey && found.achSessionKey && sessionKey !== found.achSessionKey) {
+      return res.status(400).json({ error: 'That payment does not belong to this order.' });
+    }
+
+    const patch = { achReturnedAt: new Date().toISOString() };
+    if (paymentId) patch.transactionId = String(paymentId).slice(0, 64);
+    store.updateOrderStatus(orderId, null, patch);
+
+    // Ask Finagy what is actually true, and act on that alone.
+    const view = await syncAchOrder({ ...found, ...patch });
+    res.json({
+      success: true,
+      orderId,
+      status: view.orderStatus,
+      achStatus: view.achStatus,
+      // Plain English for the confirmation screen — "pending" is the honest
+      // answer here and the buyer needs to understand why.
+      settled: view.orderStatus === 'paid'
+    });
+  } catch (err) {
+    console.error('[ach confirm] failed:', err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+/* ---- resume an unpaid ACH order ----
+
+   A Finagy session key lives FIVE MINUTES. That is long enough to fill in a
+   bank form and no longer, and every ordinary interruption outlasts it: going
+   to find a chequebook, an emailed identity code, a phone ringing. When it
+   expires the buyer is stranded — their order is open and holding stock, the
+   checkout refuses a duplicate, and (before this route existed) there was
+   nowhere at all to go. The first sandbox test walked straight into it.
+
+   So this is the ACH twin of pay.html: a link that does not go stale, because
+   it mints a NEW session key every time it is opened. The token is an HMAC of
+   the order reference — the same scheme the crypto balance link uses — so it
+   works from an email, with no sign-in, for orders raised before this existed.
+
+   It deliberately refuses an order that is already paid or dead: reopening one
+   of those is how a buyer pays twice. */
+/* optionalAuth, not requireAuth: the emailed link has to work for someone who
+   is not signed in — that is the whole point of it — while a signed-in buyer
+   who never opened the email is recognised by their account instead. */
+app.post('/api/ach/:orderId/resume', optionalAuth, async (req, res) => {
+  if (!finagy.CONFIGURED) return res.status(400).json({ error: 'Bank payments are not configured on this server.' });
+  try {
+    /* Either proof of ownership will do: the signed link from the email, or a
+       signed-in account that owns the order. */
+    const orderId = String(req.params.orderId || '');
+    const signed = orderFromPayToken(req);
+    const owned = !signed && req.user ? ownOrder(req.user.id, orderId) : null;
+    const order = signed || owned;
+    if (!order) return res.status(404).json({ error: 'That payment link is not valid.' });
+    if (order.method !== 'ach') return res.status(400).json({ error: 'That order was not placed with a bank payment.' });
+
+    const status = String(order.status || '').toLowerCase();
+    if (status === 'paid') return res.status(409).json({ error: 'That order is already paid — there is nothing left to pay.' });
+    if (!['pending', 'awaiting_payment'].includes(status)) {
+      return res.status(409).json({ error: `That order is ${status} and can no longer be paid. Please place a new one.` });
+    }
+    /* Money already on its way is not a payment to restart. Only an order that
+       never got as far as a transaction can be resumed; anything Finagy has
+       actually seen would be a second debit for the same goods. */
+    if (order.transactionId || !['opened', 'not_found', ''].includes(String(order.achStatus || ''))) {
+      return res.status(409).json({
+        error: 'A bank payment for this order is already in progress. It clears in 1–3 business days — please don\'t start another.'
+      });
+    }
+
+    /* Our own record is not enough to answer "has a transaction been raised?".
+
+       A buyer bounced to redirectFail never passes through /confirm, so
+       `transactionId` stays empty here while Finagy may already hold a real
+       transaction against this reference. That is exactly what the first
+       successful live run produced: the order still read achStatus 'opened'
+       locally while Finagy had authorizationId 639245064869527503 at status 1.
+
+       Resuming in that state would send the SAME clientReferenceId again, and
+       a uniqueTranId must be unique -- 'value must be unique. Otherwise, error
+       code 4: Transaction is duplicated will be returned.' The buyer would get
+       a dead page and no explanation for it.
+
+       So ask Finagy rather than ourselves. syncAchOrder both answers the
+       question and files what it learns, so the order stops misreporting its
+       own state either way. */
+    const known = await syncAchOrder(order);
+    if (!['opened', 'not_found'].includes(known.achStatus)) {
+      const fresh = findOrder(order.orderId) || order;
+      const what = known.achStatus === 'invalidated' ? 'was rejected'
+        : (known.achStatus === 'returned' || known.achStatus === 'late_return') ? 'was returned by the bank'
+        : 'is ' + String(known.achStatus).replace(/_/g, ' ');
+      return res.status(409).json({
+        error: fresh.status === 'paid'
+          ? 'That order is already paid — there is nothing left to pay.'
+          : 'A bank payment was already submitted for this order and it ' + what + '. ' +
+            'That order reference cannot be reused — please place a new order.',
+        achStatus: known.achStatus,
+        orderStatus: fresh.status
+      });
+    }
+
+    const urls = achReturnUrls(req);
+    const session = await finagy.createSessionKey(order.total);
+    const hpp = finagy.hppConfig({
+      sessionKey: session.sessionKey,
+      orderId: order.orderId,
+      shipping: order.shippingAddress,
+      email: order.email,
+      redirectSuccess: urls.redirectSuccess,
+      redirectFail: urls.redirectFail
+    });
+    // The key on the order is replaced, so /confirm validates against the live
+    // one rather than the dead key the buyer first walked away from.
+    store.updateOrderStatus(order.orderId, null, {
+      achSessionKey: session.sessionKey,
+      achOpenedAt: new Date().toISOString()      // restart the abandon clock too
+    });
+
+    res.json({
+      success: true,
+      orderId: order.orderId,
+      total: order.total,
+      sandbox: !finagy.IS_PRODUCTION,
+      scriptUrl: finagy.HPP_SCRIPT,
+      hpp
+    });
+  } catch (err) {
+    console.error('[ach resume] failed:', err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+/* The un-expiring link to that route. Handed to the buyer in the "bank payment
+   started" email and in the duplicate-order refusal, which is precisely where
+   somebody needs it. */
+function achResumeLink(orderId) {
+  return `${SITE()}/checkout.html?resume=${encodeURIComponent(orderId)}&t=${auth.refToken('pay', orderId)}`;
+}
+
+/* Can this order actually be picked up again? Only while nothing has been
+   submitted to Finagy for it — see the same reasoning in the route above. */
+function canResumeAch(order) {
+  return Boolean(order) &&
+    order.method === 'ach' &&
+    ['pending', 'awaiting_payment'].includes(String(order.status || '').toLowerCase()) &&
+    !order.transactionId &&
+    ['opened', 'not_found', ''].includes(String(order.achStatus || ''));
+}
+
+/* ---- ask Finagy about one order, and move it if the answer changed ----
+
+   The single place an ACH order's fate is decided. Called from /confirm (once,
+   optimistically) and from the poller (repeatedly, until it settles).
+
+   Returns { orderStatus, achStatus, changed } — it never throws for a
+   transaction Finagy has not heard of yet, because "not found" is the normal
+   state for the first minute after a redirect. */
+async function syncAchOrder(order) {
+  const orderId = order.orderId;
+  const out = { orderStatus: order.status, achStatus: order.achStatus || 'opened', changed: false };
+
+  let view;
+  try {
+    view = await finagy.retrieveTransaction({
+      authorizationId: order.transactionId || undefined,
+      uniqueTranId: order.transactionId ? undefined : orderId
+    });
+  } catch (e) {
+    /* A 404 is an answer, not a failure: the transaction does not exist yet (or
+       never will). Anything else is Finagy being unreachable, and an
+       unreachable gateway must never look like a dead order. */
+    if (e.status !== 404) throw e;
+    view = { found: false, status: 0, statusName: 'not_found' };
+  }
+
+  if (!view.found) {
+    /* Never started, or too early to tell. Only time distinguishes the two, so
+       an order that has sat here past the abandon window gets its stock and
+       points back — held inventory is a cost paid by the next buyer. */
+    const opened = new Date(order.achOpenedAt || order.createdAt || 0).getTime();
+    const ageHours = (Date.now() - opened) / 3_600_000;
+    if (order.status === 'pending' && ageHours > ACH_ABANDON_HOURS) {
+      store.updateOrderStatus(orderId, 'cancelled', {
+        achStatus: 'abandoned',
+        cancelledReason: 'The bank payment was never started.'
+      });
+      releaseOrderStock(orderId);
+      refundReservedPoints(orderId);
+      out.orderStatus = 'cancelled';
+      out.achStatus = 'abandoned';
+      out.changed = true;
+    }
+    return out;
+  }
+
+  out.achStatus = view.statusName;
+  const patch = {
+    achStatus: view.statusName,
+    achStatusCode: view.status,
+    achCheckedAt: new Date().toISOString(),
+    ...(view.authorizationId ? { transactionId: view.authorizationId } : {}),
+    ...(view.returnCode ? { achReturnCode: view.returnCode } : {})
+  };
+
+  // --- settled: the money is in the bank. This, and only this, is payment.
+  if (view.settled && order.status !== 'paid') {
+    markOrderPaid(orderId, { ...patch, paidAmount: view.amount || order.total, achSettledAt: new Date().toISOString() });
+    out.orderStatus = 'paid';
+    out.changed = true;
+    const fresh = findOrder(orderId);
+    sendAchSettledEmail(fresh).catch(err => console.error('[ach settled email] failed:', err.message));
+    notifyAdminOfAchSettled(fresh).catch(err => console.error('[ach settled notify] failed:', err.message));
+    return out;
+  }
+
+  // --- returned: the bank pulled it back. Two very different cases.
+  if (view.returned && order.status !== 'returned') {
+    /* A plain return (status 8) never settled, so the order was never a sale:
+       give the stock and points back the way an expired invoice would.
+
+       A LATE return (24) settled first — which means the order may already be
+       packed, shipped and gone. Releasing stock there would invent inventory
+       that is physically in a box, and the money is already out of our account.
+       That one is a human problem, so it is flagged loudly and left alone. */
+    store.updateOrderStatus(orderId, 'returned', {
+      ...patch,
+      achLateReturn: Boolean(view.lateReturn),
+      returnedAt: new Date().toISOString()
+    });
+    if (!view.lateReturn) {
+      releaseOrderStock(orderId);
+      refundReservedPoints(orderId);
+    }
+    out.orderStatus = 'returned';
+    out.changed = true;
+    const fresh = findOrder(orderId);
+    notifyAdminOfAchReturn(fresh, view).catch(err => console.error('[ach return notify] failed:', err.message));
+    sendAchReturnedEmail(fresh, view).catch(err => console.error('[ach returned email] failed:', err.message));
+    return out;
+  }
+
+  // --- voided or rejected before it ever reached the bank
+  if ((view.voided || view.invalidated) && order.status !== 'cancelled' && order.status !== 'paid') {
+    store.updateOrderStatus(orderId, 'cancelled', {
+      ...patch,
+      cancelledReason: view.voided
+        ? 'The bank payment was voided before it was sent.'
+        : 'The bank payment was rejected before it was sent.'
+    });
+    releaseOrderStock(orderId);
+    refundReservedPoints(orderId);
+    out.orderStatus = 'cancelled';
+    out.achStatus = view.statusName;
+    out.changed = true;
+    return out;
+  }
+
+  // --- still moving (pending / sent to bank). Record what we learned and wait.
+  if (patch.achStatus !== order.achStatus || patch.transactionId !== order.transactionId) {
+    store.updateOrderStatus(orderId, null, patch);
+    out.changed = true;
+  } else {
+    store.updateOrderStatus(orderId, null, { achCheckedAt: patch.achCheckedAt });
+  }
+  return out;
+}
+
+/* ---- the poller ----
+
+   Finagy has no webhook, so this is the only thing that turns an ACH order into
+   a paid one. It NEEDS its own scheduled ping (same as /api/outreach/run —
+   see docs/ALLAYPAY-ACH.md). Without it, every bank payment sits at `pending`
+   forever while the money quietly lands in the account.
+
+   Runs one retrieve per open order. That is a handful of calls a day at this
+   store's volume; if it ever isn't, querySettlements() covers a whole day in
+   one call and is the upgrade path.
+
+   Also sweeps the returns feed, which catches the case a per-order retrieve
+   cannot: a return against an order whose transaction id we never captured. */
+async function runAchPoll() {
+  const summary = { checked: 0, paid: 0, returned: 0, cancelled: 0, unchanged: 0, errors: [] };
+  if (!finagy.CONFIGURED) return { ...summary, skipped: 'not configured' };
+
+  const open = store_listAllOrdersSafe().filter(o =>
+    o && o.method === 'ach' && ['pending', 'awaiting_payment'].includes(o.status)
+  );
+
+  for (const o of open) {
+    summary.checked++;
+    try {
+      const view = await syncAchOrder(o);
+      if (!view.changed) summary.unchanged++;
+      else if (view.orderStatus === 'paid') summary.paid++;
+      else if (view.orderStatus === 'returned') summary.returned++;
+      else if (view.orderStatus === 'cancelled') summary.cancelled++;
+    } catch (e) {
+      // One unreachable lookup must not stop the rest of the sweep.
+      console.error(`[ach poll] ${o.orderId}: ${e.message}`);
+      summary.errors.push({ orderId: o.orderId, error: e.message });
+    }
+  }
+
+  /* Late returns land against orders that are already paid and possibly
+     shipped, so they are invisible to the loop above. Finagy finalises returns
+     by 11am ET, so we ask about yesterday rather than today — asking too early
+     is how a return gets missed entirely. */
+  try {
+    const yesterday = new Date(Date.now() - 24 * 3_600_000);
+    const { returns } = await finagy.queryReturns({ start: yesterday, end: yesterday });
+    for (const r of returns) {
+      const ref = r.uniqueTranId || '';
+      const hit = ref ? findOrder(ref) : null;
+      if (!hit || hit.method !== 'ach') continue;
+      if (hit.status === 'returned') continue;
+      store.updateOrderStatus(hit.orderId, 'returned', {
+        achStatus: 'returned',
+        achReturnCode: r.returnReason || '',
+        achLateReturn: Number(r.tranStatus) === 1,   // 1 = already settled to us
+        returnedAt: new Date().toISOString()
+      });
+      // tranStatus 2 means it never settled, so nothing was ever ours to keep.
+      if (Number(r.tranStatus) === 2) {
+        releaseOrderStock(hit.orderId);
+        refundReservedPoints(hit.orderId);
+      }
+      summary.returned++;
+      const fresh = findOrder(hit.orderId);
+      notifyAdminOfAchReturn(fresh, { returnCode: r.returnReason || '', lateReturn: Number(r.tranStatus) === 1 })
+        .catch(err => console.error('[ach return notify] failed:', err.message));
+    }
+  } catch (e) {
+    console.error('[ach poll] returns sweep failed:', e.message);
+    summary.errors.push({ scope: 'returns', error: e.message });
+  }
+
+  return summary;
+}
+
+/* Same guard as the auto-ship and outreach triggers: the scheduled pinger or
+   an admin pressing the button. */
+app.post('/api/ach/poll', requireCron, async (req, res) => {
+  const started = Date.now();
+  try {
+    const summary = await runAchPoll();
+    res.json({ success: true, ...summary, ms: Date.now() - started });
+  } catch (err) {
+    console.error('[ach poll] run failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ---- admin: is ACH actually wired up, and to which environment? ----
+   "Configured" and "working" are different claims, and only one of them can be
+   answered from environment variables. */
+app.get('/api/admin/ach', requireAdmin, async (req, res) => {
+  const out = {
+    configured: finagy.CONFIGURED,
+    baseUrl: finagy.BASE_URL,
+    production: finagy.IS_PRODUCTION,
+    clientName: finagy.CLIENT_NAME,
+    secCode: finagy.SEC_CODE,
+    paymentMethod: finagy.PAYMENT_METHOD,
+    /* Which credential shape is in use — the header Finagy issued, or one
+       assembled from the parts. The source only; never the value. */
+    credentialSource: finagy.CREDENTIAL_SOURCE,
+    abandonHours: ACH_ABANDON_HOURS,
+    cron: !!CRON_KEY
+  };
+  if (!finagy.CONFIGURED) return res.json({ ...out, ok: false, error: 'Set FINAGY_BASIC_TOKEN, or FINAGY_USER_ID + FINAGY_API_KEY.' });
+  try {
+    await finagy.ping();
+    res.json({ ...out, ok: true });
+  } catch (e) {
+    res.json({ ...out, ok: false, status: e.status || 0, error: e.message });
+  }
+});
+
+/* ---- admin: refund or void one ACH order ----
+   Void and refund are not interchangeable, and Finagy decides which is even
+   possible from how far the transaction has travelled: void only works before
+   the bank sees it, refund only after. We try the one that fits and say
+   plainly which happened. */
+app.post('/api/admin/ach/:orderId/refund', requireAdmin, async (req, res) => {
+  if (!finagy.CONFIGURED) return res.status(400).json({ error: 'Bank payments are not configured on this server.' });
+  const order = findOrder(req.params.orderId);
+  if (!order) return res.status(404).json({ error: 'No order by that reference.' });
+  if (order.method !== 'ach') return res.status(400).json({ error: 'That order was not paid by bank debit.' });
+  if (!order.transactionId) return res.status(400).json({ error: 'That order has no Finagy transaction to reverse.' });
+
+  try {
+    const view = await finagy.retrieveTransaction({ authorizationId: order.transactionId });
+    /* Statuses 2 (pending) and 1 (invalidated) are still in our batch, so a
+       void is both possible and free. Anything at the bank or beyond needs a
+       credit raising instead. */
+    const canVoid = view.status === 2;
+    const result = canVoid
+      ? { ...(await finagy.voidTransaction(order.transactionId)), action: 'void' }
+      : { ...(await finagy.refundTransaction(order.transactionId)), action: 'refund' };
+
+    if (!result.successful) return res.status(400).json({ error: result.message || 'Finagy refused the reversal.' });
+
+    store.updateOrderStatus(order.orderId, 'cancelled', {
+      achStatus: canVoid ? 'voided' : 'refunded',
+      refundedAt: new Date().toISOString(),
+      refundedBy: (req.user && req.user.email) || 'admin',
+      cancelledReason: canVoid ? 'Bank payment voided before it was sent.' : 'Bank payment refunded.'
+    });
+    /* A void means the goods were never sold, so they go back on the shelf. A
+       refund of a settled debit is a returned sale — the money goes back, but
+       whether the vials do is a physical question nobody in this process can
+       answer, so the count is left for a human. */
+    if (canVoid) { releaseOrderStock(order.orderId); refundReservedPoints(order.orderId); }
+
+    res.json({ success: true, action: result.action, message: result.message || '' });
+  } catch (err) {
+    console.error('[ach refund] failed:', err.message);
+    res.status(err.status === 404 ? 404 : 400).json({ error: err.message });
   }
 });
 
@@ -3856,6 +4505,200 @@ async function notifyAdminOfZelleOrder({ orderId, order, email, instructions }) 
   });
 }
 
+/* ---- emails around an ACH (bank debit) order ----
+
+   ACH's whole difficulty is time. The buyer authorizes a debit and then
+   nothing visible happens for days, which reads exactly like a failed
+   checkout. These four emails exist to make the waiting legible: what was
+   authorized, when it cleared, and — the one nobody enjoys — when their bank
+   sent it back. */
+
+/* What each NACHA return code actually means to the person reading it. Only
+   the ones a consumer WEB debit realistically produces; anything else falls
+   back to the raw code, because a wrong explanation is worse than none. */
+const ACH_RETURN_REASONS = {
+  R01: 'there weren’t enough funds in the account at the time',
+  R02: 'the account has been closed',
+  R03: 'the account number couldn’t be found',
+  R04: 'the account number wasn’t valid',
+  R05: 'the bank flagged the debit as unauthorized',
+  R07: 'the authorization was revoked',
+  R08: 'a stop payment was placed on it',
+  R09: 'the funds hadn’t cleared yet',
+  R10: 'the account holder told their bank they didn’t authorize it',
+  R16: 'the account is frozen',
+  R20: 'the account doesn’t accept this kind of payment'
+};
+
+function achReturnReason(code) {
+  return ACH_RETURN_REASONS[String(code || '').toUpperCase()] || '';
+}
+
+/* The buyer authorized a debit and is now looking at a page that says
+   "pending". This says why, and roughly for how long. */
+async function sendAchOpenedEmail({ email, orderId, order }) {
+  if (!mailer.CONFIGURED || !email) return;
+  const total = Number(order.total || 0).toFixed(2);
+  const items = (order.items || []).map(i => `${i.quantity}× ${i.name}`).join(', ');
+  /* This email goes out the moment the order opens, which is BEFORE the buyer
+     has finished on Finagy's page — and their session key dies five minutes
+     later. So for anyone who got interrupted, this is the only route back in.
+     The link mints a fresh key each time it is opened, so it cannot go stale
+     in an inbox. */
+  const resume = achResumeLink(orderId);
+  return mailer.sendMail({
+    to: email,
+    subject: `Bank payment started — Ever Nova Life order ${orderId}`,
+    text: `Thanks for your order.\n\n` +
+      `You authorized a bank debit of $${total} for order ${orderId}.\n\n` +
+      `Bank transfers are not instant. Your bank normally releases the funds within 1-3 business days, ` +
+      `and we ship as soon as the money actually clears — not before. You'll get an email the moment it does.\n\n` +
+      `Items: ${items}\nOrder reference: ${orderId}\n\n` +
+      `DIDN'T FINISH? If the payment page closed or timed out before you confirmed, pick it up here:\n` +
+      `${resume}\n\n` +
+      `Please don't start a second payment; if anything looks wrong, reply to this email and quote ${orderId}.\n\n` +
+      `— The Ever Nova Life team`,
+    html: orderEmailHtml({
+      heading: 'Bank payment started',
+      intro: `Thanks for your order. You authorized a bank debit of <strong>$${escapeHtmlSrv(total)}</strong> for order <strong>${escapeHtmlSrv(orderId)}</strong>.`,
+      rowsHtml: `<table style="border-collapse:collapse;margin:14px 0;font-size:15px">
+        <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Order</td><td><strong>${escapeHtmlSrv(orderId)}</strong></td></tr>
+        <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Amount</td><td><strong>$${escapeHtmlSrv(total)}</strong></td></tr>
+        <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Items</td><td>${escapeHtmlSrv(items)}</td></tr>
+      </table>`,
+      extraHtml: `<p style="font-size:14px">Bank transfers are not instant. Your bank normally releases the funds within
+        <strong>1&ndash;3 business days</strong>, and we ship once the money actually clears &mdash; not before.
+        We'll email you the moment it does.</p>
+        <p style="font-size:14px"><strong>Didn't finish?</strong> If the payment page closed or timed out before you
+        confirmed, you can pick it up where you left off &mdash; this link doesn't expire:</p>
+        <p><a href="${resume}" style="display:inline-block;background:#6d28d9;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600">Finish your payment</a></p>
+        <p style="color:#6b7280;font-size:14px">Please don't start a second payment. If anything looks wrong, reply to this
+        email and quote <strong>${escapeHtmlSrv(orderId)}</strong>.</p>`
+    })
+  });
+}
+
+/* The owner can't act on this yet — nothing ships until it clears — but a
+   silent gateway is indistinguishable from a broken one, so they see it open. */
+async function notifyAdminOfAchOrder({ orderId, order, email }) {
+  const to = process.env.ADMIN_EMAIL || '';
+  if (!mailer.CONFIGURED || !to) return;
+  const items = (order.items || []).map(i => `${i.quantity}× ${i.name}`).join(', ');
+  return mailer.sendMail({
+    to,
+    subject: `Bank (ACH) payment started: ${orderId} ($${order.total.toFixed(2)})`,
+    text: `A buyer authorized a bank debit.\n\n` +
+      `Order:  ${orderId}\nTotal:  $${order.total.toFixed(2)}\nBuyer:  ${email || '(no email)'}\nItems:  ${items}\n\n` +
+      `DO NOT SHIP YET. ACH settles in 1-3 business days; the order flips to paid on its own once Finagy ` +
+      `reports it settled. If it stays pending for days, check the ACH poller is running.\n`,
+    html: orderEmailHtml({
+      heading: 'Bank (ACH) payment started',
+      intro: `A buyer authorized a bank debit. <strong>Nothing ships yet</strong> &mdash; the order marks itself paid once the money actually settles.`,
+      rowsHtml: `<table style="border-collapse:collapse;margin:14px 0;font-size:15px">
+        <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Order</td><td><strong>${escapeHtmlSrv(orderId)}</strong></td></tr>
+        <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Total</td><td><strong>$${escapeHtmlSrv(order.total.toFixed(2))}</strong></td></tr>
+        <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Buyer</td><td>${escapeHtmlSrv(email || '(no email)')}</td></tr>
+        <tr><td style="padding:4px 14px 4px 0;color:#6b7280">Items</td><td>${escapeHtmlSrv(items)}</td></tr>
+      </table>`,
+      extraHtml: `<p style="color:#6b7280;font-size:14px">If bank orders sit at <em>pending</em> for days, the ACH poller
+        (<code>POST /api/ach/poll</code>) has stopped running &mdash; nothing else moves them.</p>`
+    })
+  });
+}
+
+/* The money actually arrived. This is the one the buyer has been waiting for. */
+async function sendAchSettledEmail(order) {
+  if (!mailer.CONFIGURED || !order || !order.email) return;
+  const total = Number(order.total || 0).toFixed(2);
+  return mailer.sendMail({
+    to: order.email,
+    subject: `Payment cleared — Ever Nova Life order ${order.orderId}`,
+    text: `Good news: your bank payment of $${total} for order ${order.orderId} has cleared.\n\n` +
+      `Your order is now being prepared and will ship to the address you gave us.\n\n— The Ever Nova Life team`,
+    html: orderEmailHtml({
+      heading: 'Your bank payment cleared',
+      intro: `Your bank payment of <strong>$${escapeHtmlSrv(total)}</strong> for order <strong>${escapeHtmlSrv(order.orderId)}</strong> has cleared. Thank you!`,
+      extraHtml: `<p style="color:#6b7280;font-size:14px">Your order is now being prepared and will ship to the address you gave us.</p>`
+    })
+  });
+}
+
+/* The owner's cue to actually pack it — the first moment an ACH order is real. */
+async function notifyAdminOfAchSettled(order) {
+  const to = process.env.ADMIN_EMAIL || '';
+  if (!mailer.CONFIGURED || !to || !order) return;
+  return mailer.sendMail({
+    to,
+    subject: `ACH settled — ship ${order.orderId} ($${Number(order.total || 0).toFixed(2)})`,
+    text: `Bank payment for ${order.orderId} has settled. The money is in the account and the order is ready to ship.\n\n` +
+      `Buyer: ${order.email || '(no email)'}\n\nOpen ${SITE()}/admin.html to print the label.\n`,
+    html: orderEmailHtml({
+      heading: 'ACH settled — ready to ship',
+      intro: `Bank payment for <strong>${escapeHtmlSrv(order.orderId)}</strong> has settled. The money is in the account.`,
+      extraHtml: `<p><a href="${SITE()}/admin.html" style="display:inline-block;background:#6d28d9;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600">Open admin</a></p>`
+    })
+  });
+}
+
+/* The bank pulled it back. Said plainly, with the reason, and without accusing
+   anyone of anything — R01 is usually a timing accident, not bad faith. */
+async function sendAchReturnedEmail(order, view) {
+  if (!mailer.CONFIGURED || !order || !order.email) return;
+  const total = Number(order.total || 0).toFixed(2);
+  const code = (view && view.returnCode) || order.achReturnCode || '';
+  const why = achReturnReason(code);
+  const because = why ? ` Their reason: ${why}.` : '';
+  return mailer.sendMail({
+    to: order.email,
+    subject: `Your bank returned the payment — Ever Nova Life order ${order.orderId}`,
+    text: `Your bank returned the $${total} payment for order ${order.orderId}.${because}\n\n` +
+      `No money has been taken, and your order is on hold rather than cancelled. You can place it again with ` +
+      `a different account or another payment method at ${SITE()}/checkout.html, or reply to this email and ` +
+      `we'll sort it out with you.\n\n— The Ever Nova Life team`,
+    html: orderEmailHtml({
+      heading: 'Your bank returned the payment',
+      intro: `Your bank returned the <strong>$${escapeHtmlSrv(total)}</strong> payment for order <strong>${escapeHtmlSrv(order.orderId)}</strong>.${escapeHtmlSrv(because)}`,
+      extraHtml: `<p style="font-size:14px">No money has been taken. Your order is on hold rather than cancelled &mdash;
+        you can place it again with a different account or another payment method, or just reply to this email
+        and we'll sort it out with you.</p>
+        <p><a href="${SITE()}/checkout.html" style="display:inline-block;background:#6d28d9;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600">Try again</a></p>`
+    })
+  });
+}
+
+/* A return is the one ACH event that can need a human the same day — a LATE
+   return means money left an account we had already counted, on an order that
+   may be in a courier's van. */
+async function notifyAdminOfAchReturn(order, view) {
+  const to = process.env.ADMIN_EMAIL || '';
+  if (!mailer.CONFIGURED || !to || !order) return;
+  const code = (view && view.returnCode) || order.achReturnCode || '';
+  const late = Boolean(view && view.lateReturn) || Boolean(order.achLateReturn);
+  const why = achReturnReason(code);
+  return mailer.sendMail({
+    to,
+    subject: `${late ? 'LATE ACH RETURN' : 'ACH returned'}: ${order.orderId} ($${Number(order.total || 0).toFixed(2)})${code ? ' [' + code + ']' : ''}`,
+    text: `The bank returned the payment for ${order.orderId}.\n\n` +
+      `Reason code: ${code || '(none given)'}${why ? ' — ' + why : ''}\n` +
+      `Buyer: ${order.email || '(no email)'}\n\n` +
+      (late
+        ? `THIS IS A LATE RETURN. The payment had already SETTLED, so this order may already be packed or shipped.\n` +
+          `The money has been taken back out of the account. Stock was NOT returned automatically — check whether ` +
+          `the parcel went out before adjusting anything.\n`
+        : `It never settled, so nothing was ever ours. Stock and loyalty points have been released automatically.\n`),
+    html: orderEmailHtml({
+      heading: late ? 'LATE ACH return — needs you' : 'ACH payment returned',
+      intro: `The bank returned the payment for <strong>${escapeHtmlSrv(order.orderId)}</strong>${code ? ` (<strong>${escapeHtmlSrv(code)}</strong>${why ? ' &mdash; ' + escapeHtmlSrv(why) : ''})` : ''}.`,
+      extraHtml: late
+        ? `<p style="font-size:14px"><strong>This is a late return.</strong> The payment had already settled, so this order may
+           already be packed or shipped, and the money has now been taken back out of the account.
+           Stock was <strong>not</strong> released automatically &mdash; check whether the parcel went out first.</p>`
+        : `<p style="color:#6b7280;font-size:14px">It never settled, so nothing was ever ours. Stock and loyalty points
+           have been released automatically.</p>`
+    })
+  });
+}
+
 /* Sent when the owner confirms a manual payment — the buyer's "we got it". */
 async function sendPaymentConfirmedEmail(order) {
   if (!mailer.CONFIGURED || !order || !order.email) return;
@@ -4954,6 +5797,14 @@ if (require.main === module) {
     console.log(`\nEver Nova Life payment server`);
     console.log(`  crypto: ${btcpay.CONFIGURED ? 'BTCPay ready → ' + btcpay.BASE_URL : 'not configured (set BTCPAY_* in .env)'}`);
     console.log(`  zelle:  ${zelle.CONFIGURED ? 'ready → ' + zelle.RECIPIENT + ' (manual confirmation in admin.html)' : 'not configured (set ZELLE_RECIPIENT + ZELLE_NAME in .env)'}`);
+    /* ACH says which ENVIRONMENT as well as whether it is on: a staging debit
+       looks exactly like a real one until the money doesn't arrive. And with
+       no CRON_KEY the poller cannot be scheduled, which is the difference
+       between "bank payments work" and "bank payments never settle". */
+    console.log(`  ach:    ${finagy.CONFIGURED
+      ? (finagy.IS_PRODUCTION ? 'ready (PRODUCTION — real bank debits)' : 'ready (SANDBOX — ' + finagy.BASE_URL + ', no real money)') +
+        (CRON_KEY ? '' : ' — but no CRON_KEY, so /api/ach/poll cannot be scheduled and nothing will ever settle')
+      : 'not configured (set FINAGY_USER_ID + FINAGY_API_KEY in .env)'}`);
     console.log(`  auth:   accounts ready${auth.CONFIGURED ? '' : ' (JWT_SECRET not set — set it in .env for production)'}`);
     console.log(`  ship:   auto-ship ${CRON_KEY ? 'ready (CRON_KEY set)' : 'WITHOUT a CRON_KEY — set one so the scheduled trigger can be secured'}`);
     /* The one tunable on this server whose default is WRONG everywhere it is

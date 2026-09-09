@@ -640,7 +640,12 @@
     var orders = state.orders || [];
     // Paid counts real sales only; All is literally everything the server
     // holds, sandbox orders included, so nothing is invisible from here.
-    var cancelled = orders.filter(function (o) { return o.status === 'cancelled'; });
+    /* `returned` sits here rather than in its own tab: like a cancelled order
+       it ended without money, and unlike an open one there is no decision left
+       to make on it — the bank already decided. The row itself carries the
+       return code, and a LATE return also emails the owner directly, because
+       that one can arrive after the parcel has gone out. */
+    var cancelled = orders.filter(function (o) { return o.status === 'cancelled' || o.status === 'returned'; });
     var counts = {
       open: openOrders(orders).length,
       paid: realOrders(orders).filter(function (o) { return o.status === PAID; }).length,
@@ -688,7 +693,9 @@
           ? '<p class="adm-note">Orders whose payment window closed with nothing received, plus anything cancelled by ' +
             'hand. These <strong>did</strong> come in — the customer reached checkout and their details are below — ' +
             'they just never paid. A run of them on crypto usually means the BTCPay invoice expiry is too short for ' +
-            'an on-chain payment to land.</p>'
+            'an on-chain payment to land. A <strong>returned</strong> row is a bank debit the customer\'s bank pulled ' +
+            'back; if it was a <em>late</em> return the order had already settled and may have shipped, so check the ' +
+            'parcel before adjusting stock.</p>'
           : '') +
         ordersTable(shown, { actions: true }) +
       '</div>';

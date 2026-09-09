@@ -73,6 +73,9 @@ The server also serves the static site, so open **http://localhost:4242/checkout
 4. Serve everything over **HTTPS**.
 5. Set `CRON_KEY` and point an external scheduler at
    `POST /api/subscriptions/run-due` so auto-ship invoices go out.
+6. If ACH is on, point the same scheduler at `POST /api/ach/poll` every 30
+   minutes. **Finagy has no webhook** — that ping is the only thing that turns
+   a bank payment into a paid order. See `ALLAYPAY-ACH.md`.
 
 ## Endpoints
 
@@ -81,6 +84,11 @@ The server also serves the static site, so open **http://localhost:4242/checkout
 | POST   | `/api/crypto/checkout` | Price the cart + open a BTCPay crypto invoice    |
 | POST   | `/api/crypto/webhook`  | BTCPay → us: invoice state changes (signed)      |
 | POST   | `/api/zelle/checkout`  | Price the cart + open an unpaid Zelle order      |
+| POST   | `/api/ach/checkout`    | Price the cart + open a Finagy bank-debit session |
+| POST   | `/api/ach/confirm`     | Buyer returned from Finagy's page — verified server-side |
+| POST   | `/api/ach/poll`        | Cron: ask Finagy what settled or came back (no webhook exists) |
+| GET    | `/api/admin/ach`       | Admin: are the ACH keys live, and which environment |
+| POST   | `/api/admin/ach/:id/refund` | Admin: void (same day) or refund an ACH order |
 | GET    | `/api/orders/:id/balance` | What a short-paid order still owes (signed `?t=` link, no sign-in) |
 | POST   | `/api/orders/:id/balance/invoice` | Open a fresh crypto invoice for that difference |
 | POST   | `/api/admin/orders/:id/pay-link` | Admin: re-email the buyer their pay-the-rest link |
