@@ -47,75 +47,41 @@ the redirect takes the `payment_id` with them — without `uniqueTranId` their
 money would arrive attached to nothing, and no amount of polling would ever
 match it to an order. With it, the poller finds them anyway.
 
-### 1b. Resolved — the staging "403" was ours
+### 1b. Two bugs the live tests found — both ours, both fixed
 
-The first live sandbox attempt died on Finagy's page with a `403`, and the
-gateway banner made it look like their WAF. It was not. The browser console
-showed the real order of events:
-
-```
-POST /api/hpp/transactions/ach/bank-connect/sessions  → 400 Bad Request
-GET  test.ribbit.ai/CONNECT?...key=...                → 403
-```
-
-The 400 came first. `bank-connect/sessions` is how Finagy opens a session with
-**Ribbit**, the third-party bank-login widget behind their "User-Authenticated
-ACH Validation". Their 400 body said it plainly:
+**Blank name and zip.** `collectCheckout()` in `js/main.js` emits a COMBINED
+`name` and a `postalCode`; `hppConfig()` was reading `firstName`, `lastName`
+and `zip`. So we handed Finagy three empty fields:
 
 ```json
 {"errors":{"LastName":["'Last Name' must not be empty"]}}
 ```
 
-**Why it was empty.** `collectCheckout()` in `js/main.js` emits a COMBINED
-`name` and a `postalCode`. `hppConfig()` was reading `firstName`, `lastName`
-and `zip` — none of which the form produces. So we handed Finagy three blank
-fields. The buyer had to retype their name on Finagy's page, Zip Code stayed
-blank, the session call 400'd, and Ribbit 403'd for want of a valid key.
+That 400 came from `bank-connect/sessions`, and only *then* did Ribbit answer
+403 for want of a valid session — which is why the first failure looked like a
+gateway block rather than our own payload. Fixed with `pickName()` /
+`pickPostalCode()`, which read every spelling in use across this codebase.
 
-Fixed in `finagy.js` with `pickName()` / `pickPostalCode()`, which read every
-spelling in use across this codebase. Verified against real staging:
+**A non-US state.** "State / Region" was a free-text box on a US-only store, so
+`BASILAN` (a Philippine province) passed `assertUsShipping`, which only checked
+the *country*. Finagy truncates state to two characters, rejected `"BA"`, and
+the buyer saw nothing explaining why. Now a **dropdown** (50 states + DC) in
+checkout.html, plus a USPS check server-side — the dropdown is a convenience,
+the server check is the guard. Territories (PR, VI, GU, AS, MP) are excluded on
+purpose: US postal destinations, but nobody has priced shipping to them.
 
-```
-BEFORE  {first:"", last:"", zip:""}                    → 400
-AFTER   {first:"Mirin", last:"Kunding", zip:"43215"}   → 200  (Ribbit session id)
-```
-
-**The lesson worth keeping.** Every unit test passed throughout, because the
-fixtures were written in the shape the driver assumed rather than the shape the
-form emits. `server/test/ach.test.js` now uses the real `collectCheckout()`
-output verbatim, and asserts no field Finagy needs comes out blank.
-
-### 1c. Two more bugs the live test found — both ours, both fixed
-
-**The blank fields.** `collectCheckout()` emits a combined `name` and a
-`postalCode`; `hppConfig()` read `firstName`/`lastName`/`zip`. Finagy answered
-`400 {"errors":{"LastName":["'Last Name' must not be empty"]}}`. Fixed with
-`pickName()` / `pickPostalCode()`, which read every spelling in use here.
-
-**The non-US state.** "State / Region" was a free-text box on a US-only store,
-so `BASILAN` (a Philippine province) sailed through `assertUsShipping`, which
-only checked the *country*. Finagy truncates state to two characters, rejected
-`"BA"`, and the buyer saw nothing explaining why. Now a **dropdown** (50 states
-+ DC) in checkout.html, and `assertUsShipping` requires a real USPS code
-server-side — the dropdown is a convenience, the server check is the guard.
-Territories (PR, VI, GU, AS, MP) are deliberately excluded: they are US postal
-destinations but nobody has priced shipping to them.
-
-Both verified against live staging: blank/invalid → 400, correct → **200**.
+Both verified against live staging: blank or invalid → 400, correct → **200**.
 
 **The lesson worth keeping.** All 443 tests passed through both bugs, because
 every fixture was written in the shape the driver *assumed* rather than the
 shape the form emits. `server/test/ach.test.js` now fixtures from
 `collectCheckout()`'s real output and asserts no field Finagy needs is blank.
 
-### 1d. BLOCKED — Ribbit geo-blocks the test location
+### 1c. Ribbit geo-blocks non-US addresses
 
-With correct data, Finagy's `bank-connect/sessions` returns **200**. The buyer
-is then handed to **Ribbit** (`test.ribbit.ai`), the third-party bank-login
-widget behind Finagy's "User-Authenticated ACH Validation" — and Ribbit answers
-**403 Forbidden — Microsoft-Azure-Application-Gateway/v2**.
-
-That 403 is Ribbit's, not Finagy's, and it is not about the token:
+Once the data is right, `bank-connect/sessions` returns 200 and the buyer is
+handed to **Ribbit** for the bank login. Ribbit refuses non-US addresses at the
+root, with no token involved:
 
 ```
 403  test.ribbit.ai/            403  portal.ribbit.ai/
@@ -123,27 +89,12 @@ That 403 is Ribbit's, not Finagy's, and it is not about the token:
 200  cdn.ribbit.ai/…js          ← only their CDN, a different service
 ```
 
-Every Ribbit *application* host refuses this IP at the root, with no token
-involved. The test machine is in Manila (Starlink). Ribbit is a US bank-data
-aggregator; geo-blocking their bank-login portal is ordinary fraud posture.
+Ribbit is a US bank-data aggregator; geo-blocking its login portal is ordinary
+fraud posture. **It does not affect real customers** — we ship US-only and ACH
+is a US-only network, so genuine buyers are in the US. It affects testing from
+outside the US, and a VPN clears it.
 
-**This does not affect real customers.** We ship US-only and ACH is a US-only
-network, so a genuine buyer is in the US and reaches Ribbit normally. It blocks
-*testing from outside the US*, nothing else.
-
-Ways forward, best first:
-
-1. **Ask Finagy to enable manual account entry** on our HPP. Their page already
-   contains the fields — `routingNumberElement`, `accountNumberElement`,
-   `accountTypeElement` are all in `ach_index.min.js`, gated behind a merchant
-   setting (their docs p.86 describe a radio choice between "Connect a bank
-   account" and "Enter data manually"). Our account currently forces
-   bank-connect. Worth enabling for production regardless: bank-login-only
-   turns away every buyer whose bank Ribbit cannot reach.
-2. Test through a US VPN, or have someone US-based run it.
-3. Ask Finagy to have Ribbit allow-list the test IP.
-
-### 1e. BLOCKED on two account settings — diagnosed exactly
+### 1d. Account configuration — answered by Finagy 2026-09-09
 
 `GET /api/hpp/products/ach` (session-key header) reports our HPP config:
 
@@ -157,55 +108,59 @@ Ways forward, best first:
 }
 ```
 
-Their `ach_index.min.js` shows what those do:
+**`is_user_validation_input_enabled: false` is deliberate, not a fault.** Dan
+Locker at Finagy: *"For new merchants we only enable Bank Connect. Once you have
+had some time of successfully processing with low returns, we can have a
+conversation about enabling additional options like the manual entry."*
 
-```js
-function enableUserValidation(isUserValidationInputEnabled) {
-    disableMaunalAccountInputSection(),
-    isUserValidationInputEnabled && (
-      document.getElementById("userValidationInputTypesSection").classList.remove("hidden"),
-      // ↑ the "Connect a bank account" / "Enter data manually" radios
-    )
-}
-```
+So there is no manual routing/account path, and the API enforces it — posting
+`/api/hpp/transactions/ach` with `account_number` and `routing_number` returns
+`'Bank Connect Account Token' must not be empty`.
 
-**Problem 1 — `is_user_validation_input_enabled: false`.** Manual account entry
-is hidden, and mandatory at the API too: posting `/api/hpp/transactions/ach`
-with `account_number` + `routing_number` returns
-`'Bank Connect Account Token' must not be empty`. Every buyer must complete a
-Ribbit bank login. One boolean fixes it.
+> **Plan for this at launch.** Every ACH buyer must log into their bank through
+> Ribbit. Anyone whose bank Ribbit cannot reach has no ACH path at all and falls
+> back to crypto. Revisit manual entry with Finagy once there is a processing
+> history to point at.
 
-**Problem 2 — RTP validation declines everything.**
-`rtp_validation_max_timeout_seconds` shows RTP is the active validation product
-(a 1-cent real-time credit to prove the account). `queryInstitution` returns
-`achEligible: false` **and** `rtpEligible: false` for every routing number
-tried — 021000021 (Chase), 011401533 (BoA), and 053208066, *the example in
-Finagy's own documentation* — always with "This institution potentially
-eligible for RCC only."
+**A wrong diagnosis, corrected.** This document previously claimed Finagy's
+validation product was broken because `queryInstitution` reports
+`achEligible: false` for every routing number, including their own documented
+example. That inference was wrong. This account uses **Bank Connect**
+(User-Authenticated) validation, so the frictionless DB/RTP product simply is
+not provisioned for us — `queryInstitution` failing is consistent with that
+rather than evidence of a fault, and `rtp_validation_max_timeout_seconds` is a
+default sitting in the config, not proof RTP is running.
 
-The HPP's own 400 handler confirms the shape of the failure: when the response
-carries an `AccountNumber` error and a bank-connect token exists, it opens
-`bank-connect-invalid-account-modal` — the "Transaction Declined. Please use
-another account" dialog we saw. That is validation rejecting the account, not
-a payload fault.
+The three declined transactions (`639245064869527503`, `639245074916668658`,
+`639245075966290768`, all status 1) are explained by not using Finagy's
+designated sandbox bank.
 
-Result: three transactions, all `status 1` (invalidated) —
-`639245064869527503`, `639245074916668658`, `639245075966290768`. Our poller
-found each by `uniqueTranId` and cancelled the orders correctly.
+### 1e. Sandbox test account
 
-### 1f. What to ask for
+Ribbit's staging bank login, from Andrii Seniv at Finagy:
 
-1. **Set `is_user_validation_input_enabled = true`** so manual account entry
-   appears. Wanted in production regardless: bank-login-only turns away every
-   buyer whose bank Ribbit cannot reach.
-2. **Fix or re-provision account validation on staging** — no routing number is
-   reported ACH- or RTP-eligible, so nothing can pass. Confirm which product is
-   meant to be active (DB / DB Extended / RTP), Direct vs Integrated, and the
-   threshold — we were never asked to set one.
-3. **Sandbox routing / account numbers.**
-4. **Statement descriptor** buyers will see (R10 prevention).
-5. **Bank cutoff time** and whether same-day ACH is on.
-6. **The testing script** they sign off against before production.
+| | |
+|---|---|
+| Bank | **chime** |
+| Email | `test@evernovalife.com` |
+| Password | `ChimeBank01` |
+
+Search for "chime" on the Ribbit bank picker and sign in with those. Any other
+bank in the sandbox will decline.
+
+Note that Ribbit geo-blocks its portal: `test.ribbit.ai`, `portal.ribbit.ai`
+and `playground.ribbit.ai` all return 403 at the root from non-US addresses.
+That affects testing from outside the US only — real buyers are US-based,
+because we ship US-only and ACH is a US-only network.
+
+### 1f. Still open with Finagy
+
+| # | Question | Why it matters |
+|---|---|---|
+| 1 | **Statement descriptor** — what the buyer sees on their bank statement. | An unrecognised descriptor is the #1 cause of R10 ("I didn't authorize this") returns; NACHA polices those at 0.5%. |
+| 2 | **Bank cutoff time** and whether same-day ACH is on. | Files sent before 2pm ET settle the same night. Decides how fast orders clear. |
+| 3 | **The testing script** they sign off against. | Required before production is enabled. |
+| 4 | **Production credentials**, once testing is signed off. | |
 
 Not needed: SFTP credentials and PGP keys — that is the flat-file batch
 product; we use the REST API and the HPP.
@@ -257,7 +212,8 @@ token works too, which is how you test it by hand.
 
 1. `GET /api/admin/ach` as an admin — it mints a token against Finagy and
    reports `ok`, plus which environment you are pointed at.
-2. Place a sandbox order end to end with Finagy's test bank details.
+2. Place a sandbox order end to end, signing in on Ribbit with the **chime**
+   sandbox account (see 1e). Any other bank in their sandbox declines.
 3. Confirm the order sits at `pending` after the redirect — **it must not say
    paid**.
 4. Ask Finagy to settle the test transaction, run the poller, confirm the order
