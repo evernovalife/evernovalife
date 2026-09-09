@@ -153,7 +153,41 @@ and `playground.ribbit.ai` all return 403 at the root from non-US addresses.
 That affects testing from outside the US only — real buyers are US-based,
 because we ship US-only and ACH is a US-only network.
 
-### 1f. Still open with Finagy
+### 1f. BLOCKED — their own sandbox account is declined by their own validation
+
+Using the chime sandbox account exactly as Finagy instructed, the HPP still
+answers **"Transaction Declined."** and `POST /api/hpp/transactions/ach`
+returns 400.
+
+That string is the whole error. Their modal template is:
+
+```html
+<b>{validationDescription}</b>
+<p>Please use another account or click Cancel to return to payment selection.</p>
+```
+
+so `AccountNumber[0]` in the 400 body literally contains *"Transaction
+Declined."* and nothing else — no reason code, no detail.
+
+**The Ribbit login is succeeding.** Their branch is:
+
+```js
+bankConnectAccountToken || state.accountId
+  ? displayBankNotSupportedModal(...)   ← what we get
+  : displayAccountNumberVerificationError(...)
+```
+
+The first branch only runs when a `bankConnectAccountToken` exists, so Ribbit
+completes and returns a valid account token. The decline happens in Finagy's
+validation *after* that.
+
+Transactions so far, all status 1 (invalidated), all correctly reconciled by our
+poller via `uniqueTranId`: `639245064869527503`, `639245074916668658`,
+`639245075966290768`, plus client reference `ENL-MTU4D6BQ`.
+
+Waiting on Finagy to check validation configuration for merchant 251 on staging.
+
+### 1g. Also still open
 
 | # | Question | Why it matters |
 |---|---|---|
