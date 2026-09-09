@@ -1484,6 +1484,16 @@ body.coa-lightbox-open { overflow: hidden; }
    AUTO-SHIP (recurring orders)
    ============================================================ */
 /* checkout: the opt-in panel */
+/* The signed-out invitation at the top of checkout. Deliberately quiet — it is
+   an offer, not a step: nothing about it should read as something to clear
+   before the form can be filled in. */
+.checkout-signin-offer {
+  border: 1px solid var(--glass-border); border-radius: var(--radius-sm);
+  background: rgba(255,255,255,0.03); padding: 0.75rem 0.9rem; margin: 0 0 1.25rem;
+}
+.checkout-signin-offer strong { color: #fff; }
+.checkout-signin-offer a { color: var(--accent-purple); }
+
 .autoship-box {
   border: 1px solid var(--glass-border-strong); border-radius: var(--radius-sm);
   background: rgba(168,85,247,0.08); padding: 0.9rem 1rem; margin: 0 0 1.1rem;

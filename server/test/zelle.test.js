@@ -48,6 +48,7 @@ process.env.BTCPAY_STORE_ID = '';
 const loyalty = require('../loyalty.js');
 const app = require('../server.js');
 const store = require('../store.js');
+const auth = require('../auth.js');
 
 let server, base, productId, unitPrice;
 
@@ -211,11 +212,52 @@ test('placing a Zelle order empties the saved cart', async () => {
 });
 
 /* ============================================================
-   2) An account is required — guests cannot order at all
+   2) Every order belongs to an account — but nobody is stopped at
+   the door to make one. A signed-out buyer checks out, and the
+   account is opened from the email they entered.
    ============================================================ */
-test('a guest cannot place an order', async () => {
-  const { status } = await zelleOrder();                 // no token = guest
-  assert.equal(status, 401, 'checkout is account-only');
+test('a signed-out buyer can order, and the order lands on a real account', async () => {
+  const { status, body } = await zelleOrder({ email: 'walkin-zelle@example.com' });
+  assert.equal(status, 201, 'checkout works signed out');
+  assert.equal(body.accountCreated, true, 'an account was opened for them');
+
+  const account = auth.findByEmail('walkin-zelle@example.com');
+  assert.ok(account, 'the account exists');
+  const mine = store.listOrders(account.id).find(o => o.orderId === body.orderId);
+  assert.ok(mine, 'the order is on that account, not in the anonymous bucket');
+  assert.equal(mine.guestCheckout, true, 'and it is marked as placed without signing in');
+  assert.deepEqual(store.listOrders(store.GUEST_KEY), [], 'nothing lands in the old guest bucket');
+});
+
+test('the account opened at checkout hands back no session and cannot be signed into', async () => {
+  const { body } = await zelleOrder({ email: 'walkin-nosession@example.com' });
+  assert.equal(body.token, undefined, 'no session token is handed back');
+
+  // Nothing to guess at: the password is 32 random bytes that were thrown away.
+  const guess = await api('/api/auth/login', {
+    method: 'POST', body: { email: 'walkin-nosession@example.com', password: 'password123' }
+  });
+  assert.equal(guess.status, 401, 'the account has no usable password');
+});
+
+test('a second order on the same email joins that account instead of making another', async () => {
+  await zelleOrder({ email: 'walkin-twice@example.com' });
+  const again = await zelleOrder({ email: 'walkin-twice@example.com', quantity: 2 });
+  assert.equal(again.status, 201);
+  assert.equal(again.body.accountCreated, false, 'the second time there is nothing to create');
+
+  const account = auth.findByEmail('walkin-twice@example.com');
+  assert.equal(store.listOrders(account.id).length, 2, 'both orders sit on the one account');
+});
+
+test('registering afterwards points the buyer at the reset link, not a dead end', async () => {
+  await zelleOrder({ email: 'walkin-later@example.com' });
+  const r = await api('/api/auth/register', {
+    method: 'POST',
+    body: { firstName: 'Wal', lastName: 'Kin', email: 'walkin-later@example.com', password: 'password123' }
+  });
+  assert.equal(r.status, 409, 'the address is taken — by the account we opened for them');
+  assert.match(r.body.error, /forgot password/i, 'and they are told the one way in');
 });
 
 test('an order is visible in the admin queue', async () => {

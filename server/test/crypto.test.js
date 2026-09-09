@@ -74,7 +74,7 @@ const btcpayStub = http.createServer((req, res) => {
   });
 });
 
-let app, loyalty, subscriptions, store;
+let app, loyalty, subscriptions, store, auth;
 let server, base, productId;
 
 test.before(async () => {
@@ -88,6 +88,7 @@ test.before(async () => {
   loyalty = require('../loyalty.js');
   subscriptions = require('../subscriptions.js');
   store = require('../store.js');
+  auth = require('../auth.js');
 
   server = app.listen(0);
   await once(server, 'listening');
@@ -202,6 +203,48 @@ async function openOrder(token, extra = {}) {
     }
   });
 }
+
+/* ============================================================
+   0) Checking out without signing in
+   The account is opened for the buyer rather than demanded from
+   them — but typing an address is not proof of owning it, so an
+   order placed that way gets nothing the account holds.
+   ============================================================ */
+test('a signed-out buyer gets an invoice and an account', async () => {
+  const res = await openOrder(undefined, { email: 'walkin-crypto@example.com' });
+  assert.equal(res.status, 201, 'checkout works signed out');
+  assert.ok(res.body.checkoutLink, 'and still gets a hosted invoice');
+  assert.equal(res.body.accountCreated, true);
+
+  const account = auth.findByEmail('walkin-crypto@example.com');
+  const mine = store.listOrders(account.id).find(o => o.orderId === res.body.orderId);
+  assert.ok(mine, 'the order belongs to the account we opened');
+  assert.equal(mine.guestCheckout, true);
+});
+
+test("ordering at a known email spends none of that account's points", async () => {
+  const victim = await buyer();
+  loyalty.earn(victim.user.id, 5000, 'test top-up');
+  const before = loyalty.getBalance(victim.user.id);
+
+  const res = await openOrder(undefined, { email: victim.user.email, pointsToRedeem: 5000 });
+  assert.equal(res.status, 201, 'the order is placed');
+  assert.ok(!res.body.pointsRedeemed, 'but not a single point is spent');
+  assert.equal(res.body.discount || 0, 0, 'and nothing is discounted');
+  assert.equal(loyalty.getBalance(victim.user.id), before, 'the balance is untouched');
+});
+
+test('a signed-out order cannot start an auto-ship plan on somebody else\'s account', async () => {
+  const victim = await buyer();
+  const res = await openOrder(undefined, {
+    email: victim.user.email,
+    autoship: { enabled: true, intervalDays: 30 }
+  });
+  assert.equal(res.status, 201);
+  assert.equal(res.body.subscription, null, 'no plan was created');
+  const plans = await api('/api/subscriptions', { token: victim.token });
+  assert.deepEqual(plans.body.subscriptions, [], 'and none appears on the account');
+});
 
 /* ============================================================
    1) The invoice is priced by us, not by the browser

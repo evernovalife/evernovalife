@@ -101,7 +101,7 @@ process.env.FINAGY_API_KEY = 'API-TEST-KEY';
 process.env.ACH_ABANDON_HOURS = '6';
 delete process.env.ADMIN_KEY;
 
-let app, finagy, server, base, stubBase;
+let app, finagy, store, auth, server, base, stubBase;
 
 test.before(async () => {
   stub.listen(0);
@@ -112,6 +112,8 @@ test.before(async () => {
 
   app = require('../server.js');
   finagy = require('../finagy.js');
+  store = require('../store.js');
+  auth = require('../auth.js');
   server = app.listen(0);
   await once(server, 'listening');
   base = `http://127.0.0.1:${server.address().port}`;
@@ -382,9 +384,51 @@ test('a non-US state is refused at OUR checkout, in words', async () => {
   assert.equal(pr.status, 400, 'territories are not priced and must not slip through');
 });
 
-test('an anonymous visitor cannot open an ACH payment', async () => {
-  const r = await placeAchOrder(undefined);
-  assert.equal(r.status, 401);
+/* AllayPay requires an account behind every bank debit. That is satisfied by
+   opening one, not by turning the buyer away — the debit is attributable to a
+   named account holder either way, which is what the rule is actually for. */
+const WALKIN = { ...SHIPPING, email: 'ach-walkin@example.com' };
+
+test('a signed-out buyer can open an ACH payment, and it lands on an account', async () => {
+  const r = await placeAchOrder(undefined, { shipping: WALKIN, email: WALKIN.email });
+  assert.equal(r.status, 201, 'checkout works signed out');
+  assert.ok(r.body.payToken, 'and carries the token that lets that browser confirm it');
+
+  const account = auth.findByEmail(WALKIN.email);
+  assert.ok(account, 'an account exists for the address they entered');
+  const mine = store.listOrders(account.id).find(o => o.orderId === r.body.orderId);
+  assert.ok(mine, 'the ACH order belongs to it');
+  assert.equal(mine.guestCheckout, true);
+});
+
+test('a signed-out buyer confirms with their order token, and only their own', async () => {
+  const mine = await placeAchOrder(undefined, { shipping: WALKIN, email: WALKIN.email });
+  const other = await placeAchOrder(undefined, { shipping: WALKIN, email: WALKIN.email });
+
+  const crossed = await api('/api/ach/confirm', {
+    method: 'POST',
+    body: { orderId: mine.body.orderId, paymentId: '999', t: other.body.payToken }
+  });
+  assert.equal(crossed.status, 404, "another order's token confirms nothing");
+
+  const forged = await api('/api/ach/confirm', {
+    method: 'POST', body: { orderId: mine.body.orderId, paymentId: '999', t: 'not-a-token' }
+  });
+  assert.equal(forged.status, 404, 'a made-up token confirms nothing');
+
+  const ok = await api('/api/ach/confirm', {
+    method: 'POST',
+    body: { orderId: mine.body.orderId, paymentId: '424242', t: mine.body.payToken }
+  });
+  assert.equal(ok.status, 200, 'their own token does');
+  const account = auth.findByEmail(WALKIN.email);
+  const stored = store.listOrders(account.id).find(o => o.orderId === mine.body.orderId);
+  assert.ok(stored.achReturnedAt, 'the return trip is filed against the order');
+  /* The id ends up as whatever Finagy itself reports for this reference — the
+     confirm call writes the redirect's payment_id and the sync that follows
+     immediately corrects it from the gateway. Either way it is no longer empty,
+     which is the whole reason a signed-out browser needs to reach this route. */
+  assert.ok(stored.transactionId, 'and so is a transaction id');
 });
 
 test('the poller is not open to the public', async () => {

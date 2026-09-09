@@ -347,8 +347,17 @@ rates at 0.5%.
 - **Void vs refund is not a choice.** Void only works the same day before the
   bank cutoff; refund only works after the debit has gone. `/api/admin/ach/:orderId/refund`
   picks whichever is possible and tells you which it did.
-- **Guest checkout is already impossible** site-wide — every checkout route sits
-  behind `requireAuth`.
+- **Every order has an account behind it — without a sign-in wall.** AllayPay's
+  underwriting requires the account, not the friction, so since 2026-09-09 the
+  three checkout routes run on `optionalAuth` and `resolveCheckoutBuyer()`
+  (server.js) opens an account from the email on the form. Nothing else is
+  granted by typing an address: no session token is issued, loyalty points are
+  unspendable and auto-ship is unavailable unless the request is genuinely
+  signed in. The buyer gets a "set a password" link by email, and the order is
+  flagged `guestCheckout: true` so the admin queue can still tell the two
+  apart. A signed-out browser proves an ACH order is its own with the
+  `payToken` handed back by `/api/ach/checkout` — the same HMAC scheme as the
+  resume link — because it has no session to prove it with at `/api/ach/confirm`.
 
 ---
 

@@ -100,7 +100,8 @@ app.get('/api/health', (req, res) => res.json({
     orderLookup: true,            // POST /api/orders/lookup exists (guest order status)
     outreach: true,               // POST /api/outreach/run exists (nudges + stock alerts)
     disputes: true,               // customer dispute threads exist (support.html)
-    ach: true                     // POST /api/ach/checkout + /confirm + /poll exist
+    ach: true,                    // POST /api/ach/checkout + /confirm + /poll exist
+    guestCheckout: true           // checkout works signed-out (an account is opened for the buyer)
   }
 }));
 
@@ -1159,7 +1160,7 @@ function duplicateOrderResponse(twin) {
    `order.shipping` is the shipping COST (from pricing.js); the delivery
    address arrives separately as `shipping`, stored as shippingAddress so
    the two never collide. */
-function buildOrderRecord({ orderId, order, method, status, email, shipping, transactionId, invoiceId, pointsEarned, pointsRedeemed, subscriptionId, stockReserved, webAuthorization, declarations }) {
+function buildOrderRecord({ orderId, order, method, status, email, shipping, transactionId, invoiceId, pointsEarned, pointsRedeemed, subscriptionId, stockReserved, webAuthorization, declarations, guestCheckout }) {
   return {
     orderId,
     createdAt: new Date().toISOString(),
@@ -1191,8 +1192,102 @@ function buildOrderRecord({ orderId, order, method, status, email, shipping, tra
     ...(invoiceId ? { invoiceId } : {}),
     ...(subscriptionId ? { subscriptionId } : {}),  // marks an auto-ship shipment
     // units taken off the shelf when this order opened; what a cancel gives back
-    ...(stockReserved && stockReserved.length ? { stockReserved } : {})
+    ...(stockReserved && stockReserved.length ? { stockReserved } : {}),
+    /* Placed without signing in. The order still belongs to an account (we open
+       one), so this is the only record that nobody proved they owned it — which
+       is what a support question about "an order I didn't place" turns on. */
+    ...(guestCheckout ? { guestCheckout: true } : {})
   };
+}
+
+/* ============================================================
+   WHO IS BUYING
+   Every order has to belong to an account: that is a condition of
+   the card/ACH underwriting, and it is also what makes an order
+   answerable to somebody later. But making a signed-out buyer stop
+   and register loses most of them, so nobody is stopped — the
+   account is opened FOR them, from the email they were already
+   typing into the form.
+
+   Three cases, and the difference between them matters:
+
+     signed in      → their account, their points, their auto-ship.
+     email we know  → the order is attached to that account, and
+                      NOTHING else happens. No session is issued and
+                      no points are spendable, because all the
+                      requester proved is that they can type an
+                      address. The account holder sees a new order
+                      and gets its emails, which is exactly right if
+                      it was them and is visible if it wasn't.
+     email we don't → a passwordless account, plus an emailed link
+                      to set a password on it. Same rule: no session.
+   ============================================================ */
+
+/* "Jane Q Doe" → { firstName: 'Jane', lastName: 'Q Doe' }. The form posts one
+   name string; accounts store two. */
+function splitBuyerName(full) {
+  const parts = String(full || '').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return { firstName: '', lastName: '' };
+  return { firstName: parts[0], lastName: parts.slice(1).join(' ') || '—' };
+}
+
+/* Resolve (or create) the account an order belongs to.
+   Returns { user, signedIn, created, setupToken }. `signedIn` is the only
+   thing that may unlock anything: points, auto-ship and cart clearing all
+   read it rather than the presence of a user. */
+async function resolveCheckoutBuyer(req, body) {
+  if (req.user) return { user: req.user, signedIn: true, created: false, setupToken: '' };
+
+  const email = String((body && body.email) || (body && body.shipping && body.shipping.email) || '').trim();
+  if (!email) throw new Error('An email address is required to place an order.');
+
+  const existing = auth.findByEmail(email);
+  if (existing) return { user: existing, signedIn: false, created: false, setupToken: '' };
+
+  const { firstName, lastName } = splitBuyerName(body.shipping && body.shipping.name);
+  const made = await auth.createCheckoutAccount({ email, firstName, lastName });
+  return { user: made.user, signedIn: false, created: true, setupToken: made.setupToken };
+}
+
+/* Tell a buyer we opened an account for them, and give them the one link that
+   turns it into an account they control. Sent after the order response, never
+   in front of it — a sale must not wait on SMTP. */
+async function sendAccountOpenedEmail(buyer, orderId) {
+  if (!buyer || !buyer.created || !buyer.setupToken) return;
+  const link = `${SITE()}/reset-password.html?token=${buyer.setupToken}`;
+  const name = buyer.user.firstName || 'there';
+  const subject = 'Your Ever Nova Life account';
+  const text = `Hi ${name},
+
+` +
+    `We've set up an account for you so you can follow order ${orderId} and reorder without ` +
+    `retyping anything.
+
+Choose a password here:
+${link}
+
+` +
+    `You don't have to — your order is placed either way, and you can always check it at ` +
+    `${SITE()}/order-status.html using your order reference and this email address.
+
+` +
+    `— The Ever Nova Life team`;
+  const html = `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;color:#1f2937">
+    <h2 style="color:#6d28d9">Your Ever Nova Life account</h2>
+    <p>We've set up an account for you so you can follow order
+       <strong>${escapeHtmlSrv(orderId)}</strong> and reorder without retyping anything.</p>
+    <p><a href="${link}" style="display:inline-block;background:#6d28d9;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:600">Choose a password</a></p>
+    <p style="color:#6b7280;font-size:13px">You don't have to — your order is placed either way, and you can
+       always check it at <a href="${SITE()}/order-status.html">order status</a> with your order reference and
+       this email address.</p>
+    <p style="color:#9ca3af;font-size:12px;word-break:break-all">Or paste this into your browser:<br>${link}</p>
+  </div>`;
+  if (!mailer.CONFIGURED) {
+    console.warn(`[account-opened] EMAIL NOT CONFIGURED — password link for ${buyer.user.email}:
+  ${link}`);
+    return;
+  }
+  return mailer.sendMail({ to: buyer.user.email, subject, text, html });
 }
 
 /* ============================================================
@@ -1203,7 +1298,7 @@ function buildOrderRecord({ orderId, order, method, status, email, shipping, tra
    ============================================================ */
 
 /* ---- open a BTCPay invoice for the (server-priced) cart ---- */
-app.post('/api/crypto/checkout', auth.requireAuth, async (req, res) => {
+app.post('/api/crypto/checkout', optionalAuth, async (req, res) => {
   if (!btcpay.CONFIGURED) {
     return res.status(500).json({ error: 'Crypto payments are not set up yet (missing BTCPay keys in server/.env).' });
   }
@@ -1213,12 +1308,17 @@ app.post('/api/crypto/checkout', auth.requireAuth, async (req, res) => {
     assertUsShipping(body.shipping);                            // U.S. addresses only
     const webAuthorization = buildWebAuthorization(body.webAuthorization, req);
     const declarations = buildDeclarations(body.declarations, req);
+    /* Whose order is this? Opens an account when there is nobody signed in —
+       and note what reaches plannedDiscount below: `signedIn`, not the resolved
+       account. Points belong to whoever proved they own the account, never to
+       whoever typed its email address into the form. */
+    const buyer = await resolveCheckoutBuyer(req, body);
     // Loyalty redemption is folded into the invoice amount, so the buyer pays
     // the discounted total. The points are HELD (debited now) and returned if
     // the invoice expires unpaid — see refundReservedPoints below. Holding
     // rather than spending-on-settle is what stops the same balance funding
     // two open invoices at once.
-    const discount = plannedDiscount(req.user, body.pointsToRedeem);
+    const discount = plannedDiscount(buyer.signedIn ? buyer.user : null, body.pointsToRedeem);
     // The browser names the service; shipping.js sets what it costs.
     const order = buildOrder(body.items, { discount, shippingMethod: body.shippingMethod });
 
@@ -1226,7 +1326,7 @@ app.post('/api/crypto/checkout', auth.requireAuth, async (req, res) => {
        already have open? Two live invoices for one cart is how the money ends
        up split across two orders that each look half-paid. */
     if (!body.allowDuplicate) {
-      const twin = findOpenTwin({ userId: req.user.id, email: body.email || req.user.email, order });
+      const twin = findOpenTwin({ userId: buyer.user.id, email: body.email || buyer.user.email, order });
       if (twin) return res.status(409).json(duplicateOrderResponse(twin));
     }
 
@@ -1237,7 +1337,7 @@ app.post('/api/crypto/checkout', auth.requireAuth, async (req, res) => {
        notice, "your payment came in short" — is addressed from the order
        record, so an empty field here is an order that can never be written to
        again. The account address is always there to fall back on. */
-    const buyerEmail = body.email || req.user.email;
+    const buyerEmail = body.email || buyer.user.email;
 
     /* Take the stock BEFORE opening the invoice, and before the first `await`.
        buildOrder has already checked availability, but only this call checks and
@@ -1275,17 +1375,17 @@ app.post('/api/crypto/checkout', auth.requireAuth, async (req, res) => {
        repeat invoice is one full interval away. */
     const wantsAutoship = !!(body.autoship && body.autoship.enabled);
     let subscription = null;
-    if (wantsAutoship) {
+    if (wantsAutoship && buyer.signedIn) {
       try {
-        const sub = subscriptions.create(req.user.id, {
+        const sub = subscriptions.create(buyer.user.id, {
           items: orderToSubscriptionItems(order),
           intervalDays: body.autoship.intervalDays,
-          email: body.email || req.user.email,
+          email: buyerEmail,
           shippingAddress: body.shipping,
           firstOrderId: orderId
         });
         subscription = subscriptions.publicSubscription(sub);
-        sendSubscriptionCreatedEmail(req.user, sub)
+        sendSubscriptionCreatedEmail(buyer.user, sub)
           .catch(err => console.error('[autoship email] failed:', err.message));
       } catch (e) {
         console.error('[autoship] could not start the plan:', e.message);
@@ -1295,9 +1395,9 @@ app.post('/api/crypto/checkout', auth.requireAuth, async (req, res) => {
     // Record the order as pending now; the webhook flips it to paid once
     // BTCPay confirms the payment. Empty their saved cart so the same items
     // don't linger after they've committed to buying.
-    const pointsRedeemed = reserveLoyaltyPoints(req.user.id, order, orderId);
+    const pointsRedeemed = reserveLoyaltyPoints(buyer.user.id, order, orderId);
     try {
-      store.addOrder(req.user.id, buildOrderRecord({
+      store.addOrder(buyer.user.id, buildOrderRecord({
         orderId, order, method: 'crypto', status: 'pending',
         email: buyerEmail, shipping: body.shipping,
         invoiceId: invoice.id,
@@ -1305,9 +1405,11 @@ app.post('/api/crypto/checkout', auth.requireAuth, async (req, res) => {
         stockReserved,
         webAuthorization,
         declarations,
-        subscriptionId: subscription ? subscription.id : ''
+        subscriptionId: subscription ? subscription.id : '',
+        guestCheckout: !buyer.signedIn
       }));
-      store.clearCart(req.user.id);
+      // Only a signed-in buyer HAS a server cart; a guest's lives in the browser.
+      if (buyer.signedIn) store.clearCart(buyer.user.id);
     } catch (e) {
       /* The invoice exists and is payable, but we have no record of it — so the
          held units have nothing to release them later. Give them back now; the
@@ -1327,7 +1429,10 @@ app.post('/api/crypto/checkout', auth.requireAuth, async (req, res) => {
       subscription,
       // Be honest when auto-ship was asked for but couldn't be set up, rather
       // than silently dropping it.
-      autoshipFailed: wantsAutoship && !subscription
+      autoshipFailed: wantsAutoship && !subscription,
+      // So the confirmation screen can mention the account and the email on its
+      // way, rather than that email arriving out of nowhere.
+      accountCreated: buyer.created
     });
 
     /* After responding, so neither can fail the sale. The buyer needs the pay
@@ -1339,6 +1444,8 @@ app.post('/api/crypto/checkout', auth.requireAuth, async (req, res) => {
       .catch(err => console.error('[crypto invoice email] failed:', err.message));
     notifyAdminOfCryptoOrder({ orderId, order, email: buyerEmail, invoice })
       .catch(err => console.error('[crypto admin-notify] failed:', err.message));
+    sendAccountOpenedEmail(buyer, orderId)
+      .catch(err => console.error('[account-opened email] failed:', err.message));
   } catch (err) {
     console.error('[crypto checkout] failed:', err.message);
     // 409 = a stock shortfall (someone took the last one first), not bad input
@@ -1700,8 +1807,8 @@ async function openBalanceInvoice(order) {
    The signed token in the URL is the credential, and it only ever unlocks ONE
    order — reading what is owed on it, and raising an invoice for that amount.
    Neither can move money, change an address or reveal an account. */
-function orderFromPayToken(req) {
-  const orderId = String(req.params.orderId || '');
+function orderFromPayToken(req, wantedOrderId) {
+  const orderId = String(wantedOrderId != null ? wantedOrderId : (req.params.orderId || ''));
   const t = String((req.query && req.query.t) || (req.body && req.body.t) || '');
   if (!auth.verifyRefToken('pay', orderId, t)) return null;
   return findOrder(orderId);
@@ -2124,7 +2231,7 @@ app.post('/api/admin/orders/:orderId/reconcile', requireAdmin, async (req, res) 
    ============================================================ */
 
 /* ---- place an order to be paid by Zelle ---- */
-app.post('/api/zelle/checkout', auth.requireAuth, async (req, res) => {
+app.post('/api/zelle/checkout', optionalAuth, async (req, res) => {
   if (!zelle.CONFIGURED) {
     return res.status(500).json({ error: 'Zelle payment is not set up yet (missing ZELLE_* keys in server/.env).' });
   }
@@ -2137,16 +2244,17 @@ app.post('/api/zelle/checkout', auth.requireAuth, async (req, res) => {
     // No points discount here: the money arrives by hand, so there's no charge
     // to reduce, and reserving points against an order that may never be paid
     // would strand them. The UI hides Zelle while points are being redeemed.
+    const buyer = await resolveCheckoutBuyer(req, body);
     const order = buildOrder(body.items, { shippingMethod: body.shippingMethod });
     zelle.assertPayable({ order, shipping: body.shipping });     // US-only + send-limit guards
 
     /* Same rule as crypto, and it bites harder here: a Zelle order is confirmed
        by eye against a bank memo, so two identical open references are two ways
        to credit the wrong one. */
-    const zelleEmail = body.email || (req.user && req.user.email) || '';
+    const zelleEmail = body.email || buyer.user.email || '';
     if (!body.allowDuplicate) {
       const twin = findOpenTwin({
-        userId: req.user ? req.user.id : store.GUEST_KEY,
+        userId: buyer.user.id,
         email: zelleEmail, order
       });
       if (twin) return res.status(409).json(duplicateOrderResponse(twin));
@@ -2160,28 +2268,31 @@ app.post('/api/zelle/checkout', auth.requireAuth, async (req, res) => {
     const stockReserved = reserveOrderStock(order);
     const instructions = zelle.instructions({ orderId, order });
 
-    // Record it whether or not they're signed in. A guest order still has to be
-    // reconcilable — otherwise the money arrives with a reference that matches
-    // nothing, and the owner has no idea what to ship or where.
     // Same rule as crypto: store a resolved address, not a possibly-empty form
-    // field, so the order can still be written to after today.
+    // field, so the order can still be written to after today. A Zelle payment
+    // is matched by eye against a bank memo, so an order nobody can be written
+    // to about is an order that can never be reconciled.
     const buyerEmail = zelleEmail;
     const record = buildOrderRecord({
       orderId, order, method: 'zelle', status: 'awaiting_payment',
-      email: buyerEmail, shipping: body.shipping, stockReserved, webAuthorization, declarations
+      email: buyerEmail, shipping: body.shipping, stockReserved, webAuthorization, declarations,
+      guestCheckout: !buyer.signedIn
     });
     record.expiresAt = instructions.expiresAt;
 
     try {
-      store.addOrder(req.user ? req.user.id : store.GUEST_KEY, record);
-      if (req.user) store.clearCart(req.user.id);
+      store.addOrder(buyer.user.id, record);
+      if (buyer.signedIn) store.clearCart(buyer.user.id);
     } catch (e) {
       console.error('[zelle checkout] could not save order:', e.message);
       releaseOrderStock(null, stockReserved);   // unrecorded order holds nothing
       return res.status(500).json({ error: 'We could not record your order. Nothing has been charged — please try again.' });
     }
 
-    res.status(201).json({ success: true, orderId, total: order.total, instructions });
+    res.status(201).json({
+      success: true, orderId, total: order.total, instructions,
+      accountCreated: buyer.created
+    });
 
     // After responding: the buyer needs these details in writing, and the owner
     // needs to know money is on its way. Neither should be able to fail the sale.
@@ -2189,6 +2300,8 @@ app.post('/api/zelle/checkout', auth.requireAuth, async (req, res) => {
       .catch(err => console.error('[zelle email] failed:', err.message));
     notifyAdminOfZelleOrder({ orderId, order, email: buyerEmail, instructions })
       .catch(err => console.error('[zelle admin-notify] failed:', err.message));
+    sendAccountOpenedEmail(buyer, orderId)
+      .catch(err => console.error('[account-opened email] failed:', err.message));
   } catch (err) {
     console.error('[zelle checkout] failed:', err.message);
     res.status(err.status === 409 ? 409 : 400).json({ error: err.message });
@@ -2249,7 +2362,7 @@ function achReturnUrls(req) {
 const ACH_ABANDON_HOURS = Number(process.env.ACH_ABANDON_HOURS || 6);
 
 /* ---- open an ACH payment for the (server-priced) cart ---- */
-app.post('/api/ach/checkout', auth.requireAuth, async (req, res) => {
+app.post('/api/ach/checkout', optionalAuth, async (req, res) => {
   if (!finagy.CONFIGURED) {
     return res.status(500).json({ error: 'Bank payments are not set up yet (missing FINAGY_* keys in server/.env).' });
   }
@@ -2260,16 +2373,22 @@ app.post('/api/ach/checkout', auth.requireAuth, async (req, res) => {
     const webAuthorization = buildWebAuthorization(body.webAuthorization, req);
     const declarations = buildDeclarations(body.declarations, req);
 
+    /* The account this debit belongs to. AllayPay's underwriting requires one
+       behind every order, which is exactly what this guarantees — a signed-out
+       buyer gets an account opened from the email they entered, rather than a
+       bank debit attributable to nobody. */
+    const buyer = await resolveCheckoutBuyer(req, body);
+
     /* Points behave exactly as they do on crypto: folded into the amount, and
        HELD now. Unlike Zelle there is a real amount under our control here, so
        there is something for a discount to reduce. */
-    const discount = plannedDiscount(req.user, body.pointsToRedeem);
+    const discount = plannedDiscount(buyer.signedIn ? buyer.user : null, body.pointsToRedeem);
     const order = buildOrder(body.items, { discount, shippingMethod: body.shippingMethod });
 
-    const buyerEmail = body.email || req.user.email;
+    const buyerEmail = body.email || buyer.user.email;
 
     if (!body.allowDuplicate) {
-      const twin = findOpenTwin({ userId: req.user.id, email: buyerEmail, order });
+      const twin = findOpenTwin({ userId: buyer.user.id, email: buyerEmail, order });
       if (twin) return res.status(409).json(duplicateOrderResponse(twin));
     }
 
@@ -2305,12 +2424,13 @@ app.post('/api/ach/checkout', auth.requireAuth, async (req, res) => {
       throw e;
     }
 
-    const pointsRedeemed = reserveLoyaltyPoints(req.user.id, order, orderId);
+    const pointsRedeemed = reserveLoyaltyPoints(buyer.user.id, order, orderId);
     try {
-      store.addOrder(req.user.id, buildOrderRecord({
+      store.addOrder(buyer.user.id, buildOrderRecord({
         orderId, order, method: 'ach', status: 'pending',
         email: buyerEmail, shipping: body.shipping,
-        pointsRedeemed, stockReserved, webAuthorization, declarations
+        pointsRedeemed, stockReserved, webAuthorization, declarations,
+        guestCheckout: !buyer.signedIn
       }));
       /* What Finagy knows about this order, kept apart from the order fields so
          a reconcile can see the gateway's own view without guessing. `achStatus`
@@ -2322,7 +2442,7 @@ app.post('/api/ach/checkout', auth.requireAuth, async (req, res) => {
         achSandbox: !finagy.IS_PRODUCTION,
         achOpenedAt: new Date().toISOString()
       });
-      store.clearCart(req.user.id);
+      if (buyer.signedIn) store.clearCart(buyer.user.id);
     } catch (e) {
       console.error('[ach checkout] could not save order:', e.message);
       releaseOrderStock(null, stockReserved);
@@ -2335,6 +2455,12 @@ app.post('/api/ach/checkout', auth.requireAuth, async (req, res) => {
       total: order.total,
       discount: order.discount,
       pointsRedeemed,
+      accountCreated: buyer.created,
+      /* The same signed reference the "bank payment started" email carries.
+         The browser comes back from Finagy's page with no session to prove
+         anything with when the buyer is not signed in, so this is what lets it
+         file the transaction id against its own order — and only its own. */
+      payToken: auth.refToken('pay', orderId),
       sandbox: !finagy.IS_PRODUCTION,
       scriptUrl: finagy.HPP_SCRIPT,
       /* Safe to hand to the browser: the session key is single-use, expires in
@@ -2347,6 +2473,8 @@ app.post('/api/ach/checkout', auth.requireAuth, async (req, res) => {
       .catch(err => console.error('[ach email] failed:', err.message));
     notifyAdminOfAchOrder({ orderId, order, email: buyerEmail })
       .catch(err => console.error('[ach admin-notify] failed:', err.message));
+    sendAccountOpenedEmail(buyer, orderId)
+      .catch(err => console.error('[account-opened email] failed:', err.message));
   } catch (err) {
     console.error('[ach checkout] failed:', err.message);
     res.status(err.status === 409 ? 409 : 400).json({ error: err.message });
@@ -2362,11 +2490,16 @@ app.post('/api/ach/checkout', auth.requireAuth, async (req, res) => {
    Everything else in the query string is treated as a claim by an untrusted
    party, because that is what it is. The order's status is set from what
    Finagy tells us server-side, never from `code` or `status`. */
-app.post('/api/ach/confirm', auth.requireAuth, async (req, res) => {
+/* optionalAuth for the same reason the resume route uses it: the buyer coming
+   back from Finagy may have no session at all (they checked out signed-out and
+   we opened the account without signing them in). Ownership is then proved the
+   same way every other signed-out order route proves it — the HMAC token this
+   order's own checkout response handed to that browser. */
+app.post('/api/ach/confirm', optionalAuth, async (req, res) => {
   if (!finagy.CONFIGURED) return res.status(400).json({ error: 'Bank payments are not configured on this server.' });
   try {
     const { orderId, paymentId, sessionKey } = req.body || {};
-    const found = ownOrder(req.user.id, orderId);
+    const found = (req.user && ownOrder(req.user.id, orderId)) || orderFromPayToken(req, orderId);
     if (!found) return res.status(404).json({ error: 'No such order on this account.' });
     if (found.method !== 'ach') return res.status(400).json({ error: 'That order was not placed with a bank payment.' });
 
@@ -4072,12 +4205,17 @@ app.get('/api/admin/orders', requireAdmin, (req, res) => {
   const orders = store.listAllOrders()
     .filter(o => !want || String(o.status || '').toLowerCase() === want)
     .map(o => {
-      const guest = o.userId === store.GUEST_KEY;
-      const owner = guest ? null : auth.getUserById(o.userId);
+      /* Two kinds of guest row now. The old ones sit in the shared GUEST_KEY
+         bucket (orders raised before checkout opened an account for the buyer);
+         the new ones belong to a real account that the buyer never signed into.
+         Both are "checked out without signing in" as far as the queue cares. */
+      const orphan = o.userId === store.GUEST_KEY;
+      const guest = orphan || !!o.guestCheckout;
+      const owner = orphan ? null : auth.getUserById(o.userId);
       return {
         ...o,
         guest,
-        userEmail: guest ? (o.email || '(guest)') : (owner ? owner.email : '(deleted account)'),
+        userEmail: owner ? owner.email : (o.email || '(guest)'),
         userName: owner ? `${owner.firstName} ${owner.lastName}`.trim() : '',
         // What is still owed, and whether it can be collected without a human
         // — the two things the underpaid rows are actually worked from.

@@ -21,6 +21,11 @@ const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const TOKEN_TTL = process.env.JWT_TTL || '30d';
 const BCRYPT_ROUNDS = 10;
 const RESET_TTL_MS = 60 * 60 * 1000;   // password-reset links valid for 1 hour
+/* The same machinery carries the "set your password" link for an account we
+   opened during checkout. That link is not a reply to somebody asking for it a
+   minute ago — it sits in an order email that may not be opened until the
+   parcel arrives, so an hour would make it useless. */
+const SETUP_TTL_MS = Number(process.env.PASSWORD_SETUP_TTL_DAYS || 14) * 24 * 60 * 60 * 1000;
 
 /* ---- signing secret ----
    Prefer an explicit JWT_SECRET. If it's missing we fall back to a
@@ -127,8 +132,17 @@ async function registerUser({ firstName, lastName, email, password, ref }) {
   if (password.length < 8) throw httpError(400, 'Password must be at least 8 characters.');
 
   const users = loadUsers();
-  if (users.some(u => u.email === email)) {
-    throw httpError(409, 'An account with that email already exists.');
+  const clash = users.find(u => u.email === email);
+  if (clash) {
+    /* An account we opened for them at checkout is one they have never signed
+       into, so a bare "already exists" reads as a mistake rather than an
+       instruction. Point at the one door that works — and deliberately NOT at
+       claiming it with a new password here: the email behind it was never
+       verified, and that account already holds real orders. The reset link
+       going to the inbox is what proves the claim. */
+    throw httpError(409, clash.passwordSet === false
+      ? 'You already have an account from a previous order. Use "Forgot password" to set a password for it.'
+      : 'An account with that email already exists.');
   }
 
   // Resolve the referral code (if any) to an existing, different account.
@@ -145,6 +159,7 @@ async function registerUser({ firstName, lastName, email, password, ref }) {
     lastName,
     email,
     passwordHash: await bcrypt.hash(password, BCRYPT_ROUNDS),
+    passwordSet: true,
     createdAt: new Date().toISOString(),
     referralCode: genReferralCode(users),
     ...(referredBy ? { referredBy } : {})
@@ -171,6 +186,63 @@ async function authenticate({ email, password }) {
 function getUserById(id) {
   const u = loadUsers().find(x => x.id === id);
   return u ? publicUser(u) : null;
+}
+
+/* Look up an account by email (public fields only), or null. Used at checkout
+   to decide whether the buyer already has an account behind the address they
+   typed. It answers with no credential involved, so nothing that reaches the
+   browser may depend on it — see resolveCheckoutBuyer in server.js, which
+   attaches the order but never issues a session. */
+function findByEmail(email) {
+  const u = loadUsers().find(x => x.email === normEmail(email));
+  return u ? publicUser(u) : null;
+}
+
+/* ---- the account behind a checkout that had nobody signed in ----
+   Every order must belong to an account holder (the card/ACH underwriting
+   requires it), but making a buyer stop and register loses the sale. So the
+   account is opened FOR them, from the email they were typing anyway.
+
+   Two deliberate refusals here:
+     · no password is chosen, and none can be guessed — the hash is over 32
+       random bytes that are thrown away, so this account cannot be signed into
+       until its owner sets a password from the emailed link;
+     · no session token is minted (the caller cannot ask for one). The email
+       address is unverified at this point, and handing out a 30-day session
+       for an unverified address is how a stranger reads somebody else's
+       order history.
+
+   Returns the public user plus a long-lived setup token — the same shape a
+   password reset uses, so reset-password.html needs no new page. */
+async function createCheckoutAccount({ email, firstName, lastName }) {
+  email = normEmail(email);
+  firstName = String(firstName || '').trim() || 'Customer';
+  lastName = String(lastName || '').trim() || '—';
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw httpError(400, 'Enter a valid email address.');
+
+  const users = loadUsers();
+  if (users.some(u => u.email === email)) throw httpError(409, 'An account with that email already exists.');
+
+  const setupToken = crypto.randomBytes(32).toString('hex');
+  const user = {
+    id: crypto.randomUUID(),
+    firstName,
+    lastName,
+    email,
+    // Unguessable and unrecorded: there is no password, and this makes sure
+    // there is no shared default one either.
+    passwordHash: await bcrypt.hash(crypto.randomBytes(32).toString('hex'), BCRYPT_ROUNDS),
+    passwordSet: false,
+    createdVia: 'checkout',
+    createdAt: new Date().toISOString(),
+    referralCode: genReferralCode(users),
+    resetTokenHash: hashToken(setupToken),
+    resetTokenExpires: new Date(Date.now() + SETUP_TTL_MS).toISOString()
+  };
+  users.push(user);
+  saveUsers(users);
+
+  return { user: publicUser(user), setupToken };
 }
 
 /* All accounts (public fields only), newest first — for the admin view. */
@@ -231,6 +303,7 @@ async function resetPassword(token, newPassword) {
   }
 
   user.passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
+  user.passwordSet = true;          // a checkout-made account is now a real one
   delete user.resetTokenHash;
   delete user.resetTokenExpires;
   saveUsers(users);
@@ -371,8 +444,10 @@ module.exports = {
   ADMIN_ENABLED,
   isAdminEmail,
   registerUser,
+  createCheckoutAccount,
   authenticate,
   getUserById,
+  findByEmail,
   listUsers,
   deleteUser,
   createResetToken,

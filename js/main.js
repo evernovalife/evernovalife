@@ -2062,7 +2062,7 @@ function renderOrderSummary(el, withCheckoutBtn) {
         : `<p class="summary-note"><span class="summary-note-ic">${iconCheckCircle()}</span>Free shipping unlocked</p>`}
     ${withCheckoutBtn ? `<a class="btn btn-primary btn-block" href="${checkoutHref()}">Proceed to Checkout</a>` : ''}
     ${withCheckoutBtn && !isSignedIn()
-      ? `<p class="summary-note">An account is required to check out — you'll be asked to sign in or register next.</p>` : ''}
+      ? `<p class="summary-note">No account needed to check out. <a href="login.html?next=checkout.html">Sign in</a> to use your points.</p>` : ''}
     <p class="summary-note"><span class="summary-note-ic">${iconLock()}</span>Secure checkout · Research use only</p>`;
 }
 
@@ -2080,10 +2080,10 @@ function isSignedIn() {
   try { return !!(localStorage.getItem('enl_token') || ''); } catch (e) { return false; }
 }
 
-/* Checkout requires an account, so send signed-out buyers to sign in first
-   and bring them straight back. */
+/* Checkout is open to everyone — the account behind the order is opened from
+   the email on the form, server-side, without stopping the buyer. */
 function checkoutHref() {
-  return isSignedIn() ? 'checkout.html' : 'login.html?next=checkout.html';
+  return 'checkout.html';
 }
 
 /* ============================================================
@@ -2829,6 +2829,17 @@ function initAutoshipCheckout() {
    back to checkout.html?paid=crypto after paying. `ref` is what we stashed
    before the redirect, so the confirmation can name the order and repeat the
    auto-ship terms they agreed to. ---- */
+/* Said on the confirmation screen, because the alternative is an email about
+   an account they never asked for arriving with no explanation. */
+function accountOpenedNote(ref) {
+  if (!ref || !ref.accountCreated) return '';
+  return `<p class="text-muted"><span class="summary-note-ic">${iconLock()}</span><strong>We've set up an account for you.</strong>
+    Check your email for a link to choose a password — then you can follow this order and reorder without
+    retyping anything. You don't have to: you can always look this order up at
+    <a href="order-status.html" style="color:var(--accent-purple)">order status</a> with the reference above
+    and your email address.</p>`;
+}
+
 function showCryptoConfirmation(ref) {
   cart.clearCart();
   const wrap = document.getElementById('checkoutMain');
@@ -2860,6 +2871,7 @@ function showCryptoConfirmation(ref) {
         ? ` — your order reference is <strong>${escapeHtml(ref.orderId)}</strong>` : ''}.
         On-chain payments may take a few minutes to fully confirm.</p>
       ${autoshipNote}
+      ${accountOpenedNote(ref)}
       <p class="text-muted">Once the transaction settles we'll ship to the address you provided. Keep your order reference for your records.</p>
       <a class="btn btn-primary" href="index.html">Back to Home</a>
     </div>`;
@@ -2945,7 +2957,8 @@ async function submitCryptoOrder(form, btn) {
         orderId: body.orderId,
         invoiceId: body.invoiceId,
         subscription: body.subscription || null,
-        autoshipFailed: !!body.autoshipFailed
+        autoshipFailed: !!body.autoshipFailed,
+        accountCreated: !!body.accountCreated
       }));
     } catch (e) {}
     window.location.href = body.checkoutLink;   // → hosted BTCPay invoice
@@ -2999,6 +3012,7 @@ function showZelleInstructions(body) {
       <p class="text-muted">We check payments by hand, so this isn't instant: you'll get an email as soon as
          the money lands, and we ship after that. If anything looks wrong, reply to your order email and
          quote <strong>${escapeHtml(body.orderId || '')}</strong> — please don't send a second transfer.</p>
+      ${accountOpenedNote({ accountCreated: body.accountCreated, orderId: body.orderId })}
       <a class="btn btn-primary" href="index.html">Back to Home</a>
     </div>`;
 
@@ -3133,6 +3147,7 @@ function showAchConfirmation(ref) {
         <strong>Bank transfers aren't instant.</strong> Your bank normally releases the funds within
         1&ndash;3 business days. We ship once the money actually clears, and we'll email you the moment it does &mdash;
         so there's nothing else for you to do.</p>`}
+      ${accountOpenedNote(ref)}
       <p class="text-muted">Please don't start a second payment. Keep your order reference for your records, and you can
         check it any time on the <a href="order-status.html" style="color:var(--accent-purple)">order status</a> page.</p>
       <a class="btn btn-primary" href="index.html">Back to Home</a>
@@ -3152,7 +3167,7 @@ async function handleAchReturn() {
   try { sessionStorage.removeItem('enl_ach_order'); } catch (e) {}
 
   const orderId = (stored && stored.orderId) || '';
-  const ref = { orderId, settled: false };
+  const ref = { orderId, settled: false, accountCreated: !!(stored && stored.accountCreated) };
 
   // Render immediately — the buyer should never watch a spinner to be told
   // their order exists. The server call only refines what's on screen.
@@ -3165,6 +3180,7 @@ async function handleAchReturn() {
       headers: { 'Content-Type': 'application/json', ...authHeader() },
       body: JSON.stringify({
         orderId,
+        t: (stored && stored.t) || '',
         paymentId: params.get('payment_id') || '',
         sessionKey: params.get('session_key') || ''
       })
@@ -3172,7 +3188,7 @@ async function handleAchReturn() {
     const body = await res.json().catch(() => ({}));
     // Settling this fast is unusual but not impossible, and if it happened the
     // buyer deserves the better message.
-    if (res.ok && body.settled) showAchConfirmation({ orderId, settled: true });
+    if (res.ok && body.settled) showAchConfirmation({ ...ref, settled: true });
   } catch (e) {
     /* The order is already placed and the server's poller will settle it
        regardless — a failed confirm call costs us Finagy's transaction id, not
@@ -3207,7 +3223,9 @@ async function resumeAchOrder(orderId, token) {
     if (!res.ok || !body.hpp) throw new Error(body.error || 'That payment link is no longer valid.');
 
     await loadFinagyScript(body.scriptUrl);
-    try { sessionStorage.setItem('enl_ach_order', JSON.stringify({ orderId: body.orderId })); } catch (e) {}
+    try {
+      sessionStorage.setItem('enl_ach_order', JSON.stringify({ orderId: body.orderId, t: token || '' }));
+    } catch (e) {}
     window.redirectToFinagyHostedPage(body.hpp);
   } catch (err) {
     console.error('[ach resume]', err);
@@ -3279,7 +3297,12 @@ async function submitAchOrder(form, btn) {
     // Finagy's redirect can't carry our reference (their URL fields cap at 64
     // characters), so we carry it ourselves across the navigation.
     try {
-      sessionStorage.setItem('enl_ach_order', JSON.stringify({ orderId: body.orderId }));
+      /* The token rides along because a signed-out buyer comes back from
+         Finagy with nothing else to prove the order is theirs — their account
+         exists but they were never signed into it. */
+      sessionStorage.setItem('enl_ach_order', JSON.stringify({
+        orderId: body.orderId, t: body.payToken || '', accountCreated: !!body.accountCreated
+      }));
     } catch (e) {}
 
     window.redirectToFinagyHostedPage(body.hpp);   // → Finagy's hosted bank page
@@ -3291,25 +3314,20 @@ async function submitAchOrder(form, btn) {
   }
 }
 
-/* Replace the checkout form with a sign-in / register prompt. The cart is
-   untouched — it's synced to the account on sign-in, so nothing is lost. */
-function showCheckoutAccountGate() {
-  const wrap = document.getElementById('checkoutMain');
-  if (!wrap) return;
-  wrap.innerHTML = `
-    <div class="empty-state glass">
-      <div class="empty-icon">${iconLock()}</div>
-      <h3>An account is required to check out</h3>
-      <p>Ever Nova Life supplies materials for in-vitro research only, and every order must be
-         tied to a verified account holder. Please sign in, or create an account — it takes a minute
-         and your cart will be waiting.</p>
-      <div class="detail-cta" style="justify-content:center">
-        <a class="btn btn-primary btn-lg" href="register.html?next=checkout.html">Create an account</a>
-        <a class="btn btn-ghost btn-lg" href="login.html?next=checkout.html">Sign in</a>
-      </div>
-      <p class="text-muted" style="margin-top:1rem">Ordering also requires an approved
-         <a href="research-accounts.html" style="color:var(--accent-purple)">research account</a>.</p>
-    </div>`;
+/* An offer, where the gate used to be. Signing in is worth something concrete
+   — saved details, points, auto-ship — so it is worth saying; it is no longer
+   worth making anyone do it before they can buy. Shown above the form, and only
+   to a signed-out buyer. */
+function showCheckoutSignInOffer() {
+  const box = document.getElementById('checkoutSignInOffer');
+  if (!box || isSignedIn()) return;
+  box.hidden = false;
+  box.innerHTML = `
+    <p class="form-hint" style="margin:0">
+      <strong>Already have an account?</strong>
+      <a href="login.html?next=checkout.html">Sign in</a> to use your points and auto-ship.
+      Otherwise just carry on — we'll set an account up from your email so you can track this order.
+    </p>`;
 }
 
 function initCheckoutPage() {
@@ -3345,10 +3363,11 @@ function initCheckoutPage() {
       '. Your cart is still here — pick a payment method below to try again.', 'error'), 0);
   }
 
-  // An account is required to order: every purchase has to be attributable to a
-  // verified buyer we can contact and keep records for. Enforced on the server
-  // too — this only saves a signed-out visitor from filling in the whole form.
-  if (!isSignedIn()) { showCheckoutAccountGate(); return; }
+  /* Every order is still attributable to an account holder — that has not
+     changed and it is a condition of our payment underwriting. What changed is
+     who does the work: the server opens the account from the email on this
+     form, so a buyer is never sent away to register and back again. */
+  showCheckoutSignInOffer();
 
   enlTrack('begin_checkout', { items: cart.items.length });
 
