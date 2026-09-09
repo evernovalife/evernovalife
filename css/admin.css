@@ -373,6 +373,10 @@ body.adm {
 .pill.shipped { background: rgba(34, 211, 238, 0.14); color: var(--accent-cyan); border-color: rgba(34, 211, 238, 0.3); }
 .pill.delivered { background: rgba(52, 211, 153, 0.14); color: var(--accent-mint); border-color: rgba(52, 211, 153, 0.3); }
 .pill.cancelled, .pill.expired { background: rgba(244, 63, 94, 0.12); color: var(--accent-coral); border-color: rgba(244, 63, 94, 0.28); }
+/* An ACH debit the bank pulled back. Louder than cancelled on purpose: a LATE
+   return is money leaving an account we had already counted, on an order that
+   may already be in a courier's van. */
+.pill.returned { background: rgba(244, 63, 94, 0.2); color: var(--accent-coral); border-color: rgba(244, 63, 94, 0.5); font-weight: 700; }
 .pill.admin { background: rgba(168, 85, 247, 0.16); color: var(--accent-violet); border-color: rgba(168, 85, 247, 0.34); }
 /* A sandbox order that never carried money — struck through so it cannot be
    mistaken for a sale at a glance in a list of real ones. */

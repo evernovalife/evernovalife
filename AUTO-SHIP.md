@@ -23,12 +23,24 @@ Render dashboard → your `evernova-api` service → **Environment** → add:
 
 | Key | Value |
 |---|---|
-| `CRON_KEY` | `5b28dbec330ceb43ac64282f9d8d625ea0b62e0d85a1de99` |
+| `CRON_KEY` | *generate your own — see below* |
 | `SITE_URL` | `https://evernovalife.com` |
 
 `CRON_KEY` is the password for the trigger that invoices due plans — it stops
-anyone on the internet from firing your billing run. (One was generated for you
-above; if you'd rather make your own, any long random string works.)
+anyone on the internet from firing your billing run.
+
+**Generate it yourself, and never write it down in this file.** This document is
+committed to a public repository, so a key pasted here is a key anyone can read:
+
+```
+node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"
+```
+
+It belongs in Render's **Environment** tab and in the scheduler's header, and
+nowhere else. Any key that has ever appeared in this file must be rotated.
+
+The same `CRON_KEY` secures every scheduled trigger — auto-ship, outreach, and
+the ACH poller (`ALLAYPAY-ACH.md`). Rotating it means updating each schedule.
 
 `SITE_URL` may already be set. It's what puts the right links in the auto-ship
 emails, so check it's there.
@@ -51,7 +63,7 @@ which conveniently stops the free tier from falling asleep.
    - **Schedule:** Every hour (at minute 0)
 3. Open the **Advanced** tab:
    - **Request method:** `POST`
-   - **Headers** → add one: name `x-cron-key`, value `5b28dbec330ceb43ac64282f9d8d625ea0b62e0d85a1de99`
+   - **Headers** → add one: name `x-cron-key`, value `<your CRON_KEY>`
 4. **Create** → then hit **Test run**. A working response looks like:
    ```json
    {"success":true,"due":0,"invoiced":0,"failed":0,"reminded":0}

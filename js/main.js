@@ -2199,7 +2199,7 @@ function checkoutSetMsg(text, kind) {
 function collectCheckout(form) {
   const v = name => (form.elements[name] && form.elements[name].value || '').trim();
   const cc = v('country');
-  return {
+  const checkout = {
     email: v('email'),
     name: (v('firstName') + ' ' + v('lastName')).trim(),
     // Required research qualification — recorded with the order.
@@ -2214,6 +2214,171 @@ function collectCheckout(form) {
     // truth — and the server re-checks it either way.
     countryCode: /^[A-Z]{2}$/.test(cc) ? cc : 'US'
   };
+  /* Every payment path funnels through here, so this is the one honest place
+     to remember what the buyer typed — including guests, who have no account
+     for us to read it back from. */
+  saveCheckoutProfile(checkout);
+  return checkout;
+}
+
+/* ============================================================
+   CHECKOUT AUTOFILL
+   Nobody should retype an address we already hold. Three sources,
+   weakest first so the better one overwrites it:
+     1. the details this browser last checked out with (guests too),
+     2. the signed-in account's name + email,
+     3. the shipping address on that account's most recent order.
+   A field the buyer has already typed is never touched, and nothing
+   here blocks the page — if the account lookup is slow or offline
+   the form simply stays as it was.
+   ============================================================ */
+const CHECKOUT_PROFILE_KEY = 'enl_checkout_profile';
+
+/* Contact + address only. Never the tick-boxes, the payment choice or the
+   points redemption — those are decisions, and each order gets its own. */
+function saveCheckoutProfile(checkout) {
+  if (!checkout || !checkout.email) return;
+  try {
+    localStorage.setItem(CHECKOUT_PROFILE_KEY, JSON.stringify({
+      email: checkout.email,
+      name: checkout.name,
+      institution: checkout.institution,
+      researchField: checkout.researchField,
+      address: checkout.address,
+      city: checkout.city,
+      state: checkout.state,
+      postalCode: checkout.postalCode,
+      countryCode: checkout.countryCode,
+      savedAt: new Date().toISOString()
+    }));
+  } catch (e) { /* private mode / storage full — autofill is a convenience */ }
+}
+
+function readCheckoutProfile() {
+  try { return JSON.parse(localStorage.getItem(CHECKOUT_PROFILE_KEY) || 'null'); }
+  catch (e) { return null; }
+}
+
+/* "Jane Q Doe" → { firstName: 'Jane', lastName: 'Q Doe' }. The form asks for
+   two names, the order stores one string; the split has to go back the way
+   collectCheckout joined it. */
+function splitName(full) {
+  const parts = String(full || '').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return { firstName: '', lastName: '' };
+  return { firstName: parts[0], lastName: parts.slice(1).join(' ') };
+}
+
+/* Write values into empty fields. Returns how many actually landed, so the
+   caller knows whether to say anything to the buyer. */
+function fillCheckoutFields(form, data) {
+  if (!form || !data) return 0;
+  let filled = 0;
+  Object.keys(data).forEach(name => {
+    const value = String(data[name] == null ? '' : data[name]).trim();
+    if (!value) return;
+    const el = form.elements[name];
+    if (!el || el.value.trim()) return;   // already typed → leave it alone
+    /* A <select> can only hold one of its own options. An address whose state
+       or research field isn't on our list is silently skipped rather than
+       jammed in, which would leave the control showing nothing. */
+    if (el.tagName === 'SELECT' && !Array.prototype.some.call(el.options, o => o.value === value)) return;
+    el.value = value;
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    filled++;
+  });
+  return filled;
+}
+
+/* Flatten either shape (a saved profile or an order's shippingAddress) into
+   the form's field names. */
+function checkoutFieldsFrom(src) {
+  if (!src) return null;
+  const { firstName, lastName } = splitName(src.name);
+  return {
+    email: src.email || '',
+    firstName,
+    lastName,
+    institution: src.institution || '',
+    researchField: src.researchField || '',
+    address: src.address || '',
+    city: src.city || '',
+    state: src.state || '',
+    postalCode: src.postalCode || '',
+    country: src.countryCode || src.country || ''
+  };
+}
+
+function checkoutAutofillNote(text) {
+  const form = document.getElementById('checkoutForm');
+  if (!form) return;
+  let note = document.getElementById('checkoutAutofillNote');
+  if (!note) {
+    note = document.createElement('p');
+    note.id = 'checkoutAutofillNote';
+    note.className = 'autofill-note';
+    note.setAttribute('role', 'status');
+    form.insertBefore(note, form.firstElementChild);
+  }
+  note.innerHTML = '';
+  note.append(text + ' ');
+  const clear = document.createElement('button');
+  clear.type = 'button';
+  clear.className = 'autofill-clear';
+  clear.textContent = 'Clear and start fresh';
+  clear.addEventListener('click', () => {
+    ['email', 'firstName', 'lastName', 'institution', 'researchField',
+      'address', 'city', 'state', 'postalCode'].forEach(name => {
+      const el = form.elements[name];
+      if (el) el.value = '';
+    });
+    try { localStorage.removeItem(CHECKOUT_PROFILE_KEY); } catch (e) {}
+    note.remove();
+    const email = form.elements['email'];
+    if (email) email.focus();
+  });
+  note.appendChild(clear);
+}
+
+async function initCheckoutAutofill(form) {
+  if (!form) return;
+  let filled = 0;
+  let fromAccount = false;
+
+  // 1. what this browser last used — instant, and the only source a guest has
+  filled += fillCheckoutFields(form, checkoutFieldsFrom(readCheckoutProfile()));
+
+  // 2. the signed-in account's own name and email
+  let user = null;
+  try { user = JSON.parse(localStorage.getItem('enl_user') || 'null'); } catch (e) {}
+  if (user) {
+    fromAccount = true;
+    filled += fillCheckoutFields(form, {
+      email: user.email || '',
+      firstName: user.firstName || '',
+      lastName: user.lastName || ''
+    });
+  }
+
+  if (filled) checkoutAutofillNote(fromAccount
+    ? 'Filled in from your account — check it\'s still right.'
+    : 'Filled in from your last order on this device — check it\'s still right.');
+
+  // 3. the address on the most recent order, for everything the account can't say
+  let token = '';
+  try { token = localStorage.getItem('enl_token') || ''; } catch (e) {}
+  if (!token) return;
+  let orders = [];
+  try {
+    const res = await fetch(API_BASE + '/api/orders', { headers: authHeader() });
+    if (!res.ok) return;
+    const data = await res.json().catch(() => ({}));
+    orders = Array.isArray(data.orders) ? data.orders : [];
+  } catch (e) { return; }   // offline → whatever we already filled in stands
+
+  const recent = orders.find(o => o && o.shippingAddress && o.shippingAddress.address);
+  if (!recent) return;
+  const more = fillCheckoutFields(form, checkoutFieldsFrom(recent.shippingAddress));
+  if (more || filled) checkoutAutofillNote('Filled in from your account — check it\'s still right.');
 }
 
 /* ============================================================
@@ -2493,20 +2658,31 @@ function onRedeemToggle(checked) {
 /* Keep the crypto button showing the amount it will actually invoice, so the
    discount and the button can never disagree. */
 function updatePayButtonAmount() {
+  const total = formatPrice(checkoutTotals().total);
   const amt = document.getElementById('payBtnAmount');
-  if (amt) amt.textContent = formatPrice(checkoutTotals().total);
+  if (amt) amt.textContent = total;
+  // The bank button names the amount too: an ACH debit is the one method here
+  // that takes money out of an account, so the figure being authorized has to
+  // be on the control that authorizes it.
+  const achAmt = document.getElementById('achPayBtnAmount');
+  if (achAmt) achAmt.textContent = total;
 }
 
 /* Show or hide each payment option. Crypto is the primary path and handles
-   everything — points discounts and auto-ship included. Zelle steps aside for
-   both: the money arrives by hand, so there's no invoice to discount, and no
-   way to schedule a repeat. Each option also respects what the server said it
-   has configured (/api/health → window._cryptoAvailable / _zelleAvailable). */
+   everything — points discounts and auto-ship included. ACH takes points (it
+   bills a real amount we control) but not auto-ship: a repeating bank debit
+   needs its own recurring NACHA authorization, which this checkout doesn't
+   collect. Zelle steps aside for both: the money arrives by hand, so there's
+   no invoice to discount, and no way to schedule a repeat. Each option also
+   respects what the server said it has configured (/api/health →
+   window._cryptoAvailable / _achAvailable / _zelleAvailable). */
 function updateAltPayVisibility() {
   const wrap = document.getElementById('altPaySection');
   const crypto = document.getElementById('cryptoPaySection');
+  const ach = document.getElementById('achPaySection');
   const zelle = document.getElementById('zellePaySection');
-  const divider = document.querySelector('#altPaySection .alt-pay-divider');
+  const achDivider = document.getElementById('achPayDivider');
+  const zelleDivider = document.getElementById('zellePayDivider');
   const none = document.getElementById('noPayMethods');
   /* The authorization box belongs to the pay buttons — it authorizes THIS
      purchase — so it appears and disappears with them. */
@@ -2524,17 +2700,32 @@ function updateAltPayVisibility() {
   }
 
   const zelleBlocked = (enlRedeem().points || 0) > 0 || autoshipSelection().enabled;
+  // A bank debit can carry a points discount — it bills an amount the server
+  // sets — but not a repeating order, which would need a recurring debit
+  // authorization this form doesn't ask for.
+  const achBlocked = autoshipSelection().enabled;
 
   const showCrypto = window._cryptoAvailable !== false;
+  const showAch = window._achAvailable !== false && !achBlocked;
   const showZelle = window._zelleAvailable !== false && !zelleBlocked;
   if (crypto) crypto.style.display = showCrypto ? '' : 'none';
+  if (ach) ach.style.display = showAch ? '' : 'none';
   if (zelle) zelle.style.display = showZelle ? '' : 'none';
-  // The divider only earns its place when there's something on both sides of it.
-  if (divider) divider.style.display = (showCrypto && showZelle) ? '' : 'none';
-  if (none) none.style.display = (showCrypto || showZelle) ? 'none' : '';
+
+  const sandboxNote = document.getElementById('achSandboxNote');
+  if (sandboxNote) sandboxNote.style.display = (showAch && window._achSandbox) ? '' : 'none';
+
+  /* Each divider only earns its place when something is actually showing on
+     both sides of it — otherwise a hidden method leaves an "or pay another
+     way" rule with nothing after it. */
+  if (achDivider) achDivider.style.display = (showCrypto && showAch) ? '' : 'none';
+  if (zelleDivider) zelleDivider.style.display = ((showCrypto || showAch) && showZelle) ? '' : 'none';
+
+  const anyMethod = showCrypto || showAch || showZelle;
+  if (none) none.style.display = anyMethod ? 'none' : '';
   if (wrap) wrap.style.display = '';
   // Only ask for the authorization when there is in fact a way to pay.
-  if (auth) auth.style.display = (showCrypto || showZelle) ? '' : 'none';
+  if (auth) auth.style.display = anyMethod ? '' : 'none';
   updatePayButtonAmount();
 }
 
@@ -2682,9 +2873,14 @@ function showCryptoConfirmation(ref) {
    Returns 'retry' to place it anyway, 'abort' otherwise. May navigate away. */
 async function handleDuplicateOrder(body) {
   const due = Number(body.due) || 0;
-  const finish = body.payUrl
-    ? `\n\nPress OK to go and pay the ${formatPrice(due)} still owed on ${body.duplicateOf}.`
-    : `\n\nThe payment details for ${body.duplicateOf} are in your email.`;
+  /* Three genuinely different situations, and offering the wrong one is worse
+     than offering nothing: paying a crypto shortfall, restarting a bank form
+     whose 5-minute key expired, and having no route at all. */
+  const finish = body.payKind === 'ach-resume'
+    ? `\n\nPress OK to pick up the bank payment for ${body.duplicateOf} where you left off.`
+    : body.payUrl
+      ? `\n\nPress OK to go and pay the ${formatPrice(due)} still owed on ${body.duplicateOf}.`
+      : `\n\nThe payment details for ${body.duplicateOf} are in your email.`;
   const goFinish = window.confirm((body.error || 'You already have this order open.') + finish);
   if (goFinish) {
     if (body.payUrl) window.location.href = body.payUrl;
@@ -2873,6 +3069,228 @@ async function submitZelleOrder(form, btn) {
   }
 }
 
+/* ============================================================
+   ACH — bank debit through Finagy (AllayPay's processor)
+
+   The buyer's routing and account numbers are typed into Finagy's
+   hosted page, never here, so this file only ever handles a session
+   key the server minted and an order reference.
+
+   The awkward part is honesty about time. A card says yes or no in a
+   second; an ACH debit is a request that clears over days. So the
+   confirmation screen deliberately does NOT say "payment received" —
+   because it hasn't been. It says what was authorized and what
+   happens next, and the server decides the rest.
+   ============================================================ */
+
+/* Load Finagy's browser library on demand.
+
+   Not in the page's <head>: it's a third-party script on a payment page, and
+   every visitor who never picks this method shouldn't be loading it. Resolves
+   once redirectToFinagyHostedPage exists. */
+let _finagyScript = null;
+function loadFinagyScript(src) {
+  if (typeof window.redirectToFinagyHostedPage === 'function') return Promise.resolve();
+  if (_finagyScript) return _finagyScript;
+  _finagyScript = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.async = true;
+    s.onload = () => {
+      // Loaded is not the same as working — a CDN can serve us an error page
+      // with a 200, and the failure would otherwise surface as a dead button.
+      if (typeof window.redirectToFinagyHostedPage === 'function') resolve();
+      else reject(new Error('The bank payment library loaded but is not usable.'));
+    };
+    s.onerror = () => {
+      _finagyScript = null;                 // let a retry try again
+      reject(new Error('Could not load the secure bank payment page. Please try another method.'));
+    };
+    document.head.appendChild(s);
+  });
+  return _finagyScript;
+}
+
+/* What the buyer sees on the way back. Not a receipt — an ACH debit at this
+   point has been authorized, not collected, and telling someone their payment
+   succeeded when it may bounce in three days is how support tickets are
+   made. */
+function showAchConfirmation(ref) {
+  cart.clearCart();
+  const wrap = document.getElementById('checkoutMain');
+  if (!wrap) return;
+  const settled = ref && ref.settled;
+
+  wrap.innerHTML = `
+    <div class="empty-state glass">
+      <div class="empty-icon">${settled ? iconCheckCircle() : iconBank()}</div>
+      <h3>${settled ? 'Payment cleared — welcome to the Nest!' : 'Bank payment authorized'}</h3>
+      <p>${settled
+        ? 'Your bank payment has cleared'
+        : 'Thank you — your bank payment is on its way'}${ref && ref.orderId
+          ? ` — your order reference is <strong>${escapeHtml(ref.orderId)}</strong>` : ''}.</p>
+      ${settled ? '' : `<p class="text-muted"><span class="summary-note-ic">${iconClock()}</span>
+        <strong>Bank transfers aren't instant.</strong> Your bank normally releases the funds within
+        1&ndash;3 business days. We ship once the money actually clears, and we'll email you the moment it does &mdash;
+        so there's nothing else for you to do.</p>`}
+      <p class="text-muted">Please don't start a second payment. Keep your order reference for your records, and you can
+        check it any time on the <a href="order-status.html" style="color:var(--accent-purple)">order status</a> page.</p>
+      <a class="btn btn-primary" href="index.html">Back to Home</a>
+    </div>`;
+}
+
+/* Coming back from Finagy's page.
+
+   Everything in this URL was written by a party we don't control, so none of
+   it decides anything: the server is asked what really happened and its answer
+   is what gets shown. The one genuinely useful field is payment_id, which is
+   Finagy's own transaction id and arrives nowhere else. */
+async function handleAchReturn() {
+  const params = new URLSearchParams(location.search);
+  let stored = null;
+  try { stored = JSON.parse(sessionStorage.getItem('enl_ach_order') || 'null'); } catch (e) {}
+  try { sessionStorage.removeItem('enl_ach_order'); } catch (e) {}
+
+  const orderId = (stored && stored.orderId) || '';
+  const ref = { orderId, settled: false };
+
+  // Render immediately — the buyer should never watch a spinner to be told
+  // their order exists. The server call only refines what's on screen.
+  showAchConfirmation(ref);
+  if (!orderId) return;
+
+  try {
+    const res = await fetch(API_BASE + '/api/ach/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeader() },
+      body: JSON.stringify({
+        orderId,
+        paymentId: params.get('payment_id') || '',
+        sessionKey: params.get('session_key') || ''
+      })
+    });
+    const body = await res.json().catch(() => ({}));
+    // Settling this fast is unusual but not impossible, and if it happened the
+    // buyer deserves the better message.
+    if (res.ok && body.settled) showAchConfirmation({ orderId, settled: true });
+  } catch (e) {
+    /* The order is already placed and the server's poller will settle it
+       regardless — a failed confirm call costs us Finagy's transaction id, not
+       the sale, so there is nothing useful to alarm the buyer with. */
+    console.warn('[ach confirm]', e);
+  }
+}
+
+/* Pick up an unpaid bank payment: mint a FRESH session key for an order that
+   already exists and send the buyer straight back to Finagy.
+
+   Deliberately not a form — everything was collected the first time, and the
+   order is priced and recorded already. All that expired is the key. */
+async function resumeAchOrder(orderId, token) {
+  const wrap = document.getElementById('checkoutMain');
+  if (wrap) {
+    wrap.innerHTML = `
+      <div class="empty-state glass">
+        <div class="empty-icon">${iconBank()}</div>
+        <h3>Reopening your payment…</h3>
+        <p>Taking you back to our processor's secure page for order
+           <strong>${escapeHtml(orderId)}</strong>.</p>
+      </div>`;
+  }
+  try {
+    const res = await fetch(API_BASE + '/api/ach/' + encodeURIComponent(orderId) + '/resume', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeader() },
+      body: JSON.stringify({ t: token })
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || !body.hpp) throw new Error(body.error || 'That payment link is no longer valid.');
+
+    await loadFinagyScript(body.scriptUrl);
+    try { sessionStorage.setItem('enl_ach_order', JSON.stringify({ orderId: body.orderId })); } catch (e) {}
+    window.redirectToFinagyHostedPage(body.hpp);
+  } catch (err) {
+    console.error('[ach resume]', err);
+    if (!wrap) return;
+    /* Say what went wrong and give them somewhere to go. A dead end here is
+       exactly the failure this whole route exists to remove. */
+    wrap.innerHTML = `
+      <div class="empty-state glass">
+        <div class="empty-icon">${iconAlert()}</div>
+        <h3>We couldn't reopen that payment</h3>
+        <p>${escapeHtml((err && err.message) || 'That payment link is no longer valid.')}</p>
+        <p class="text-muted">Nothing has been debited. If you still want these items you can order again, or reply to
+           your order email quoting <strong>${escapeHtml(orderId)}</strong> and we'll sort it out.</p>
+        <div class="detail-cta" style="justify-content:center">
+          <a class="btn btn-primary" href="products.html">Browse products</a>
+          <a class="btn btn-ghost" href="order-status.html">Check order status</a>
+        </div>
+      </div>`;
+  }
+}
+
+/* validate the form, open the ACH payment on our server, then hand the
+   session key to Finagy's hosted page. Prices come from the server — the
+   browser never names the amount that will be debited. */
+async function submitAchOrder(form, btn) {
+  if (cart.items.length === 0) { checkoutSetMsg('Your cart is empty.', 'error'); return; }
+  if (!validateCheckout(form)) { checkoutSetMsg('Please complete the highlighted fields first.', 'error'); return; }
+  checkoutSetMsg('');
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.textContent = 'Opening secure bank checkout…';
+  try {
+    const checkout = collectCheckout(form);
+    const payload = {
+      items: cart.items.map(i => ({ id: i.id, quantity: i.quantity })),
+      shipping: checkout,
+      shippingMethod: enlShipChoice(),           // the service; the server sets its price
+      email: checkout.email,
+      pointsToRedeem: enlRedeem().points || 0,   // server clamps to the real balance
+      webAuthorization: webAuthorizationRecord(), // includes the ACH debit authorization
+      declarations: declarationsRecord()          // terms + age/use conditions of sale
+    };
+    const post = () => fetch(API_BASE + '/api/ach/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeader() },
+      body: JSON.stringify(payload)
+    });
+    let res = await post();
+    let body = await res.json().catch(() => ({}));
+    if (res.status === 409 && body.duplicateOf) {
+      if (await handleDuplicateOrder(body) !== 'retry') {
+        checkoutSetMsg(body.error, 'error');
+        btn.disabled = false;
+        btn.innerHTML = original;
+        return;
+      }
+      payload.allowDuplicate = true;
+      res = await post();
+      body = await res.json().catch(() => ({}));
+    }
+    if (!res.ok || !body.hpp) throw new Error(body.error || 'Could not start bank checkout.');
+
+    /* The session key expires in five minutes, so the script is fetched only
+       now — and if it fails, the order is already recorded and the server will
+       release its stock when nothing comes of it. */
+    await loadFinagyScript(body.scriptUrl);
+
+    enlTrack('payment_started', { method: 'ach', items: cart.items.length });
+    // Finagy's redirect can't carry our reference (their URL fields cap at 64
+    // characters), so we carry it ourselves across the navigation.
+    try {
+      sessionStorage.setItem('enl_ach_order', JSON.stringify({ orderId: body.orderId }));
+    } catch (e) {}
+
+    window.redirectToFinagyHostedPage(body.hpp);   // → Finagy's hosted bank page
+  } catch (err) {
+    console.error('[ach checkout]', err);
+    checkoutSetMsg((err && err.message) || 'Could not start bank checkout. Please try again.', 'error');
+    btn.disabled = false;
+    btn.innerHTML = original;
+  }
+}
+
 /* Replace the checkout form with a sign-in / register prompt. The cart is
    untouched — it's synced to the account on sign-in, so nothing is lost. */
 function showCheckoutAccountGate() {
@@ -2895,13 +3313,36 @@ function showCheckoutAccountGate() {
 }
 
 function initCheckoutPage() {
+  const q = new URLSearchParams(location.search);
+
   // Returning from the hosted BTCPay crypto checkout after paying.
-  if (new URLSearchParams(location.search).get('paid') === 'crypto') {
+  if (q.get('paid') === 'crypto') {
     let ref = null;
     try { ref = JSON.parse(sessionStorage.getItem('enl_crypto_order') || 'null'); } catch (e) {}
     try { sessionStorage.removeItem('enl_crypto_order'); } catch (e) {}
     showCryptoConfirmation(ref);
     return;
+  }
+
+  // Returning from Finagy's hosted bank page, having authorized the debit.
+  if (q.get('paid') === 'ach') { handleAchReturn(); return; }
+
+  /* Picking up an unpaid bank payment — from the emailed link, or from the
+     duplicate-order prompt. Their session key only lives five minutes, so
+     coming back to an expired one is the ordinary case rather than an edge. */
+  if (q.get('resume') && q.get('t')) { resumeAchOrder(q.get('resume'), q.get('t')); return; }
+
+  /* They backed out of the bank page. The order is already recorded and is
+     holding stock, so this is worth saying out loud rather than dumping them
+     on a blank checkout: the server will release it, but not for hours. */
+  if (q.get('ach') === 'cancelled') {
+    let stored = null;
+    try { stored = JSON.parse(sessionStorage.getItem('enl_ach_order') || 'null'); } catch (e) {}
+    try { sessionStorage.removeItem('enl_ach_order'); } catch (e) {}
+    setTimeout(() => checkoutSetMsg(
+      'The bank payment was cancelled, so nothing has been debited' +
+      (stored && stored.orderId ? ` and order ${stored.orderId} is unpaid` : '') +
+      '. Your cart is still here — pick a payment method below to try again.', 'error'), 0);
   }
 
   // An account is required to order: every purchase has to be attributable to a
@@ -2913,7 +3354,13 @@ function initCheckoutPage() {
 
   window._enlRedeem = { points: 0, discount: 0 };
   window._cryptoAvailable = true;
+  /* Hidden until /api/health confirms it, unlike the other two. Crypto and
+     Zelle default to visible because showing one the server can't do costs a
+     click; showing a bank-debit button the server can't do would take a buyer
+     to a dead payment page after they authorized a debit. */
+  window._achAvailable = false;
   window._zelleAvailable = true;
+  window._achSandbox = false;
   const summary = document.getElementById('checkoutSummary');
   renderCheckoutSummary(summary);
   // pull the signed-in points balance, then re-render so the redeem control appears
@@ -2940,6 +3387,9 @@ function initCheckoutPage() {
   // a checkout form should never reload the page on Enter
   form.addEventListener('submit', e => e.preventDefault());
 
+  // Everything we already know about this buyer, back in the boxes.
+  initCheckoutAutofill(form);
+
   // clear a field's error as the user fixes it
   form.querySelectorAll('.form-field input, .form-field select, .form-field textarea').forEach(inp => {
     inp.addEventListener('input', () => setFieldError(inp.closest('.form-field'), ''));
@@ -2962,6 +3412,7 @@ function initCheckoutPage() {
   if (authBox) authBox.querySelectorAll('a').forEach(a => a.addEventListener('click', e => e.stopPropagation()));
 
   const cryptoBtn = document.getElementById('cryptoPayBtn');
+  const achBtn = document.getElementById('achPayBtn');
   const zelleBtn = document.getElementById('zellePayBtn');
 
   /* Wire the payment controls unconditionally, even with an empty cart.
@@ -2973,6 +3424,7 @@ function initCheckoutPage() {
   updatePayButtonAmount();
 
   if (cryptoBtn) cryptoBtn.addEventListener('click', () => submitCryptoOrder(form, cryptoBtn));
+  if (achBtn) achBtn.addEventListener('click', () => submitAchOrder(form, achBtn));
   if (zelleBtn) zelleBtn.addEventListener('click', () => submitZelleOrder(form, zelleBtn));
 
   // Ask the server which payment methods it actually has keys for, and drop the
@@ -2982,6 +3434,11 @@ function initCheckoutPage() {
     .then(r => r.json())
     .then(h => {
       window._cryptoAvailable = !(h && h.crypto === false);
+      /* ACH is opt-in rather than opt-out: an older server that has never
+         heard of it reports nothing, and a payment method that debits a bank
+         account must not appear because a field was missing. */
+      window._achAvailable = Boolean(h && h.ach === true);
+      window._achSandbox = Boolean(h && h.achSandbox === true);
       window._zelleAvailable = !(h && h.zelle === false);
       updateAltPayVisibility();
     })
@@ -3363,7 +3820,12 @@ function validateCheckout(form) {
    screen. Bump WEB_AUTH_VERSION whenever the copy in
    checkout.html #webAuthText changes.
    ============================================================ */
-const WEB_AUTH_VERSION = '2026-08-25';
+/* 2026-09-08: added the one-time ACH debit authorization. The previous wording
+   promised that "no amount is debited or withdrawn from any account of mine",
+   which was true of crypto and Zelle and is the opposite of what a bank debit
+   does — and NACHA requires the debit itself to be authorized in the text the
+   buyer agrees to, not merely implied by the button they press. */
+const WEB_AUTH_VERSION = '2026-09-08';
 
 function webAuthorizationRecord() {
   const box = document.getElementById('webAuthCheck');
