@@ -2710,8 +2710,16 @@ async function syncAchOrder(order) {
     ...(view.returnCode ? { achReturnCode: view.returnCode } : {})
   };
 
+  /* Only an order still waiting on money can BECOME paid. This runs for the
+     buyer at any time through /api/ach/confirm, and "anything not already
+     `paid`" used to include a SHIPPED order — which a settled debit put back to
+     paid: into the packing queue again, with the buyer's points credited twice. */
+  const awaitingMoney = ['pending', 'awaiting_payment'].includes(order.status);
+  // Counted as a sale, so the goods may already have gone out.
+  const sold = ['paid', 'shipped', 'delivered'].includes(order.status);
+
   // --- settled: the money is in the bank. This, and only this, is payment.
-  if (view.settled && order.status !== 'paid') {
+  if (view.settled && awaitingMoney) {
     markOrderPaid(orderId, { ...patch, paidAmount: view.amount || order.total, achSettledAt: new Date().toISOString() });
     out.orderStatus = 'paid';
     out.changed = true;
@@ -2722,38 +2730,59 @@ async function syncAchOrder(order) {
   }
 
   // --- returned: the bank pulled it back. Two very different cases.
-  if (view.returned && order.status !== 'returned') {
+  if (view.returned && (awaitingMoney || sold)) {
     /* A plain return (status 8) never settled, so the order was never a sale:
        give the stock and points back the way an expired invoice would.
 
        A LATE return (24) settled first — which means the order may already be
        packed, shipped and gone. Releasing stock there would invent inventory
        that is physically in a box, and the money is already out of our account.
-       That one is a human problem, so it is flagged loudly and left alone. */
+       That one is a human problem, so it is flagged loudly and left alone. The
+       same goes for any return on an order we had already counted as a sale. */
+    const late = Boolean(view.lateReturn) || sold;
     store.updateOrderStatus(orderId, 'returned', {
       ...patch,
-      achLateReturn: Boolean(view.lateReturn),
+      achLateReturn: late,
       returnedAt: new Date().toISOString()
     });
-    if (!view.lateReturn) {
+    if (!late) {
       releaseOrderStock(orderId);
       refundReservedPoints(orderId);
     }
     out.orderStatus = 'returned';
     out.changed = true;
     const fresh = findOrder(orderId);
-    notifyAdminOfAchReturn(fresh, view).catch(err => console.error('[ach return notify] failed:', err.message));
+    notifyAdminOfAchReturn(fresh, { ...view, lateReturn: late }).catch(err => console.error('[ach return notify] failed:', err.message));
     sendAchReturnedEmail(fresh, view).catch(err => console.error('[ach returned email] failed:', err.message));
     return out;
   }
 
-  // --- voided or rejected before it ever reached the bank
-  if ((view.voided || view.invalidated) && order.status !== 'cancelled' && order.status !== 'paid') {
+  /* --- refunded (40) after it was counted as a sale: a refund made in Finagy's
+     own portal, found by "Check with Finagy". It leaves the record our refund
+     button leaves — the sale is cancelled — and the stock is left for a human,
+     because the parcel may be gone. */
+  if (view.refunded && sold) {
+    store.updateOrderStatus(orderId, 'cancelled', {
+      ...patch,
+      refundedAt: new Date().toISOString(),
+      cancelledReason: 'Bank payment refunded.'
+    });
+    out.orderStatus = 'cancelled';
+    out.changed = true;
+    return out;
+  }
+
+  /* --- voided or rejected before it ever reached the bank, or refunded (40)
+     before this order was ever marked paid — a refund made in Finagy's portal
+     between two polls. None of these can settle again, and nothing shipped. */
+  if ((view.voided || view.invalidated || view.refunded) && awaitingMoney) {
     store.updateOrderStatus(orderId, 'cancelled', {
       ...patch,
       cancelledReason: view.voided
         ? 'The bank payment was voided before it was sent.'
-        : 'The bank payment was rejected before it was sent.'
+        : view.refunded
+          ? 'The bank payment was refunded.'
+          : 'The bank payment was rejected before it was sent.'
     });
     releaseOrderStock(orderId);
     refundReservedPoints(orderId);
@@ -2771,6 +2800,24 @@ async function syncAchOrder(order) {
     store.updateOrderStatus(orderId, null, { achCheckedAt: patch.achCheckedAt });
   }
   return out;
+}
+
+/* The order a settlements/returns feed row belongs to.
+
+   In those feeds `uniqueTranId` holds Finagy's authorizationId, NOT the
+   clientReferenceId we sent (seen on staging 2026-09-11) — unlike retrieve, where
+   it really is our order reference. So the row is matched on the transaction id
+   we stored, then on the refund credit's id (a credit carries no reference of
+   ours at all), with our reference as the fallback in case a feed ever does
+   carry it. */
+function findAchOrderForFeedRow(row) {
+  const ids = [row && row.authorizationId, row && row.uniqueTranId].filter(Boolean).map(String);
+  if (!ids.length) return null;
+  const orders = store_listAllOrdersSafe().filter(o => o && o.method === 'ach');
+  return orders.find(o => o.transactionId && ids.includes(String(o.transactionId)))
+    || orders.find(o => o.achRefundTransactionId && ids.includes(String(o.achRefundTransactionId)))
+    || orders.find(o => ids.includes(o.orderId))
+    || null;
 }
 
 /* ---- the poller ----
@@ -2815,26 +2862,53 @@ async function runAchPoll() {
      is how a return gets missed entirely. */
   try {
     const yesterday = new Date(Date.now() - 24 * 3_600_000);
-    const { returns } = await finagy.queryReturns({ start: yesterday, end: yesterday });
+    const { returns, complete } = await finagy.queryAllReturns({ start: yesterday, end: yesterday });
+    if (!complete) {
+      summary.errors.push({ scope: 'returns', error: 'The returns report never reached its last page, so a return may have been missed.' });
+    }
     for (const r of returns) {
-      const ref = r.uniqueTranId || '';
-      const hit = ref ? findOrder(ref) : null;
-      if (!hit || hit.method !== 'ach') continue;
-      if (hit.status === 'returned') continue;
+      const hit = findAchOrderForFeedRow(r);
+      if (!hit) continue;
+
+      /* A Notification of Change shares this report but is not a return: the
+         bank corrected a detail and let the debit through. It is noted on the
+         order and changes nothing. There is no stored account to correct —
+         every debit is authorized afresh through Bank Connect. The row's
+         `addenda` (which carries the corrected account details) is deliberately
+         not kept. */
+      if (finagy.isNotificationOfChange(r)) {
+        const code = String(r.returnReason || 'NOC');
+        if (hit.achNocCode !== code) {
+          store.updateOrderStatus(hit.orderId, null, { achNocCode: code, achNocAt: new Date().toISOString() });
+          console.log(`[ach poll] ${hit.orderId}: notification of change ${code} (information only)`);
+        }
+        continue;
+      }
+
+      const sold = ['paid', 'shipped', 'delivered'].includes(hit.status);
+      if (!sold && !['pending', 'awaiting_payment'].includes(hit.status)) continue;
+      /* "Late" is decided by OUR record, not by the row. A return against an
+         order we already counted as a sale may be against a parcel that has
+         gone — a shipped one certainly is — so its stock stays put for a human.
+         The row's `tranStatus` describes the MONEY (1 = it had settled to us and
+         is taken back next business day, 2 = it never arrived), not whether we
+         shipped — and staging has sent tranStatus 1 on an R01 whose settlement
+         row has no settleDate (639245942322405169, 2026-09-10). */
+      const late = sold;
       store.updateOrderStatus(hit.orderId, 'returned', {
-        achStatus: 'returned',
+        achStatus: late ? 'late_return' : 'returned',
         achReturnCode: r.returnReason || '',
-        achLateReturn: Number(r.tranStatus) === 1,   // 1 = already settled to us
-        returnedAt: new Date().toISOString()
+        achLateReturn: late,
+        returnedAt: new Date().toISOString(),
+        ...(r.authorizationId && !hit.transactionId ? { transactionId: String(r.authorizationId) } : {})
       });
-      // tranStatus 2 means it never settled, so nothing was ever ours to keep.
-      if (Number(r.tranStatus) === 2) {
+      if (!late) {
         releaseOrderStock(hit.orderId);
         refundReservedPoints(hit.orderId);
       }
       summary.returned++;
       const fresh = findOrder(hit.orderId);
-      notifyAdminOfAchReturn(fresh, { returnCode: r.returnReason || '', lateReturn: Number(r.tranStatus) === 1 })
+      notifyAdminOfAchReturn(fresh, { returnCode: r.returnReason || '', lateReturn: late })
         .catch(err => console.error('[ach return notify] failed:', err.message));
     }
   } catch (e) {
@@ -2896,19 +2970,43 @@ app.post('/api/admin/ach/:orderId/refund', requireAdmin, async (req, res) => {
   if (order.method !== 'ach') return res.status(400).json({ error: 'That order was not paid by bank debit.' });
   if (!order.transactionId) return res.status(400).json({ error: 'That order has no Finagy transaction to reverse.' });
 
+  if (order.achStatus === 'refunded' || order.achStatus === 'voided') {
+    return res.status(409).json({ error: `That bank payment was already ${order.achStatus}.` });
+  }
+
   try {
     const view = await finagy.retrieveTransaction({ authorizationId: order.transactionId });
-    /* Statuses 2 (pending) and 1 (invalidated) are still in our batch, so a
-       void is both possible and free. Anything at the bank or beyond needs a
-       credit raising instead. */
+    /* Exactly two states can be reversed, and each has exactly one tool:
+         2  pending, still in our batch   → void (free, nothing leaves the account)
+         16 settled                       → refund (raises a new credit)
+       Everything else is refused before Finagy is asked. Status 4 is too late to
+       void and too early to refund. And a debit that has ALREADY been refunded
+       reads back as status 40 (staging, 2026-09-11, 639245589443869934) —
+       treating that as refundable is how a second press would raise a second
+       credit, including for a refund made in Finagy's portal that our record
+       never heard about. */
     const canVoid = view.status === 2;
+    if (!canVoid && view.status !== 16) {
+      const why = view.status === 4
+        ? 'It has been sent to the bank and has not settled yet — refund it once it settles.'
+        : `Finagy reports it as ${view.statusName} (status ${view.status}), which cannot be voided or refunded from here.`;
+      return res.status(409).json({ error: `Nothing was reversed. ${why}`, achStatus: view.statusName });
+    }
     const result = canVoid
       ? { ...(await finagy.voidTransaction(order.transactionId)), action: 'void' }
       : { ...(await finagy.refundTransaction(order.transactionId)), action: 'refund' };
 
     if (!result.successful) return res.status(400).json({ error: result.message || 'Finagy refused the reversal.' });
 
+    /* A refund is a NEW credit transaction, and it carries uniqueTranId null, so
+       nothing Finagy reports later can name this order. The id handed back here
+       is the only link between the two, so it is kept. (refundTransaction falls
+       back to the debit's own id when Finagy sends none — that is not a credit.) */
+    const creditId = !canVoid && result.authorizationId && String(result.authorizationId) !== String(order.transactionId)
+      ? String(result.authorizationId) : '';
+
     store.updateOrderStatus(order.orderId, 'cancelled', {
+      ...(creditId ? { achRefundTransactionId: creditId } : {}),
       achStatus: canVoid ? 'voided' : 'refunded',
       refundedAt: new Date().toISOString(),
       refundedBy: (req.user && req.user.email) || 'admin',
@@ -2920,12 +3018,119 @@ app.post('/api/admin/ach/:orderId/refund', requireAdmin, async (req, res) => {
        answer, so the count is left for a human. */
     if (canVoid) { releaseOrderStock(order.orderId); refundReservedPoints(order.orderId); }
 
-    res.json({ success: true, action: result.action, message: result.message || '' });
+    res.json({ success: true, action: result.action, message: result.message || '', ...(creditId ? { creditId } : {}) });
   } catch (err) {
     console.error('[ach refund] failed:', err.message);
     res.status(err.status === 404 ? 404 : 400).json({ error: err.message });
   }
 });
+
+/* ---- admin: ask Finagy about one bank order, now ----
+   The poller only re-reads orders still waiting on money, so anything that
+   happens to a PAID one outside this console — a refund in Finagy's portal, a
+   return that retrieve sees before the returns report does — never reaches the
+   order on its own. This is the same question, on demand, for any bank order;
+   syncAchOrder decides what the answer is allowed to change. */
+app.post('/api/admin/ach/:orderId/sync', requireAdmin, async (req, res) => {
+  if (!finagy.CONFIGURED) return res.status(400).json({ error: 'Bank payments are not configured on this server.' });
+  const order = findOrder(req.params.orderId);
+  if (!order) return res.status(404).json({ error: 'No order by that reference.' });
+  if (order.method !== 'ach') return res.status(400).json({ error: 'That order was not paid by bank debit.' });
+  try {
+    const out = await syncAchOrder(order);
+    const fresh = findOrder(order.orderId) || order;
+    res.json({ success: true, ...out, achStatusCode: fresh.achStatusCode, order: fresh });
+  } catch (err) {
+    console.error('[ach sync] failed:', err.message);
+    res.status(502).json({ error: `Could not reach Finagy: ${err.message}` });
+  }
+});
+
+/* ---- admin: Finagy's three reports, next to our own orders ----
+   SALE-08/09/10 on the certification sheet, as something the owner can use:
+   what settled into the bank account, what the bank sent back (and what that
+   did to the money), and what Finagy is holding in reserve. Each report is read
+   to its last page, each row is tied to the order it belongs to, and the three
+   are fetched independently so one failing cannot blank the other two. */
+const ACH_REPORT_MAX_DAYS = 93;
+
+function parseReportDay(value) {
+  const s = String(value || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  const d = new Date(`${s}T00:00:00Z`);
+  return Number.isFinite(d.getTime()) && d.toISOString().slice(0, 10) === s ? d : null;
+}
+
+app.get('/api/admin/ach/reports', requireAdmin, async (req, res) => {
+  if (!finagy.CONFIGURED) return res.status(400).json({ error: 'Bank payments are not configured on this server.' });
+
+  const end = req.query.end ? parseReportDay(req.query.end) : parseReportDay(new Date().toISOString().slice(0, 10));
+  const start = req.query.start ? parseReportDay(req.query.start) : (end && new Date(end.getTime() - 13 * 86_400_000));
+  if (!start || !end) return res.status(400).json({ error: 'Give the range as dates, like 2026-09-01.' });
+  if (start > end) return res.status(400).json({ error: 'The start date is after the end date.' });
+  if ((end - start) / 86_400_000 > ACH_REPORT_MAX_DAYS) {
+    return res.status(400).json({ error: `Pick a range of ${ACH_REPORT_MAX_DAYS} days or fewer.` });
+  }
+
+  const attempt = async fn => { try { return { value: await fn() }; } catch (e) { return { error: e.message }; } };
+  const [s, r, v] = await Promise.all([
+    attempt(() => finagy.queryAllSettlements({ start, end })),
+    attempt(() => finagy.queryAllReturns({ start, end })),
+    attempt(() => finagy.queryAllReserves({ start, end }))
+  ]);
+
+  const tie = row => {
+    const o = findAchOrderForFeedRow(row);
+    return { ...row, orderId: o ? o.orderId : '', orderStatus: o ? o.status : '' };
+  };
+  const reserves = v.value ? v.value.reserves : [];
+  const latestReserve = reserves.slice().sort((a, b) => String(b.reserveDate || '').localeCompare(String(a.reserveDate || '')))[0];
+
+  res.json({
+    success: true,
+    start: start.toISOString().slice(0, 10),
+    end: end.toISOString().slice(0, 10),
+    settlements: s.value ? s.value.settlements.map(tie) : [],
+    settlementsComplete: Boolean(s.value && s.value.complete),
+    ...(s.error ? { settlementsError: s.error } : {}),
+    returns: r.value ? r.value.returns.map(row => ({ ...tie(row), kind: finagy.returnKind(row) })) : [],
+    returnsComplete: Boolean(r.value && r.value.complete),
+    ...(r.error ? { returnsError: r.error } : {}),
+    reserves,
+    reservesComplete: Boolean(v.value && v.value.complete),
+    ...(v.error ? { reservesError: v.error } : {}),
+    reserveBalance: latestReserve ? Number(latestReserve.currentReserveBalance) || 0 : null
+  });
+});
+
+/* Is Finagy still collecting this bank order? A cancel in our own books does
+   nothing to a debit already queued at the bank, so staff are sent to Void /
+   refund instead. Returns the refusal, or null when cancelling here is safe. */
+async function achCancelRefusal(order) {
+  if (!finagy.CONFIGURED) {
+    return { status: 409, error: 'Bank payments are not configured on this server, so there is no way to check whether ' +
+      'Finagy is still collecting this one. Nothing was cancelled.' };
+  }
+  let view;
+  try {
+    view = await finagy.retrieveTransaction({
+      authorizationId: order.transactionId || undefined,
+      uniqueTranId: order.transactionId ? undefined : order.orderId
+    });
+  } catch (e) {
+    if (e.status !== 404) {
+      return { status: 502, error: `Could not ask Finagy whether this debit is still live (${e.message}). Nothing was cancelled.` };
+    }
+    view = { found: false };
+  }
+  if (!view.found || ![2, 4, 16].includes(view.status)) return null;
+  return {
+    status: 409,
+    error: view.status === 2
+      ? 'Finagy is still collecting this bank payment. Use Void / refund so the buyer is not debited — cancelling here would not stop it.'
+      : `Finagy has already sent this debit to the bank (${view.statusName}), so it can no longer be voided. Refund it once it settles.`
+  };
+}
 
 /* ============================================================
    CUSTOMER DISPUTES
@@ -4419,6 +4624,15 @@ function store_listAllOrdersSafe() {
    the order reference, and confirms. Idempotent — confirming twice reports
    alreadyPaid instead of crediting points again. */
 app.post('/api/admin/orders/:orderId/paid', requireAdmin, (req, res) => {
+  /* A bank debit is paid when Finagy settles it, and not before: marking one
+     paid by hand ships goods against money that can still be returned for 60
+     days. "Check with Finagy" asks the only party that knows. */
+  const target = findOrder(req.params.orderId);
+  if (target && target.method === 'ach') {
+    return res.status(409).json({
+      error: 'Bank payments are marked paid when Finagy settles them, never by hand. Use "Check with Finagy" on the order to ask now.'
+    });
+  }
   const ref = String((req.body && req.body.paymentRef) || '').slice(0, 120);
   const upd = markOrderPaid(req.params.orderId, {
     confirmedBy: (req.user && req.user.email) || 'admin key',
@@ -4478,11 +4692,15 @@ app.post('/api/admin/orders/:orderId/shipped', requireAdmin, (req, res) => {
 /* ---- ADMIN: cancel an order that was never paid ----
    Refuses to touch a paid one: cancelling a sale that took money is a refund,
    which has to happen in the bank, not here. */
-app.post('/api/admin/orders/:orderId/cancel', requireAdmin, (req, res) => {
+app.post('/api/admin/orders/:orderId/cancel', requireAdmin, async (req, res) => {
   const existing = store.listAllOrders().find(o => o.orderId === req.params.orderId);
   if (!existing) return res.status(404).json({ error: 'No order with that reference.' });
   if (String(existing.status).toLowerCase() === 'paid') {
     return res.status(400).json({ error: 'That order is already paid — refund it in your bank, then adjust it here.' });
+  }
+  if (existing.method === 'ach') {
+    const refusal = await achCancelRefusal(existing);
+    if (refusal) return res.status(refusal.status).json({ error: refusal.error });
   }
   refundReservedPoints(req.params.orderId);   // give back any held loyalty points
   releaseOrderStock(req.params.orderId);      // …and any units held off the shelf

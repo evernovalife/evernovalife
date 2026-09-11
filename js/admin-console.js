@@ -55,6 +55,9 @@
     products: null,
     btcpay: null,         // loaded on demand — it calls out to another host
     hooks: null,          // BTCPay webhook wiring, loaded alongside btcpay
+    ach: null,            // Finagy connection check, loaded on demand like btcpay
+    achReports: null,     // Finagy settlements / returns / reserves for achRange
+    achRange: null,       // { start, end } as YYYY-MM-DD
     health: null,         // /api/health — which services the backend actually has
     rates: null,          // shipping methods (what checkout charges for delivery)
     promos: null,         // promotions (what the shop is discounting right now)
@@ -359,6 +362,7 @@
     promos: ['Promotions', 'Deals the shop is running — they apply to the next checkout immediately'],
     labeldesign: ['Label designer', 'Design the parcel label once — every order fills in its own name and address'],
     btcpay: ['BTCPay', 'What the payment server says, next to what we recorded'],
+    ach: ['Bank (ACH)', 'What Finagy says — settlements, returns and the reserve, next to our orders'],
     autoship: ['Auto-Ship', 'Repeating orders and their next invoice'],
     disputes: ['Disputes', 'Problems customers have reported, and how they ended'],
     inbox: ['Inbox', 'Questions from people without an account — mostly from the chat'],
@@ -390,6 +394,7 @@
     else if (state.view === 'promos') renderPromos();
     else if (state.view === 'labeldesign') renderLabelDesign();
     else if (state.view === 'btcpay') renderBtcpay();
+    else if (state.view === 'ach') renderAch();
     else if (state.view === 'autoship') renderAutoship();
     else if (state.view === 'disputes') renderDisputes();
     else if (state.view === 'inbox') renderInbox();
@@ -420,6 +425,14 @@
     if (b) {
       var stuck = (state.btcpay && state.btcpay.invoices || []).filter(function (i) { return i.needsAttention; }).length;
       b.textContent = stuck ? String(stuck) : '';
+    }
+    /* Bank debits still unsettled after a week. ACH clears in about three
+       business days, so anything older is stuck — and a whole row of them
+       usually means the scheduled ping on /api/ach/poll is not running. */
+    var ab = document.getElementById('navAch');
+    if (ab) {
+      var n4 = state.orders ? staleAchOrders(state.orders).length : 0;
+      ab.textContent = n4 ? String(n4) : '';
     }
     // Paid and not yet out the door — the one number that means "someone is
     // waiting for a parcel", so it rides on every screen.
@@ -683,7 +696,10 @@
             'the transfer memo, then mark it paid — that is what emails the customer, credits their points and ' +
             'releases the order. Only confirm money you can actually see. ' +
             '<strong>Crypto</strong> orders sitting at <em>pending</em> settle themselves when the BTCPay invoice is ' +
-            'paid; they only need a Cancel if the invoice expired unpaid.' +
+            'paid; they only need a Cancel if the invoice expired unpaid. ' +
+            '<strong>Bank (ACH)</strong> orders are paid only when Finagy settles the debit, which takes about three ' +
+            'business days — they cannot be marked paid by hand. <em>Check with Finagy</em> asks now; ' +
+            '<em>Void</em> stops a debit that has not gone to the bank yet.' +
             (counts.open === 0 && counts.cancelled
               ? ' <br><strong>Nothing here does not mean nothing happened:</strong> ' +
                 A.plural(counts.cancelled, 'order') + ' ended cancelled — see the Cancelled tab.'
@@ -1642,8 +1658,51 @@
      with POST /api/checkout, so nothing can open a card order today. Orders
      stamped `card` predate that and are labelled as such rather than left
      looking like a live payment route. */
-  var METHOD_LABELS = { crypto: 'Bitcoin / Lightning', zelle: 'Zelle', card: 'Card (retired)' };
+  var METHOD_LABELS = { crypto: 'Bitcoin / Lightning', zelle: 'Zelle', ach: 'Bank (ACH)', card: 'Card (retired)' };
   function methodLabel(m) { return METHOD_LABELS[m] || m || 'unknown'; }
+
+  /* What Finagy last said about a bank order, on the row itself — the status
+     name and its number, and any code the bank sent back. */
+  function achDetail(o) {
+    if (o.method !== 'ach') return '';
+    var bits = [];
+    if (o.achStatus) {
+      bits.push('Finagy: ' + String(o.achStatus).replace(/_/g, ' ') +
+        (o.achStatusCode !== undefined && o.achStatusCode !== null && o.achStatusCode !== '' ? ' (' + o.achStatusCode + ')' : ''));
+    }
+    if (o.achReturnCode) bits.push('return ' + o.achReturnCode);
+    if (o.achNocCode) bits.push('notice of change ' + o.achNocCode);
+    if (o.achRefundTransactionId) bits.push('refund credit ' + o.achRefundTransactionId);
+    return bits.length ? '<span class="muted">' + esc(bits.join(' · ')) + '</span>' : '';
+  }
+
+  /* A bank order gets its own buttons, never the Zelle ones. "Mark paid" would
+     ship against a debit that has not settled, and a plain "Cancel" on a debit
+     Finagy is still collecting would close the order while the buyer is charged
+     anyway — the server refuses both, so they are not offered. */
+  function achActions(o) {
+    var id = esc(o.orderId);
+    var sync = '<button class="btn btn-ghost btn-sm act-ach-sync" data-id="' + id + '">Check with Finagy</button>';
+    if (OPEN.indexOf(o.status) !== -1) {
+      return sync + ' ' + (o.transactionId
+        ? '<button class="btn btn-ghost btn-sm act-ach-reverse" data-id="' + id + '">Void</button>'
+        /* No Finagy transaction on record: the buyer may never have finished
+           their page. The server still asks Finagy before it cancels. */
+        : '<button class="btn btn-ghost btn-sm act-cancel" data-id="' + id + '">Cancel</button>');
+    }
+    if ([PAID, 'shipped', 'delivered'].indexOf(o.status) !== -1) {
+      return sync + ' <button class="btn btn-ghost btn-sm act-ach-reverse" data-id="' + id + '">Refund</button>';
+    }
+    return sync;
+  }
+
+  /* Unsettled for more than a week — see the navAch tally. */
+  function staleAchOrders(orders) {
+    var weekAgo = Date.now() - 7 * 86400000;
+    return (orders || []).filter(function (o) {
+      return o.method === 'ach' && OPEN.indexOf(o.status) !== -1 && new Date(o.createdAt).getTime() < weekAgo;
+    });
+  }
 
   function ordersTable(orders, opts) {
     opts = opts || {};
@@ -1664,7 +1723,9 @@
           ? '<span class="muted">contact: ' + esc(contact) + '</span>' : '');
       var addr = opts.compact ? '' : '<span class="muted">' + esc(addressText(o.shippingAddress)) + '</span>';
       var actions = '';
-      if (opts.actions && OPEN.indexOf(o.status) !== -1) {
+      if (opts.actions && o.method === 'ach') {
+        actions = achActions(o);
+      } else if (opts.actions && OPEN.indexOf(o.status) !== -1) {
         /* On a short-paid order the emphasis is reversed on purpose: the house
            rule is full payment or nothing, so refunding is the normal outcome
            and "mark paid" is the exception you take only after the rest of the
@@ -1723,9 +1784,12 @@
         '<td>' + who + addr + '</td>' +
         '<td>' + esc(itemsText(o.items)) + '</td>' +
         '<td>' + esc(methodLabel(o.method)) +
-          (isTestOrder(o) ? '<span class="muted">sandbox — no money taken</span>' : '') + '</td>' +
+          (isTestOrder(o) ? '<span class="muted">sandbox — no money taken</span>' : '') +
+          achDetail(o) + '</td>' +
         '<td><span class="pill ' + esc(o.status || '') + '">' + esc(String(o.status || '').replace('_', ' ')) + '</span>' +
           (isTestOrder(o) ? ' <span class="pill test">test</span>' : '') +
+          (o.method === 'ach' && o.achSandbox ? ' <span class="pill test">test mode</span>' : '') +
+          (o.achLateReturn ? ' <span class="pill late">late return</span>' : '') +
           (late ? ' <span class="pill late">past hold</span>' : '') + '</td>' +
         '<td class="num"><strong>' + esc(money(o.total)) + '</strong>' +
           /* On a short payment the total is the least useful number on the row:
@@ -2038,6 +2102,251 @@
     return '<div class="rank-row" style="background:var(--adm-surface-2)">' +
       '<span class="rank-name">' + esc(label) + '</span>' +
       '<span class="rank-val" style="font-weight:600;white-space:normal;max-width:60%">' + esc(value || '—') + '</span></div>';
+  }
+
+  /* ============================================================
+     BANK (ACH) — Finagy
+     Loaded only when opened, like BTCPay: every number here is a live call
+     to Finagy. There is no webhook on this rail, so this page is where the
+     owner sees what the bank actually did — money settled in, debits sent
+     back, and what Finagy holds in reserve — each row next to its order.
+     ============================================================ */
+  var achLoading = false;
+
+  function isoDay(d) { return d.toISOString().slice(0, 10); }
+  function defaultAchRange() {
+    var end = new Date();
+    return { start: isoDay(new Date(end.getTime() - 13 * 86400000)), end: isoDay(end) };
+  }
+  function deployedOrMessage(e, what) {
+    return e && e.status === 404
+      ? 'This backend does not have ' + what + ' yet. Deploy the current server/ to Render.'
+      : (e && e.message) || 'That request failed.';
+  }
+
+  async function loadAch(force) {
+    if (achLoading) return;
+    if (state.ach && !force) return;
+    achLoading = true;
+    if (!state.achRange) state.achRange = defaultAchRange();
+    if (state.view === 'ach') render();
+    var results = await Promise.allSettled([
+      A.api('/api/admin/ach'),
+      A.api('/api/admin/ach/reports?start=' + encodeURIComponent(state.achRange.start) +
+        '&end=' + encodeURIComponent(state.achRange.end))
+    ]);
+    state.ach = results[0].status === 'fulfilled' ? results[0].value
+      : { configured: false, error: deployedOrMessage(results[0].reason, 'the bank panel') };
+    state.achReports = results[1].status === 'fulfilled' ? results[1].value
+      : { error: deployedOrMessage(results[1].reason, 'the Finagy reports') };
+    achLoading = false;
+    if (state.view === 'ach') render();
+  }
+
+  /* NACHA codes in words — the ones this store will actually see. */
+  var ACH_CODE_TEXT = {
+    R01: 'insufficient funds', R02: 'account closed', R03: 'no account / unable to locate',
+    R04: 'invalid account number', R07: 'authorization revoked', R08: 'payment stopped',
+    R10: 'customer says not authorized', R16: 'account frozen', R29: 'corporate customer says not authorized',
+    C01: 'account number corrected', C02: 'routing number corrected', C03: 'routing and account corrected',
+    C05: 'account type corrected', C06: 'account number and type corrected'
+  };
+  /* Finagy's tranStatus on a return, as the server names it (finagy.returnKind). */
+  var RETURN_KIND_TEXT = {
+    returned_after_settlement: 'Had settled — Finagy takes it back out next business day',
+    returned_before_settlement: 'Returned before it settled — the money never arrived',
+    notification_of_change: 'Notice of change — information only, the payment stands',
+    returned: 'Returned'
+  };
+
+  function achOrderCell(row) {
+    if (!row.orderId) return '<span class="muted">no order here</span>';
+    return '<span class="ref">' + esc(row.orderId) + '</span><br>' +
+      '<span class="pill ' + esc(row.orderStatus || '') + '">' + esc(String(row.orderStatus || '').replace('_', ' ')) + '</span>';
+  }
+  function reportNote(rep, key, label) {
+    if (rep[key + 'Error']) return '<p class="adm-note">Finagy did not return the ' + label + ': ' + esc(rep[key + 'Error']) + '</p>';
+    if (rep[key + 'Complete'] === false) {
+      return '<p class="adm-note">' + A.icon('alert', 'ic') + ' Finagy\'s ' + label + ' report stopped before its last ' +
+        'page, so some rows may be missing. Try a shorter range.</p>';
+    }
+    return '';
+  }
+
+  function renderAch() {
+    var d = state.ach;
+    var rep = state.achReports || {};
+
+    if (!d) {
+      body.innerHTML = '<div class="adm-card">' + A.skeleton(5) + '</div>';
+      loadAch();
+      return;
+    }
+
+    if (!d.configured || d.ok === false) {
+      body.innerHTML =
+        '<div class="adm-card" style="border-color:rgba(244,63,94,.45)">' +
+          '<div class="adm-card-head"><h3>Finagy is not answering</h3>' +
+            '<div class="right"><button class="btn btn-ghost btn-sm" type="button" id="achRetry">' +
+              A.icon('refresh', 'ic') + ' Try again</button></div></div>' +
+          '<p class="adm-note">' + esc(d.error || 'Unknown problem.') + '</p>' +
+          (d.baseUrl ? '<p class="adm-note" style="margin:0">Configured gateway: <strong>' + esc(d.baseUrl) + '</strong></p>'
+            : '<p class="adm-note" style="margin:0">Set <code>FINAGY_BASIC_TOKEN</code> (or <code>FINAGY_USER_ID</code> + ' +
+              '<code>FINAGY_API_KEY</code>) in the backend environment, then redeploy.</p>') +
+        '</div>';
+      var retry = document.getElementById('achRetry');
+      if (retry) retry.addEventListener('click', function () { loadAch(true); });
+      return;
+    }
+
+    var settlements = rep.settlements || [];
+    var returns = rep.returns || [];
+    var reserves = rep.reserves || [];
+    var debits = settlements.filter(function (s) { return String(s.transactionCode).toUpperCase() === 'D'; });
+    var credits = settlements.filter(function (s) { return String(s.transactionCode).toUpperCase() !== 'D'; });
+    var sum = function (rows, field) {
+      return rows.reduce(function (t, r) { return t + (Number(r[field]) || 0); }, 0);
+    };
+    var bounced = returns.filter(function (r) { return r.kind !== 'notification_of_change'; });
+    var notices = returns.filter(function (r) { return r.kind === 'notification_of_change'; });
+    var waiting = (state.orders || []).filter(function (o) { return o.method === 'ach' && OPEN.indexOf(o.status) !== -1; });
+    var stale = staleAchOrders(state.orders);
+
+    var settlementRows = settlements.map(function (s) {
+      var credit = String(s.transactionCode).toUpperCase() !== 'D';
+      return '<tr>' +
+        '<td>' + esc(A.date(s.settleDate)) + '</td>' +
+        '<td><span class="ref">' + esc(s.authorizationId) + '</span><span class="muted">' + esc(s.name || '') + '</span></td>' +
+        '<td>' + (credit ? 'Credit to buyer (refund)' : 'Debit from buyer') + '</td>' +
+        '<td class="num">' + (credit ? '−' : '') + esc(money(s.amount)) + '</td>' +
+        '<td>' + achOrderCell(s) + '</td>' +
+        '</tr>';
+    }).join('');
+
+    var returnRows = returns.map(function (r) {
+      var code = String(r.returnReason || '');
+      return '<tr' + (r.kind === 'returned_after_settlement' ? ' style="background:rgba(244,63,94,.06)"' : '') + '>' +
+        '<td>' + esc(A.date(r.dateReturned)) + '</td>' +
+        '<td><span class="ref">' + esc(r.authorizationId) + '</span><span class="muted">' + esc(r.name || '') + '</span></td>' +
+        '<td><strong>' + esc(code || '—') + '</strong>' +
+          (ACH_CODE_TEXT[code] ? '<span class="muted">' + esc(ACH_CODE_TEXT[code]) + '</span>' : '') + '</td>' +
+        '<td>' + esc(RETURN_KIND_TEXT[r.kind] || 'Returned') + '</td>' +
+        '<td class="num">' + esc(money(r.returnAmount != null ? r.returnAmount : r.amount)) + '</td>' +
+        '<td>' + achOrderCell(r) + '</td>' +
+        '</tr>';
+    }).join('');
+
+    var reserveRows = reserves.map(function (v) {
+      return '<tr>' +
+        '<td>' + esc(A.date(v.reserveDate, true)) + '</td>' +
+        '<td class="num">' + esc(money(v.debitAdjustment)) + '</td>' +
+        '<td>' + esc(v.debitReason || '—') + '</td>' +
+        '<td class="num"><strong>' + esc(money(v.currentReserveBalance)) + '</strong></td>' +
+        '</tr>';
+    }).join('');
+
+    var table = function (head, rows, emptyTitle, emptyBody) {
+      return rows
+        ? '<div class="adm-table-wrap"><table class="adm-table"><thead><tr>' + head + '</tr></thead><tbody>' + rows + '</tbody></table></div>'
+        : A.empty(emptyTitle, emptyBody);
+    };
+
+    body.innerHTML =
+      '<div class="kpi-grid">' +
+        kpi('Settled in', money(sum(debits, 'amount')), A.plural(debits.length, 'debit') + ' in this range', '', 'gold') +
+        kpi('Refunded out', money(sum(credits, 'amount')), A.plural(credits.length, 'credit') + ' settled') +
+        kpi('Returned', num(bounced.length),
+            bounced.length ? money(sum(bounced, 'returnAmount')) + ' sent back by banks' : 'nothing came back', '',
+            bounced.length ? 'amber' : '') +
+        kpi('Reserve held', rep.reserveBalance === null || rep.reserveBalance === undefined ? '—' : money(rep.reserveBalance),
+            'held back by Finagy') +
+        kpi('Waiting on the bank', num(waiting.length),
+            stale.length ? stale.length + ' unsettled for over a week' : 'bank orders not settled yet', '',
+            stale.length ? 'amber' : '') +
+      '</div>' +
+
+      (stale.length
+        ? '<div class="adm-card" style="border-color:rgba(224,165,42,.45)">' +
+            '<div class="adm-card-head"><h3>' + A.icon('alert', 'ic') + ' ' +
+              A.plural(stale.length, 'bank order') + ' unsettled for over a week</h3></div>' +
+            '<p class="adm-note" style="margin:0">A debit clears in about three business days, so these are stuck. ' +
+            'If several are, the scheduled ping on <code>/api/ach/poll</code> is probably not running — press ' +
+            '<strong>Run the poller now</strong> below, then check the schedule. <em>Check with Finagy</em> on an ' +
+            'order in the Orders view asks about that one alone.</p>' +
+          '</div>'
+        : '') +
+
+      '<div class="adm-card">' +
+        '<div class="adm-card-head"><h3>Connection</h3>' +
+          '<div class="right">' +
+            '<button class="btn btn-primary btn-sm" type="button" id="achPoll">' + A.icon('play', 'ic') + ' Run the poller now</button> ' +
+            '<button class="btn btn-ghost btn-sm" type="button" id="achRefresh">' + A.icon('refresh', 'ic') + ' Refresh</button>' +
+          '</div></div>' +
+        '<div class="rank">' +
+          connRow('Environment', d.production ? 'PRODUCTION — real money moves' : 'TEST (staging) — no real money moves') +
+          connRow('Gateway', d.baseUrl) +
+          connRow('Credentials', 'accepted by Finagy (' + String(d.credentialSource || '').replace(/-/g, ' ') + ')') +
+          connRow('Scheduled poller', d.cron
+            ? 'CRON_KEY is set — ping POST /api/ach/poll every 30 minutes. Nothing else marks a bank order paid.'
+            : 'CRON_KEY is NOT set — no scheduler can run the poller, so bank orders never become paid on their own') +
+          connRow('Name on Finagy\'s page', d.clientName) +
+          connRow('Entry class', (d.secCode || '—') + ' · payment method ' + (d.paymentMethod || '—')) +
+        '</div>' +
+      '</div>' +
+
+      '<div class="adm-card">' +
+        '<div class="adm-card-head"><h3>Reports</h3>' +
+          '<span class="hint">straight from Finagy, every page</span>' +
+          '<div class="right" style="gap:.4rem;align-items:center;flex-wrap:wrap">' +
+            '<label class="muted" for="achStart">From</label>' +
+            '<input type="date" id="achStart" value="' + esc(state.achRange.start) + '">' +
+            '<label class="muted" for="achEnd">to</label>' +
+            '<input type="date" id="achEnd" value="' + esc(state.achRange.end) + '">' +
+            '<button class="btn btn-ghost btn-sm" type="button" id="achRange">Show</button>' +
+          '</div></div>' +
+        (rep.error ? '<p class="adm-note">' + esc(rep.error) + '</p>' : '') +
+        '<p class="adm-note" style="margin:0">Finagy finalises settlements at the end of the day and returns by 11am ET, ' +
+        'so today\'s rows can still change.</p>' +
+      '</div>' +
+
+      '<div class="adm-card">' +
+        '<div class="adm-card-head"><h3>Settlements</h3><span class="hint">money that moved between the bank and us</span></div>' +
+        reportNote(rep, 'settlements', 'settlements') +
+        table('<th>Settled</th><th>Transaction</th><th>What</th><th class="num">Amount</th><th>Our order</th>',
+          settlementRows, 'Nothing settled in this range', 'Debits appear here about three business days after checkout.') +
+      '</div>' +
+
+      '<div class="adm-card">' +
+        '<div class="adm-card-head"><h3>Returns</h3><span class="hint">debits a bank sent back, and notices of change</span></div>' +
+        reportNote(rep, 'returns', 'returns') +
+        (notices.length
+          ? '<p class="adm-note">' + A.plural(notices.length, 'notice') + ' of change: the buyer\'s bank corrected a detail ' +
+            'and let the payment through. Nothing to do — every payment is authorized afresh through the buyer\'s bank ' +
+            'login, so there are no stored details to update.</p>'
+          : '') +
+        table('<th>Returned</th><th>Transaction</th><th>Code</th><th>What it means</th><th class="num">Amount</th><th>Our order</th>',
+          returnRows, 'No returns in this range', 'A bank can send a debit back for up to 60 days.') +
+      '</div>' +
+
+      '<div class="adm-card">' +
+        '<div class="adm-card-head"><h3>Reserve</h3><span class="hint">what Finagy holds back from deposits</span></div>' +
+        reportNote(rep, 'reserves', 'reserve') +
+        table('<th>Date</th><th class="num">Adjustment</th><th>Reason</th><th class="num">Balance</th>',
+          reserveRows, 'No reserve movements in this range', '') +
+      '</div>';
+
+    var rf = document.getElementById('achRefresh');
+    if (rf) rf.addEventListener('click', function () { loadAll({ quiet: true }); loadAch(true); });
+    var rg = document.getElementById('achRange');
+    if (rg) rg.addEventListener('click', function () {
+      var s = (document.getElementById('achStart') || {}).value;
+      var e = (document.getElementById('achEnd') || {}).value;
+      if (!s || !e) { A.toast('Pick both dates first.', 'error'); return; }
+      state.achRange = { start: s, end: e };
+      loadAch(true);
+    });
+    var pl = document.getElementById('achPoll');
+    if (pl) pl.addEventListener('click', function () { runAchPoller(pl); });
   }
 
   /* ---- AUTO-SHIP ---- */
@@ -2378,6 +2687,88 @@
       A.toast(orderId + ' cancelled.', 'success');
       await loadAll({ quiet: true });
     } catch (e) { A.toast(e.message, 'error'); btn.disabled = false; }
+  }
+
+  /* ---- bank (ACH) orders ---- */
+
+  /* Ask Finagy about one order now. The poller only re-reads orders still
+     waiting on money, so this is how a refund or return made outside this
+     console reaches a paid order. */
+  async function achSync(orderId, btn) {
+    btn.disabled = true;
+    var label = btn.textContent;
+    btn.textContent = 'Asking Finagy…';
+    try {
+      var d = await A.api('/api/admin/ach/' + encodeURIComponent(orderId) + '/sync', { method: 'POST' });
+      var said = String(d.achStatus || 'unknown').replace(/_/g, ' ') +
+        (d.achStatusCode !== undefined && d.achStatusCode !== null ? ' (' + d.achStatusCode + ')' : '');
+      A.toast(orderId + ': Finagy says ' + said + (d.changed
+        ? ' — the order is now ' + String(d.orderStatus || '').replace('_', ' ') + '.'
+        : ' — nothing to change.'), 'success', 6000);
+      await loadAll({ quiet: true });
+      if (state.ach) loadAch(true);
+    } catch (e) {
+      A.toast(e.message, 'error');
+      btn.disabled = false;
+      btn.textContent = label;
+    }
+  }
+
+  /* Void or refund. The server reads the live status and picks the only one
+     that is possible, so the prompt describes all three outcomes rather than
+     promising one. */
+  async function achReverse(orderId, btn) {
+    var o = (state.orders || []).find(function (x) { return x.orderId === orderId; });
+    var total = o ? money(o.total) : 'the full amount';
+    if (!window.confirm('Reverse the bank payment for ' + orderId + '?\n\n' +
+        'Finagy decides which is possible:\n' +
+        '• not yet sent to the bank → VOIDED. Nothing is taken from the buyer; the stock and points go back.\n' +
+        '• already settled → REFUNDED. A credit for ' + total + ' goes back to the buyer\'s account (the full ' +
+        'amount — a partial refund has to be done in Finagy\'s portal). Stock is NOT put back automatically: ' +
+        'check whether the parcel went out.\n' +
+        '• at the bank but not settled → nothing happens yet; refund it once it settles.\n\n' +
+        'Either way the order is cancelled.')) return;
+    btn.disabled = true;
+    var label = btn.textContent;
+    btn.textContent = 'Working…';
+    try {
+      var d = await A.api('/api/admin/ach/' + encodeURIComponent(orderId) + '/refund', { method: 'POST' });
+      A.toast(d.action === 'void'
+        ? orderId + ' voided — nothing will be taken from the buyer.'
+        : orderId + ' refunded' + (d.creditId ? ' — Finagy credit ' + d.creditId : '') + '.', 'success', 6000);
+      await loadAll({ quiet: true });
+      if (state.ach) loadAch(true);
+    } catch (e) {
+      A.toast(e.message, 'error', 9000);
+      btn.disabled = false;
+      btn.textContent = label;
+    }
+  }
+
+  /* The same sweep the scheduler runs every 30 minutes, on demand. */
+  async function runAchPoller(btn) {
+    btn.disabled = true;
+    var label = btn.innerHTML;
+    btn.textContent = 'Asking Finagy…';
+    try {
+      var d = await A.api('/api/ach/poll', { method: 'POST' });
+      if (d.skipped) {
+        A.toast('The poller did not run: ' + d.skipped + '.', 'error');
+      } else {
+        var errors = (d.errors || []).length;
+        A.toast('Checked ' + A.plural(d.checked || 0, 'open bank order') + ': ' +
+          (d.paid || 0) + ' paid, ' + (d.returned || 0) + ' returned, ' + (d.cancelled || 0) + ' cancelled, ' +
+          (d.unchanged || 0) + ' still waiting' +
+          (errors ? '. ' + A.plural(errors, 'problem') + ': ' + d.errors.map(function (x) { return x.error; }).join(' / ') : '.'),
+          errors ? 'error' : 'success', 9000);
+      }
+      await loadAll({ quiet: true });
+      await loadAch(true);
+    } catch (e) {
+      A.toast(e.message, 'error');
+    }
+    btn.disabled = false;
+    btn.innerHTML = label;
   }
 
   /* ---- one purchase, two records ----
@@ -2966,6 +3357,8 @@
       else if (t.classList.contains('act-label-reset')) resetLabelDesign(t);
       else if (t.classList.contains('act-label-test')) printOrderLabels([previewOrder()], LBL && LBL.withDefaults(readLabelForm()));
       else if (t.classList.contains('act-cancel')) cancelOrder(t.getAttribute('data-id'), t);
+      else if (t.classList.contains('act-ach-sync')) achSync(t.getAttribute('data-id'), t);
+      else if (t.classList.contains('act-ach-reverse')) achReverse(t.getAttribute('data-id'), t);
       else if (t.classList.contains('act-paylink')) sendPayLink(t.getAttribute('data-id'), t.getAttribute('data-due'), t);
       else if (t.classList.contains('act-collect')) collectBalance(t.getAttribute('data-id'), t.getAttribute('data-got'), t.getAttribute('data-total'), t);
       else if (t.classList.contains('act-reconcile')) reconcileOrder(t.getAttribute('data-id'), t);
