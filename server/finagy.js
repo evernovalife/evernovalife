@@ -158,7 +158,9 @@ const STATUS = {
   8: 'returned',         // the bank sent it back (see returnCode)
   16: 'settled',         // the money is in our account — this is "paid"
   24: 'late_return',     // settled, THEN returned. May already have shipped.
-  32: 'voided'           // cancelled before the bank saw it
+  32: 'voided',          // cancelled before the bank saw it
+  40: 'refunded'         // settled, then refunded — the refund is its own credit
+                         // transaction. Not in the spec; Finagy, 2026-09-11.
 };
 
 /* Which statuses are still moving, so the poller knows what to keep asking
@@ -499,6 +501,7 @@ async function retrieveTransaction({ uniqueTranId, authorizationId } = {}) {
     returned: status === 8 || status === 24,
     lateReturn: status === 24,
     voided: status === 32,
+    refunded: status === 40,
     invalidated: status === 1,
     authorizationId: t.authorizationId ? String(t.authorizationId) : '',
     uniqueTranId: t.uniqueTranId || '',
@@ -521,6 +524,13 @@ async function retrieveTransaction({ uniqueTranId, authorizationId } = {}) {
  * came back, a transaction created against a reference we can't match. Finagy
  * warns that settlements are finalised at end-of-day, so a query for today run
  * too early misses rows.
+ *
+ * Paging trap (staging, 2026-09-11): with excludeReturnedItems=false a returned
+ * row comes back on page 2 as well, with the cursor
+ * {"SettlementId":0,"ReturnId":0,"ReserveId":0} — and sending that cursor starts
+ * the report over, so it never reaches `pageId: null`. With
+ * excludeReturnedItems=true it pages and ends normally — so read the whole
+ * report through queryAllSettlements(), which asks for exactly that.
  */
 async function querySettlements({ start, end, excludeReturnedItems = false, pageId } = {}) {
   const payload = {
@@ -552,6 +562,101 @@ async function queryReturns({ start, end, pageId } = {}) {
     pageId: (res && res.pageId) || '',
     message: (res && res.message) || ''
   };
+}
+
+/** Everything held back from our deposits in a date range — the reserve.
+    Not in the spec document; Finagy enabled it for us on 2026-09-10. Same
+    start / end / pageId shape as the other two reports. */
+async function queryReserves({ start, end, pageId } = {}) {
+  const payload = { start: isoDay(start), end: isoDay(end, true) };
+  if (pageId) payload.pageId = pageId;
+  const res = await request('/api/echeck/queryreserves', { method: 'POST', ...jsonBody(payload) });
+  return {
+    reserves: Array.isArray(res && res.reserves) ? res.reserves : [],
+    pageId: (res && res.pageId) || '',
+    message: (res && res.message) || ''
+  };
+}
+
+/**
+ * Every row of one report, following its cursor to the end.
+ *
+ * `pageId` is not a page number (Andrii Seniv, Finagy, 2026-09-11). It is a
+ * Base64 cursor naming the last row of the page it came with — staging's
+ * decode to {"ReturnId":21457} and {"ReserveId":34} — so a page holding rows
+ * always hands one back, and the ONLY end marker is asking for the next page and
+ * getting `pageId: null`.
+ *
+ * Two guards, because one of their reports already never reaches null (see
+ * querySettlements): a cursor we have already sent means the report has started
+ * over, and a page cap bounds anything else. Either way `complete` is false, so
+ * the caller can say rows may be missing rather than keep quiet.
+ */
+async function readAllPages(fetchPage, key, maxPages = 20) {
+  const rows = [];
+  const sent = new Set();
+  let pageId;
+  for (let page = 0; page < maxPages; page++) {
+    const res = await fetchPage(pageId);
+    if (res.pageId && sent.has(res.pageId)) return { rows, complete: false };
+    rows.push(...res[key]);
+    if (!res.pageId) return { rows, complete: true };
+    sent.add(res.pageId);
+    pageId = res.pageId;
+  }
+  return { rows, complete: false };
+}
+
+async function queryAllReturns({ start, end, maxPages } = {}) {
+  const { rows, complete } = await readAllPages(pageId => queryReturns({ start, end, pageId }), 'returns', maxPages);
+  return { returns: rows, complete };
+}
+
+/* Returned items are left out on purpose: they are in queryAllReturns() already,
+   and including them is the one setting under which this report never ends. */
+async function queryAllSettlements({ start, end, maxPages } = {}) {
+  const { rows, complete } = await readAllPages(
+    pageId => querySettlements({ start, end, excludeReturnedItems: true, pageId }), 'settlements', maxPages);
+  return { settlements: rows, complete };
+}
+
+async function queryAllReserves({ start, end, maxPages } = {}) {
+  const { rows, complete } = await readAllPages(pageId => queryReserves({ start, end, pageId }), 'reserves', maxPages);
+  return { reserves: rows, complete };
+}
+
+/**
+ * Is this returns-report row a Notification of Change rather than a return?
+ *
+ * `tranStatus` on a returns row is its own scale, not the retrieve() ladder.
+ * Finagy's definitions (Andrii Seniv, 2026-09-11):
+ *
+ *   1  the debit had settled to our bank account; the returned amount is taken
+ *      back out of it on the next business day
+ *   2  the debit was still pending deposit when it came back; the money never
+ *      reached our account
+ *   3  a Notification of Change — "for information only"
+ *
+ * A NOC is the receiving bank correcting a detail of the entry (C01 account
+ * number, C02 routing number, C05 account type…) while letting the debit
+ * THROUGH. Treated as a return it would kill an order that is being paid.
+ *
+ * NACHA change codes (C01–C14) never appear on a real return, so a C-code
+ * decides it even when tranStatus does not: staging has already sent a
+ * tranStatus that contradicts the rest of its own data.
+ */
+function isNotificationOfChange(row) {
+  if (!row) return false;
+  return Number(row.tranStatus) === 3 || /^C\d{2}$/i.test(String(row.returnReason || '').trim());
+}
+
+/** A returns-report row in words: what happened to the money. */
+function returnKind(row) {
+  if (isNotificationOfChange(row)) return 'notification_of_change';
+  const t = Number(row && row.tranStatus);
+  if (t === 1) return 'returned_after_settlement';
+  if (t === 2) return 'returned_before_settlement';
+  return 'returned';
 }
 
 /** A Date/ISO string as the day boundary Finagy's date-range queries expect. */
@@ -642,6 +747,12 @@ module.exports = {
   retrieveTransaction,
   querySettlements,
   queryReturns,
+  queryAllReturns,
+  queryAllSettlements,
+  queryReserves,
+  queryAllReserves,
+  isNotificationOfChange,
+  returnKind,
   queryInstitution,
   voidTransaction,
   refundTransaction,

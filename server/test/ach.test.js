@@ -32,8 +32,28 @@ const state = {
   sessionTotals: [],         // and the amount each was minted for
   tokenCalls: 0,
   retrieveCalls: 0,
-  returns: []                // rows for /queryreturns
+  voidCalls: 0,
+  refundCalls: 0,
+  returns: [],               // rows for /queryreturns (one page)
+  returnPages: null,         // or several pages of rows, which wins when set
+  returnsCursorStuck: false, // hand back the same cursor forever
+  returnsCalls: 0,
+  settlementPages: [[]],     // pages of /querysettlements rows
+  settlementsBodies: [],     // what each /querysettlements request asked for
+  reservePages: [[]],        // pages of /queryreserves rows
+  refundCreditId: '639246923014123850'   // the credit a refund raises (the live one)
 };
+
+/* Every Finagy report pages the same way on staging (2026-09-11): a page with
+   rows hands back a Base64 JSON cursor naming its last row — {"ReturnId":21457},
+   {"ReserveId":34} — and the report ends only when asking again returns no rows
+   and `pageId: null`. */
+const reportCursor = (key, base, page) => Buffer.from(JSON.stringify({ [key]: base + page })).toString('base64');
+function reportPage(pages, pageId, key, base) {
+  const page = pageId ? JSON.parse(Buffer.from(pageId, 'base64').toString('utf8'))[key] - base + 1 : 0;
+  const rows = pages[page] || [];
+  return { rows, pageId: rows.length ? reportCursor(key, base, page) : null };
+}
 
 const stub = http.createServer((req, res) => {
   let raw = '';
@@ -80,9 +100,25 @@ const stub = http.createServer((req, res) => {
         }
       });
     }
-    if (req.url === '/api/echeck/queryreturns') return json({ successful: true, returns: state.returns, pageId: '' });
-    if (req.url === '/api/echeck/void') return json({ successful: true, message: null });
-    if (req.url === '/api/echeck/refund') return json({ successful: true, message: null, authorizationId: state.authorizationId });
+    if (req.url === '/api/echeck/queryreturns') {
+      state.returnsCalls++;
+      const pages = state.returnPages || [state.returns];
+      if (state.returnsCursorStuck) return json({ successful: true, returns: pages[0], pageId: reportCursor('ReturnId', 21457, 0) });
+      const { rows, pageId } = reportPage(pages, body.pageId, 'ReturnId', 21457);
+      return json({ successful: true, returns: rows, pageId });
+    }
+    if (req.url === '/api/echeck/querysettlements') {
+      state.settlementsBodies.push(body);
+      const { rows, pageId } = reportPage(state.settlementPages, body.pageId, 'SettlementId', 25285);
+      return json({ successful: true, settlements: rows, pageId });
+    }
+    if (req.url === '/api/echeck/queryreserves') {
+      const { rows, pageId } = reportPage(state.reservePages, body.pageId, 'ReserveId', 34);
+      return json({ successful: true, reserves: rows, pageId });
+    }
+    if (req.url === '/api/echeck/void') { state.voidCalls++; return json({ successful: true, message: null }); }
+    // A refund is a NEW credit transaction with its own id (staging, 2026-09-11).
+    if (req.url === '/api/echeck/refund') { state.refundCalls++; return json({ successful: true, message: '', authorizationId: state.refundCreditId }); }
 
     res.writeHead(404); res.end();
   });
@@ -286,6 +322,8 @@ test('the status ladder is named the way the rest of the code reads it', () => {
   assert.equal(finagy.statusName(4), 'sent_to_bank');
   assert.equal(finagy.statusName(16), 'settled');
   assert.equal(finagy.statusName(24), 'late_return');
+  // a settled debit after it has been refunded (Finagy, 2026-09-11)
+  assert.equal(finagy.statusName(40), 'refunded');
   assert.equal(finagy.statusName(999), 'unknown');
 });
 
@@ -603,6 +641,205 @@ test('a LATE return (24) is flagged and does NOT silently restock a shipped orde
   state.status = 2;
 });
 
+/* A row from /queryreturns EXACTLY as staging sent it on 2026-09-11, for
+   639245942322405169 (our order ENL-CERT-S01B, returned R01):
+
+     { authorizationId: '639245942322405169', uniqueTranId: '639245942322405169',
+       tranStatus: 1, returnReason: 'R01', dateReturned: '2026-09-10T00:00:00', ... }
+
+   `uniqueTranId` carries Finagy's authorizationId, not the clientReferenceId we
+   sent, so looking it up as an order reference matched nothing.
+
+   `tranStatus`, as Finagy defined it on 2026-09-11: 1 = the debit had settled to
+   our account and the return is taken back out next business day, 2 = it was
+   still pending deposit when returned, 3 = a Notification of Change, which is
+   information only. This row says 1 for a debit whose settlement row has no
+   settleDate — hand-made sandbox data — so lateness is still read from our own
+   record, never from this field. */
+function liveReturnRow({ authorizationId, amount, returnReason, tranStatus = 1 }) {
+  return {
+    authorizationId, merchantId: '83', dateReturned: '2026-09-10T00:00:00',
+    uniqueTranId: authorizationId, routing: '642260020', accountNumber: '************8563',
+    checkNumber: null, name: 'Test Buyer', amount, returnAmount: amount,
+    tranStatus, returnReason, convenienceFee: null, addenda: ''
+  };
+}
+
+test('the returns feed reaches a PAID order, keyed the way the live feed keys it', async () => {
+  const token = await signUpBuyer();
+  const sharedId = state.authorizationId;
+  state.authorizationId = '639245942322405169';
+  state.status = 2;
+  const placed = await placeAchOrder(token);
+  const orderId = placed.body.orderId;
+
+  state.status = 16;
+  state.amount = placed.body.total;
+  await api('/api/ach/poll', { method: 'POST', headers: { 'x-cron-key': 'test-cron-key' } });
+
+  /* Paid orders leave the per-order sweep, so the returns feed is the only thing
+     that can see this one now — and retrieve has not caught up. */
+  state.returns = [liveReturnRow({ authorizationId: state.authorizationId, amount: placed.body.total, returnReason: 'R10' })];
+  await api('/api/ach/poll', { method: 'POST', headers: { 'x-cron-key': 'test-cron-key' } });
+
+  const orders = await api('/api/orders', { token });
+  const o = orders.body.orders.find(x => x.orderId === orderId);
+  assert.equal(o.status, 'returned', 'a return on a shipped order must not go unnoticed');
+  assert.equal(o.achReturnCode, 'R10');
+  assert.equal(o.achLateReturn, true, 'we had counted it as paid, so the parcel may already be gone');
+
+  state.returns = [];
+  state.authorizationId = sharedId;
+  state.status = 2;
+});
+
+test('a return on a debit we never counted as paid is not a late one, whatever tranStatus says', async () => {
+  const token = await signUpBuyer();
+  const sharedId = state.authorizationId;
+  state.authorizationId = '639245942322405170';
+  state.status = 2;
+  const placed = await placeAchOrder(token);
+  const orderId = placed.body.orderId;
+
+  // At the bank, not settled — then the bank sends it back (the live R01 case).
+  state.status = 4;
+  state.returns = [liveReturnRow({ authorizationId: state.authorizationId, amount: placed.body.total, returnReason: 'R01', tranStatus: 1 })];
+  await api('/api/ach/poll', { method: 'POST', headers: { 'x-cron-key': 'test-cron-key' } });
+
+  const orders = await api('/api/orders', { token });
+  const o = orders.body.orders.find(x => x.orderId === orderId);
+  assert.equal(o.status, 'returned');
+  assert.equal(o.achReturnCode, 'R01');
+  assert.notEqual(o.achLateReturn, true, 'it never settled, so nothing shipped against it');
+
+  state.returns = [];
+  state.authorizationId = sharedId;
+  state.status = 2;
+});
+
+/* ---- Notifications of Change ----
+   A NOC means the receiving bank corrected a detail of the entry (C01 = account
+   number, C02 = routing number, C05 = account type…) and let the debit THROUGH.
+   Finagy lists NOCs in the same returns report, with tranStatus 3. */
+
+test('a Notification of Change is known by tranStatus 3, or by a NACHA C-code', () => {
+  /* C-codes only ever appear on a NOC and never on a return, so they decide it
+     even when tranStatus does not — staging has already sent one tranStatus that
+     disagreed with the rest of its own data. */
+  const cases = [
+    [{ tranStatus: 3, returnReason: 'C01' }, true],
+    [{ tranStatus: '3', returnReason: '' }, true],
+    [{ tranStatus: 1, returnReason: 'C05' }, true],
+    [{ tranStatus: 1, returnReason: 'R01' }, false],
+    [{ tranStatus: 2, returnReason: 'R10' }, false],
+    [{}, false]
+  ];
+  for (const [row, want] of cases) {
+    assert.equal(finagy.isNotificationOfChange(row), want, JSON.stringify(row));
+  }
+});
+
+test('a Notification of Change does not return a payment that is still on its way', async () => {
+  /* Read as a return, a NOC released the order's stock and dropped it out of the
+     poller's sweep — and then the debit settled anyway, paying for a dead order. */
+  const token = await signUpBuyer();
+  const sharedId = state.authorizationId;
+  state.authorizationId = '639245942322405171';
+  state.status = 2;
+  const placed = await placeAchOrder(token);
+  const orderId = placed.body.orderId;
+
+  state.status = 4;
+  state.returns = [liveReturnRow({ authorizationId: state.authorizationId, amount: placed.body.total, returnReason: 'C01', tranStatus: 3 })];
+  await api('/api/ach/poll', { method: 'POST', headers: { 'x-cron-key': 'test-cron-key' } });
+
+  let o = (await api('/api/orders', { token })).body.orders.find(x => x.orderId === orderId);
+  assert.equal(o.status, 'pending', 'a correction notice is not a return');
+
+  state.returns = [];
+  state.status = 16;
+  state.amount = placed.body.total;
+  await api('/api/ach/poll', { method: 'POST', headers: { 'x-cron-key': 'test-cron-key' } });
+  o = (await api('/api/orders', { token })).body.orders.find(x => x.orderId === orderId);
+  assert.equal(o.status, 'paid', 'the debit went through, so the order must still be able to pay');
+
+  state.authorizationId = sharedId;
+  state.status = 2;
+});
+
+test('a Notification of Change on a PAID order is noted, not treated as a late return', async () => {
+  const token = await signUpBuyer();
+  const sharedId = state.authorizationId;
+  state.authorizationId = '639245942322405172';
+  state.status = 2;
+  const placed = await placeAchOrder(token);
+  const orderId = placed.body.orderId;
+
+  state.status = 16;
+  state.amount = placed.body.total;
+  await api('/api/ach/poll', { method: 'POST', headers: { 'x-cron-key': 'test-cron-key' } });
+
+  state.returns = [liveReturnRow({ authorizationId: state.authorizationId, amount: placed.body.total, returnReason: 'C01', tranStatus: 3 })];
+  await api('/api/ach/poll', { method: 'POST', headers: { 'x-cron-key': 'test-cron-key' } });
+
+  const o = (await api('/api/orders', { token })).body.orders.find(x => x.orderId === orderId);
+  assert.equal(o.status, 'paid', 'the money stayed with us — nothing to flag');
+  assert.notEqual(o.achLateReturn, true);
+  assert.equal(o.achNocCode, 'C01', 'the notice is kept on the order for staff to see');
+
+  state.returns = [];
+  state.authorizationId = sharedId;
+  state.status = 2;
+});
+
+/* ---- paging ----
+   Andrii Seniv, 2026-09-11: `pageId` is not a page number but a Base64 cursor
+   naming the last row of the page, and the only end marker is asking for the
+   next page and getting `pageId: null` back. */
+
+test('a return on the second page of the report is still found', async () => {
+  const token = await signUpBuyer();
+  const sharedId = state.authorizationId;
+  state.authorizationId = '639245942322405173';
+  state.status = 2;
+  const placed = await placeAchOrder(token);
+  const orderId = placed.body.orderId;
+
+  state.status = 4;
+  state.returnPages = [
+    [liveReturnRow({ authorizationId: '639245000000000001', amount: 12.5, returnReason: 'R02', tranStatus: 2 })],
+    [liveReturnRow({ authorizationId: state.authorizationId, amount: placed.body.total, returnReason: 'R01', tranStatus: 2 })]
+  ];
+  await api('/api/ach/poll', { method: 'POST', headers: { 'x-cron-key': 'test-cron-key' } });
+
+  const o = (await api('/api/orders', { token })).body.orders.find(x => x.orderId === orderId);
+  assert.equal(o.status, 'returned', 'the sweep must read past page one');
+  assert.equal(o.achReturnCode, 'R01');
+
+  state.returnPages = null;
+  state.authorizationId = sharedId;
+  state.status = 2;
+});
+
+test('a report cursor that never runs out cannot hang the poller', { timeout: 15_000 }, async () => {
+  /* Staging really does this, on querysettlements with excludeReturnedItems=false:
+     page 2 hands back {"SettlementId":0,"ReturnId":0,"ReserveId":0}, and sending
+     that starts the report over. The same fault on the returns report must end
+     the sweep and say so, not spin the cron job forever. */
+  state.returns = [liveReturnRow({ authorizationId: '639245000000000002', amount: 3, returnReason: 'R02', tranStatus: 2 })];
+  state.returnsCursorStuck = true;
+  const before = state.returnsCalls;
+
+  const poll = await api('/api/ach/poll', { method: 'POST', headers: { 'x-cron-key': 'test-cron-key' } });
+
+  assert.equal(poll.status, 200);
+  assert.ok(state.returnsCalls - before <= 3, `asked for the report ${state.returnsCalls - before} times`);
+  assert.ok(poll.body.errors.some(e => e.scope === 'returns'), 'an unfinished report is reported, not swallowed');
+
+  state.returnsCursorStuck = false;
+  state.returns = [];
+});
+
 test('a voided transaction (32) cancels the order and releases what it held', async () => {
   const token = await signUpBuyer();
   state.status = 2;
@@ -616,6 +853,24 @@ test('a voided transaction (32) cancels the order and releases what it held', as
   const o = orders.body.orders.find(x => x.orderId === orderId);
   assert.equal(o.status, 'cancelled');
   assert.equal(o.achStatus, 'voided');
+  state.status = 2;
+});
+
+test('a debit refunded (40) before we saw it settle closes the order instead of waiting forever', async () => {
+  /* A refund made in Finagy's own portal between two polls. Status 40 used to be
+     'unknown', which the sync reads as "still moving": the order stayed pending,
+     held its stock and was re-asked about every 30 minutes for ever. */
+  const token = await signUpBuyer();
+  state.status = 2;
+  const placed = await placeAchOrder(token);
+  const orderId = placed.body.orderId;
+
+  state.status = 40;
+  await api('/api/ach/poll', { method: 'POST', headers: { 'x-cron-key': 'test-cron-key' } });
+
+  const o = (await api('/api/orders', { token })).body.orders.find(x => x.orderId === orderId);
+  assert.equal(o.status, 'cancelled');
+  assert.equal(o.achStatus, 'refunded');
   state.status = 2;
 });
 
@@ -771,15 +1026,23 @@ test('resuming needs proof — a bare order reference is not enough', async () =
    Admin
    ============================================================ */
 
+let adminToken = null;
+async function signUpAdmin() {
+  if (adminToken) return adminToken;
+  const r = await api('/api/auth/register', {
+    method: 'POST',
+    body: { firstName: 'Boss', lastName: 'Person', email: 'boss@evernovalife.com', password: 'sup3rsecret!' }
+  });
+  assert.equal(r.status, 201, 'admin should register');
+  adminToken = r.body.token;
+  return adminToken;
+}
+
 test('the ACH admin panel is admin-only and reports the environment', async () => {
   const asBuyer = await api('/api/admin/ach', { token: await signUpBuyer() });
   assert.ok(asBuyer.status === 401 || asBuyer.status === 403, 'an ordinary account is refused');
 
-  const admin = await api('/api/auth/register', {
-    method: 'POST',
-    body: { firstName: 'Boss', lastName: 'Person', email: 'boss@evernovalife.com', password: 'sup3rsecret!' }
-  });
-  const r = await api('/api/admin/ach', { token: admin.body.token });
+  const r = await api('/api/admin/ach', { token: await signUpAdmin() });
   assert.equal(r.status, 200);
   assert.equal(r.body.configured, true);
   assert.equal(r.body.production, false);
@@ -787,4 +1050,350 @@ test('the ACH admin panel is admin-only and reports the environment', async () =
   assert.equal(r.body.secCode, 'WEB');
   // The panel must describe the setup without printing the key that runs it.
   assert.ok(!JSON.stringify(r.body).includes('API-TEST-KEY'));
+});
+
+test('a settled debit is refunded once — the admin button cannot raise a second credit', async () => {
+  /* Staging, 2026-09-11: refunding settled 639245589443869934 raised credit
+     639246923014123850, and the ORIGINAL debit now reads status 40 (it read 0
+     until Finagy corrected a sandbox settlement they had entered by hand). The
+     button used to treat everything that was not 2 as refundable, so a second
+     press would have asked Finagy to refund an already-refunded debit. */
+  const token = await signUpBuyer();
+  const admin = await signUpAdmin();
+  const sharedId = state.authorizationId;
+  state.authorizationId = '639245589443869934';
+  state.status = 2;
+  const placed = await placeAchOrder(token);
+  const orderId = placed.body.orderId;
+
+  state.status = 16;
+  state.amount = placed.body.total;
+  await api('/api/ach/poll', { method: 'POST', headers: { 'x-cron-key': 'test-cron-key' } });
+
+  const before = state.refundCalls;
+  const first = await api(`/api/admin/ach/${orderId}/refund`, { method: 'POST', token: admin });
+  assert.equal(first.status, 200, JSON.stringify(first.body));
+  assert.equal(first.body.action, 'refund', 'settled money comes back by refund, not void');
+  assert.equal(state.refundCalls, before + 1);
+
+  state.status = 40;
+  const second = await api(`/api/admin/ach/${orderId}/refund`, { method: 'POST', token: admin });
+  assert.equal(second.status, 409, JSON.stringify(second.body));
+  assert.equal(state.refundCalls, before + 1, 'Finagy must not be asked to refund it again');
+
+  state.authorizationId = sharedId;
+  state.status = 2;
+});
+
+test('a debit already refunded in Finagy is refused even though our record still says paid', async () => {
+  /* The live case: 639245589443869934 was refunded straight against the API, so
+     order ENL-MTU5U6TG never heard. Any refund done in Finagy's portal leaves an
+     order in the same place, and only Finagy's status 40 can say so. */
+  const token = await signUpBuyer();
+  const admin = await signUpAdmin();
+  const sharedId = state.authorizationId;
+  state.authorizationId = '639245589443869936';
+  state.status = 2;
+  const placed = await placeAchOrder(token);
+  const orderId = placed.body.orderId;
+
+  state.status = 16;
+  state.amount = placed.body.total;
+  await api('/api/ach/poll', { method: 'POST', headers: { 'x-cron-key': 'test-cron-key' } });
+
+  state.status = 40;
+  const refunds = state.refundCalls;
+  const r = await api(`/api/admin/ach/${orderId}/refund`, { method: 'POST', token: admin });
+  assert.equal(r.status, 409, JSON.stringify(r.body));
+  assert.equal(r.body.achStatus, 'refunded', 'staff are told it was refunded, not that the status is unknown');
+  assert.equal(state.refundCalls, refunds, 'Finagy must not be asked to refund it again');
+
+  state.authorizationId = sharedId;
+  state.status = 2;
+});
+
+test('a debit on its way to the bank is neither voided nor refunded', async () => {
+  // Status 4: too late to void, too early to refund. Finagy refuses both, so we do not ask.
+  const token = await signUpBuyer();
+  const admin = await signUpAdmin();
+  const sharedId = state.authorizationId;
+  state.authorizationId = '639245589443869935';
+  state.status = 4;
+  const placed = await placeAchOrder(token);
+  const orderId = placed.body.orderId;
+  await api('/api/ach/confirm', { method: 'POST', token, body: { orderId, paymentId: state.authorizationId } });
+
+  const voids = state.voidCalls;
+  const refunds = state.refundCalls;
+  const r = await api(`/api/admin/ach/${orderId}/refund`, { method: 'POST', token: admin });
+  assert.equal(r.status, 409, JSON.stringify(r.body));
+  assert.match(r.body.error, /sent to the bank/i, 'say why, and what to do instead');
+  assert.equal(state.voidCalls, voids);
+  assert.equal(state.refundCalls, refunds);
+
+  state.authorizationId = sharedId;
+  state.status = 2;
+});
+
+/* ---- a bank order is never settled or cancelled by hand ----
+   Finagy decides whether the money moved. "Mark paid" on a debit that has not
+   settled ships goods against money that can still bounce, and "Cancel" on one
+   Finagy is still collecting closes the order while the buyer is debited anyway. */
+
+async function adminOrder(orderId) {
+  const r = await api('/api/admin/orders', { token: await signUpAdmin() });
+  return r.body.orders.find(o => o.orderId === orderId);
+}
+
+test('a bank payment cannot be marked paid by hand — only a settlement pays it', async () => {
+  const token = await signUpBuyer();
+  state.status = 2;
+  const placed = await placeAchOrder(token);
+
+  const r = await api(`/api/admin/orders/${placed.body.orderId}/paid`, { method: 'POST', token: await signUpAdmin() });
+  assert.equal(r.status, 409, JSON.stringify(r.body));
+  assert.equal((await adminOrder(placed.body.orderId)).status, 'pending');
+});
+
+test('cancelling a bank order Finagy is still collecting is refused — it has to be voided', async () => {
+  const token = await signUpBuyer();
+  const sharedId = state.authorizationId;
+  state.authorizationId = '639245946244424790';
+  state.status = 2;
+  const placed = await placeAchOrder(token);
+  const orderId = placed.body.orderId;
+  await api('/api/ach/confirm', { method: 'POST', token, body: { orderId, paymentId: state.authorizationId } });
+
+  const voids = state.voidCalls;
+  const r = await api(`/api/admin/orders/${orderId}/cancel`, { method: 'POST', token: await signUpAdmin() });
+  assert.equal(r.status, 409, JSON.stringify(r.body));
+  assert.match(r.body.error, /void/i, 'point at the tool that actually stops the debit');
+  assert.equal((await adminOrder(orderId)).status, 'pending');
+  assert.equal(state.voidCalls, voids, 'refusing must not quietly void either');
+
+  state.authorizationId = sharedId;
+});
+
+test('a bank order Finagy never received can still be cancelled', async () => {
+  const token = await signUpBuyer();
+  state.status = 2;
+  const placed = await placeAchOrder(token);
+
+  state.status = 0;                                   // the buyer never finished Finagy's page
+  const r = await api(`/api/admin/orders/${placed.body.orderId}/cancel`, { method: 'POST', token: await signUpAdmin() });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal((await adminOrder(placed.body.orderId)).status, 'cancelled');
+  state.status = 2;
+});
+
+/* ---- an order that has shipped stays shipped ----
+   syncAchOrder used to mark ANY settled order paid unless it already said
+   "paid" — and /api/ach/confirm will run it for the buyer at any time. */
+
+test('a shipped bank order is not put back in the packing queue when its buyer confirms again', async () => {
+  const token = await signUpBuyer();
+  const sharedId = state.authorizationId;
+  state.authorizationId = '639245589443869941';
+  state.status = 2;
+  const placed = await placeAchOrder(token);
+  const orderId = placed.body.orderId;
+  state.status = 16;
+  state.amount = placed.body.total;
+  await api('/api/ach/poll', { method: 'POST', headers: { 'x-cron-key': 'test-cron-key' } });
+  const shipped = await api(`/api/admin/orders/${orderId}/shipped`, { method: 'POST', token: await signUpAdmin(), body: { carrier: 'USPS', tracking: '9400' } });
+  assert.equal(shipped.status, 200, JSON.stringify(shipped.body));
+
+  await api('/api/ach/confirm', { method: 'POST', token, body: { orderId, paymentId: state.authorizationId } });
+
+  assert.equal((await adminOrder(orderId)).status, 'shipped', 'a parcel that went out must not be queued to go out again');
+  state.authorizationId = sharedId;
+  state.status = 2;
+});
+
+test('a late return on an order that has already SHIPPED is flagged', async () => {
+  // The case the returns sweep exists for — and it skipped every shipped order.
+  const token = await signUpBuyer();
+  const sharedId = state.authorizationId;
+  state.authorizationId = '639245589443869942';
+  state.status = 2;
+  const placed = await placeAchOrder(token);
+  const orderId = placed.body.orderId;
+  state.status = 16;
+  state.amount = placed.body.total;
+  await api('/api/ach/poll', { method: 'POST', headers: { 'x-cron-key': 'test-cron-key' } });
+  await api(`/api/admin/orders/${orderId}/shipped`, { method: 'POST', token: await signUpAdmin(), body: { carrier: 'USPS', tracking: '9401' } });
+
+  state.returns = [liveReturnRow({ authorizationId: state.authorizationId, amount: placed.body.total, returnReason: 'R10', tranStatus: 1 })];
+  await api('/api/ach/poll', { method: 'POST', headers: { 'x-cron-key': 'test-cron-key' } });
+
+  const o = await adminOrder(orderId);
+  assert.equal(o.status, 'returned', 'the money came back out after the parcel left');
+  assert.equal(o.achLateReturn, true);
+
+  state.returns = [];
+  state.authorizationId = sharedId;
+  state.status = 2;
+});
+
+/* ---- Check with Finagy ----
+   The poller never re-reads a PAID order, so a refund made in Finagy's own
+   portal is invisible to us. The live order ENL-MTU5U6TG is in exactly that
+   state: refunded straight against the API, still "paid" here. */
+
+test('Check with Finagy picks up a refund made outside our console on a paid order', async () => {
+  const token = await signUpBuyer();
+  const sharedId = state.authorizationId;
+  state.authorizationId = '639245589443869937';
+  state.status = 2;
+  const placed = await placeAchOrder(token);
+  const orderId = placed.body.orderId;
+  state.status = 16;
+  state.amount = placed.body.total;
+  await api('/api/ach/poll', { method: 'POST', headers: { 'x-cron-key': 'test-cron-key' } });
+
+  state.status = 40;
+  const r = await api(`/api/admin/ach/${orderId}/sync`, { method: 'POST', token: await signUpAdmin() });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+
+  const o = await adminOrder(orderId);
+  assert.equal(o.status, 'cancelled', 'a refunded sale is not a paid one');
+  assert.equal(o.achStatus, 'refunded');
+
+  state.authorizationId = sharedId;
+  state.status = 2;
+});
+
+test('a refund keeps the id of the credit it raised', async () => {
+  /* The credit comes back with uniqueTranId null, so nothing Finagy sends later
+     can name the order it belongs to. The only record of the link is the id the
+     refund call returns — which used to be thrown away. */
+  const token = await signUpBuyer();
+  const sharedId = state.authorizationId;
+  state.authorizationId = '639245589443869938';
+  state.status = 2;
+  const placed = await placeAchOrder(token);
+  const orderId = placed.body.orderId;
+  state.status = 16;
+  state.amount = placed.body.total;
+  await api('/api/ach/poll', { method: 'POST', headers: { 'x-cron-key': 'test-cron-key' } });
+
+  const r = await api(`/api/admin/ach/${orderId}/refund`, { method: 'POST', token: await signUpAdmin() });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal((await adminOrder(orderId)).achRefundTransactionId, '639246923014123850');
+
+  state.authorizationId = sharedId;
+  state.status = 2;
+});
+
+/* ---- the three Finagy reports, in the console ----
+   SALE-08/09/10 on the certification sheet. Rows exactly as staging sent them. */
+
+function liveSettlementRow({ authorizationId, amount, transactionCode = 'D', settleDate = '2026-09-10T00:00:00', returnDate = null, returnReasonCode = null }) {
+  return {
+    authorizationId, merchantId: '83', settleDate, uniqueTranId: authorizationId, routing: '642260020',
+    accountNumber: '************4906', checkNumber: null, name: 'Test Buyer', amount, convenienceFee: null,
+    transactionCode, returnDate, returnReasonCode
+  };
+}
+const LIVE_RESERVE_ROW = {
+  merchantId: '83', merchantLegalName: 'Ever NovA Life', merchantDBAName: 'Ever NovA Life',
+  debitAdjustment: 100, debitReason: '', currentReserveBalance: 100, reserveDate: '2026-09-10T18:48:38'
+};
+
+test('the Finagy admin routes refuse an ordinary account', async () => {
+  const token = await signUpBuyer();
+  const reports = await api('/api/admin/ach/reports', { token });
+  assert.ok(reports.status === 401 || reports.status === 403, 'reports');
+  const sync = await api('/api/admin/ach/ENL-NOPE/sync', { method: 'POST', token });
+  assert.ok(sync.status === 401 || sync.status === 403, 'sync');
+});
+
+test('a return row is labelled by what happened to the money', () => {
+  const cases = [
+    [{ tranStatus: 1, returnReason: 'R01' }, 'returned_after_settlement'],
+    [{ tranStatus: 2, returnReason: 'R10' }, 'returned_before_settlement'],
+    [{ tranStatus: 3, returnReason: 'C01' }, 'notification_of_change'],
+    [{ tranStatus: 1, returnReason: 'C02' }, 'notification_of_change'],
+    [{ returnReason: 'R02' }, 'returned']
+  ];
+  for (const [row, want] of cases) assert.equal(finagy.returnKind(row), want, JSON.stringify(row));
+});
+
+test('the reports read every page of settlements, returns and reserves, tied to our orders', async () => {
+  const token = await signUpBuyer();
+  const sharedId = state.authorizationId;
+  state.authorizationId = '639245589443869939';
+  state.status = 2;
+  const placed = await placeAchOrder(token);
+  const orderId = placed.body.orderId;
+  state.status = 16;
+  state.amount = placed.body.total;
+  await api('/api/ach/poll', { method: 'POST', headers: { 'x-cron-key': 'test-cron-key' } });
+
+  state.settlementPages = [
+    [liveSettlementRow({ authorizationId: '639245000000000010', amount: 9 })],
+    [liveSettlementRow({ authorizationId: state.authorizationId, amount: placed.body.total })]
+  ];
+  state.returnPages = [
+    [liveReturnRow({ authorizationId: '639245000000000011', amount: 4, returnReason: 'R02', tranStatus: 2 })],
+    [liveReturnRow({ authorizationId: state.authorizationId, amount: placed.body.total, returnReason: 'C01', tranStatus: 3 })]
+  ];
+  state.reservePages = [[LIVE_RESERVE_ROW]];
+  state.settlementsBodies = [];
+
+  const r = await api('/api/admin/ach/reports?start=2026-09-01&end=2026-09-13', { token: await signUpAdmin() });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+
+  assert.equal(r.body.settlements.length, 2, 'both pages of settlements');
+  assert.equal(r.body.settlements.find(s => s.authorizationId === state.authorizationId).orderId, orderId);
+  assert.ok(state.settlementsBodies.every(b => b.excludeReturnedItems === true),
+    'with returned items included, staging never reaches the end of this report');
+
+  assert.equal(r.body.returns.length, 2, 'both pages of returns');
+  const ours = r.body.returns.find(x => x.authorizationId === state.authorizationId);
+  assert.equal(ours.orderId, orderId);
+  assert.equal(ours.kind, 'notification_of_change');
+
+  assert.equal(r.body.reserves.length, 1);
+  assert.equal(r.body.reserveBalance, 100);
+  assert.deepEqual([r.body.settlementsComplete, r.body.returnsComplete, r.body.reservesComplete], [true, true, true]);
+
+  state.settlementPages = [[]];
+  state.returnPages = null;
+  state.reservePages = [[]];
+  state.authorizationId = sharedId;
+  state.status = 2;
+});
+
+test('a refund credit in the settlements report is tied back to its order', async () => {
+  const token = await signUpBuyer();
+  const sharedId = state.authorizationId;
+  state.authorizationId = '639245589443869940';
+  state.refundCreditId = '639246923014123851';
+  state.status = 2;
+  const placed = await placeAchOrder(token);
+  const orderId = placed.body.orderId;
+  state.status = 16;
+  state.amount = placed.body.total;
+  await api('/api/ach/poll', { method: 'POST', headers: { 'x-cron-key': 'test-cron-key' } });
+  await api(`/api/admin/ach/${orderId}/refund`, { method: 'POST', token: await signUpAdmin() });
+
+  // The credit carries no reference of ours — only its own authorizationId.
+  state.settlementPages = [[liveSettlementRow({ authorizationId: '639246923014123851', amount: placed.body.total, transactionCode: 'C' })]];
+  const r = await api('/api/admin/ach/reports?start=2026-09-01&end=2026-09-13', { token: await signUpAdmin() });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.settlements[0].orderId, orderId);
+
+  state.settlementPages = [[]];
+  state.refundCreditId = '639246923014123850';
+  state.authorizationId = sharedId;
+  state.status = 2;
+});
+
+test('a report range that is not a real range is refused in words', async () => {
+  const admin = await signUpAdmin();
+  const bad = await api('/api/admin/ach/reports?start=yesterday&end=2026-09-13', { token: admin });
+  assert.equal(bad.status, 400);
+  const backwards = await api('/api/admin/ach/reports?start=2026-09-13&end=2026-09-01', { token: admin });
+  assert.equal(backwards.status, 400);
 });
