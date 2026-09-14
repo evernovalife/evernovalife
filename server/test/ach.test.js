@@ -19,6 +19,7 @@ const { once } = require('node:events');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const ratelimit = require('../ratelimit.js');
 
 /* ---- a stand-in for Finagy ----
    Answers the four endpoints this integration uses. `state` is reachable from
@@ -160,6 +161,12 @@ test.after(async () => {
   stub.close(); await once(stub, 'close');
   try { fs.rmSync(TMP_DATA, { recursive: true, force: true }); } catch { /* ignore */ }
 });
+
+/* checkoutLimiter counts per IP across crypto/zelle/ach, and every request in
+   this file comes from 127.0.0.1 in one process — so without a reset, this
+   file's own volume of test orders would trip a control aimed at automated
+   checkout abuse, not a legitimate run. */
+test.beforeEach(() => ratelimit.reset());
 
 async function api(pathname, { method = 'GET', token, body, headers = {} } = {}) {
   const h = { ...headers };

@@ -1339,8 +1339,20 @@ ${link}
    hand the browser its checkoutLink to redirect to.
    ============================================================ */
 
+/* Shared across all three checkout methods (crypto/zelle/ach), on purpose:
+   every one of them reserves real stock before any payment confirms and
+   emails whatever address the caller supplies, so a per-route budget could
+   be dodged just by switching methods between calls. Guests have no account
+   yet, so this is IP-keyed. */
+const checkoutLimiter = ratelimit.limit({
+  name: 'checkout',
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  message: 'Too many checkout attempts from this connection. Wait a while and try again, or contact support@evernovalife.com.'
+});
+
 /* ---- open a BTCPay invoice for the (server-priced) cart ---- */
-app.post('/api/crypto/checkout', optionalAuth, async (req, res) => {
+app.post('/api/crypto/checkout', checkoutLimiter, optionalAuth, async (req, res) => {
   if (!btcpay.CONFIGURED) {
     return res.status(500).json({ error: 'Crypto payments are not set up yet (missing BTCPay keys in server/.env).' });
   }
@@ -2273,7 +2285,7 @@ app.post('/api/admin/orders/:orderId/reconcile', requireAdmin, async (req, res) 
    ============================================================ */
 
 /* ---- place an order to be paid by Zelle ---- */
-app.post('/api/zelle/checkout', optionalAuth, async (req, res) => {
+app.post('/api/zelle/checkout', checkoutLimiter, optionalAuth, async (req, res) => {
   if (!zelle.CONFIGURED) {
     return res.status(500).json({ error: 'Zelle payment is not set up yet (missing ZELLE_* keys in server/.env).' });
   }
@@ -2404,7 +2416,7 @@ function achReturnUrls(req) {
 const ACH_ABANDON_HOURS = Number(process.env.ACH_ABANDON_HOURS || 6);
 
 /* ---- open an ACH payment for the (server-priced) cart ---- */
-app.post('/api/ach/checkout', optionalAuth, async (req, res) => {
+app.post('/api/ach/checkout', checkoutLimiter, optionalAuth, async (req, res) => {
   if (!finagy.CONFIGURED) {
     return res.status(500).json({ error: 'Bank payments are not set up yet (missing FINAGY_* keys in server/.env).' });
   }
