@@ -37,6 +37,7 @@ const inbox = require('./inbox.js');
 const agentKnowledge = require('./agent-knowledge.js');
 
 const app = express();
+app.disable('x-powered-by');   // don't hand an attacker the framework name for free
 const PORT = process.env.PORT || 4242;
 const ROOT = path.join(__dirname, '..'); // project root (HTML/CSS/JS live here)
 
