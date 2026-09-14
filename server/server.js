@@ -40,6 +40,17 @@ const app = express();
 const PORT = process.env.PORT || 4242;
 const ROOT = path.join(__dirname, '..'); // project root (HTML/CSS/JS live here)
 
+/* This server sits behind exactly one reverse proxy in production (Render's
+   load balancer). Without this, Express treats the proxy's own address as
+   every visitor's address, so req.ip is identical for the whole site — and
+   every IP-keyed rate limiter (order lookup, the agent routes) becomes one
+   shared bucket a single visitor can exhaust for everyone else. Trusting one
+   hop makes req.ip the real client address again; a client-sent
+   X-Forwarded-For cannot forge this, since Render's proxy appends the true
+   client IP as the hop closest to the server, which is the one this setting
+   reads. */
+app.set('trust proxy', 1);
+
 /* ---- CORS: allow your site origin(s) to call this API ---- */
 const allowed = (process.env.ALLOWED_ORIGINS || '*')
   .split(',').map(s => s.trim()).filter(Boolean);
