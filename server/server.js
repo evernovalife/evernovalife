@@ -51,6 +51,30 @@ const ROOT = path.join(__dirname, '..'); // project root (HTML/CSS/JS live here)
    reads. */
 app.set('trust proxy', 1);
 
+/* ---- baseline security headers ----
+   Deliberately NOT a Content-Security-Policy: this app has no bundler and no
+   inline-script audit, so a script-src strict enough to matter would need
+   every one of the site's ~30 static pages checked by hand against whatever
+   it blocked (the ElevenLabs widget, BTCPay's redirect, any inline <script>)
+   before it could ship without risking a blank storefront. That is real work,
+   worth doing deliberately, not as a side effect of this pass — tracked as a
+   follow-up rather than guessed at here.
+   These four have no such risk: none of them can break a working page, they
+   only remove things an attacker could otherwise do.
+   Note this only touches responses THIS process sends — on Render that's the
+   JSON API only (see the static-file branch below), so the equivalent
+   headers for the GoDaddy-served HTML pages belong in a root .htaccess. */
+app.use((req, res, next) => {
+  res.set('X-Content-Type-Options', 'nosniff');
+  // No page on this site is meant to be framed by anyone, including itself.
+  res.set('X-Frame-Options', 'DENY');
+  res.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  // Browsers ignore this on a plain-HTTP response, so it's harmless to always
+  // send; Render terminates TLS in front of this process either way.
+  res.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  next();
+});
+
 /* ---- CORS: allow your site origin(s) to call this API ---- */
 const allowed = (process.env.ALLOWED_ORIGINS || '*')
   .split(',').map(s => s.trim()).filter(Boolean);

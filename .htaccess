@@ -1,0 +1,19 @@
+# ============================================================
+# Ever Nova Life — GoDaddy static-site headers
+# The API (server/, on Render) sets its own copy of these for its
+# own responses; this file is what actually reaches a browser
+# loading the HTML pages, since GoDaddy — not that Express process —
+# is what serves them in production.
+#
+# Deliberately no Content-Security-Policy here: this site has no
+# bundler and no inline-script audit, so a script-src strict enough
+# to matter would need every page checked by hand against whatever
+# it blocked first. Tracked as a follow-up, not guessed at here.
+# ============================================================
+<IfModule mod_headers.c>
+  Header always set X-Content-Type-Options "nosniff"
+  # No page on this site is meant to be framed by anyone, including itself.
+  Header always set X-Frame-Options "DENY"
+  Header always set Referrer-Policy "strict-origin-when-cross-origin"
+  Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
+</IfModule>
