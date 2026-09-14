@@ -806,6 +806,15 @@ const ADMIN_KEY = process.env.ADMIN_KEY || '';
    enforced as a gate. Used where a route serves both the public and an admin
    (GET /api/products), so an anonymous visitor gets the public view rather
    than a 401. */
+/* Constant-time compare for a static shared secret (ADMIN_KEY, CRON_KEY),
+   so it can't be recovered byte-by-byte from response-time differences —
+   the same protection requireAgent already gives AGENT_SECRET below. */
+function safeEqual(a, b) {
+  const bufA = Buffer.from(String(a));
+  const bufB = Buffer.from(String(b));
+  return bufA.length === bufB.length && crypto.timingSafeEqual(bufA, bufB);
+}
+
 function isAdminRequest(req) {
   const m = /^Bearer\s+(.+)$/i.exec(req.get('authorization') || '');
   const payload = m && auth.verifyToken(m[1]);
@@ -814,7 +823,7 @@ function isAdminRequest(req) {
     if (user && user.isAdmin) return true;
   }
   const key = req.get('x-admin-key') || req.query.key || '';
-  return Boolean(ADMIN_KEY && key && key === ADMIN_KEY);
+  return Boolean(ADMIN_KEY && key && safeEqual(key, ADMIN_KEY));
 }
 
 function requireAdmin(req, res, next) {
@@ -827,7 +836,7 @@ function requireAdmin(req, res, next) {
   }
   // 2) admin key
   const key = req.get('x-admin-key') || req.query.key || '';
-  if (ADMIN_KEY && key && key === ADMIN_KEY) return next();
+  if (ADMIN_KEY && key && safeEqual(key, ADMIN_KEY)) return next();
 
   if (!ADMIN_KEY && !auth.ADMIN_ENABLED) {
     return res.status(503).json({ error: 'Admin is not set up yet (set ADMIN_EMAIL/ADMIN_EMAILS or ADMIN_KEY in the server env).' });
@@ -5648,7 +5657,7 @@ async function runDueSubscriptions(now = Date.now()) {
    by its pendingOrderId and skipped. */
 function requireCron(req, res, next) {
   const key = req.get('x-cron-key') || req.query.cronKey || '';
-  if (CRON_KEY && key && key === CRON_KEY) return next();
+  if (CRON_KEY && key && safeEqual(key, CRON_KEY)) return next();
   return requireAdmin(req, res, next);
 }
 
