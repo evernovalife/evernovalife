@@ -106,8 +106,12 @@ function genReferralCode(users) {
 }
 const normCode = c => String(c || '').trim().toUpperCase();
 
+/* `tokenVersion` rides along so a password reset can invalidate every
+   session token issued before it — see resetPassword, which bumps it, and
+   verifyToken, which checks it. A token minted before this field existed
+   reads as version 0, same as every account that has never reset. */
 function signToken(u) {
-  return jwt.sign({ sub: u.id, email: u.email }, SECRET, { expiresIn: TOKEN_TTL });
+  return jwt.sign({ sub: u.id, email: u.email, tokenVersion: u.tokenVersion || 0 }, SECRET, { expiresIn: TOKEN_TTL });
 }
 
 function httpError(status, message) {
@@ -304,6 +308,10 @@ async function resetPassword(token, newPassword) {
 
   user.passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
   user.passwordSet = true;          // a checkout-made account is now a real one
+  /* Invalidates every session token issued before this moment (see
+     signToken/verifyToken) — a token stolen before the reset is worthless
+     after it, which is the whole point of resetting a password. */
+  user.tokenVersion = (user.tokenVersion || 0) + 1;
   delete user.resetTokenHash;
   delete user.resetTokenExpires;
   saveUsers(users);
@@ -365,6 +373,15 @@ function verifyToken(token) {
        not be spendable here. Without this line the token we give a third party
        would open every requireAuth route on the server. */
     if (payload && payload.scope) return null;
+    /* A password reset bumps the account's tokenVersion (see resetPassword);
+       a token signed before that reset still carries the old number, so it
+       stops working the moment the reset completes — this is what makes
+       "reset your password" actually revoke a stolen session, not just add
+       a new one alongside it. Every route that calls verifyToken looks the
+       user up again right after anyway, so this costs one extra read, not
+       an extra round trip. */
+    const user = loadUsers().find(u => u.id === payload.sub);
+    if (!user || (user.tokenVersion || 0) !== (payload.tokenVersion || 0)) return null;
     return payload;
   } catch (e) {
     return null;
