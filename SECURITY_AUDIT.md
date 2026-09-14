@@ -82,14 +82,14 @@ File: `js/auth.js:12,22-23` (JWT), `js/admin-core.js:18,27,37` (`ADMIN_KEY`)
 Exploit: The 30-day session JWT (`server/auth.js:21,109-111`) is stored in `localStorage`, readable by any script that ever executes on the page — standard XSS-exfiltration risk, and no cookie-based protection (`httpOnly`/`Secure`/`SameSite`) exists as a backstop. No live XSS injection point was found in this review (see MEDIUM/no-findings below), so this is a defense-in-depth gap, not a demonstrated exploit chain today. More serious: `admin-core.js` persists the **static, non-expiring `ADMIN_KEY`** fallback credential in `localStorage` too — a single leaked value (via any future XSS, a shared/public machine, or a malicious browser extension) grants full admin API access indefinitely, for every admin who ever used the fallback box.
 Fix: move the session token to an `httpOnly; Secure; SameSite=None` cookie (requires the API and site to cooperate cross-origin, which they already must for CORS); at minimum, stop persisting `ADMIN_KEY` client-side at all — require it to be re-entered per session, or retire the key-fallback path in favor of admin accounts only.
 
-**H6. `nodemailer` has an actively-exploitable HIGH-severity advisory chain**
+**H6. `nodemailer` has an actively-exploitable HIGH-severity advisory chain** — **DEFERRED, blocked on you**: the fix (`nodemailer@10.0.10`) requires Node ≥20; this repo's `engines.node` says `>=18` and nothing in the repo pins what Render actually runs. You asked to check the Render Node version before this proceeds — tell me what it is (or set `NODE_VERSION` in the Render dashboard to 20+) and I'll finish this one.
 File: `server/package.json:21` (`"nodemailer": "^6.10.1"`, resolves to a version `<=9.1.0` per `npm audit`)
 Exploit: The installed range is vulnerable to SMTP/header command injection via unsanitized transport options, a `jsonTransport` bypass of the `disableFileAccess`/`disableUrlAccess` guards, an OAuth2 TLS-certificate-validation bypass enabling credential interception, and a message-level `raw` option bypass enabling arbitrary file read / full-response SSRF from the mail-sending path. This module sends every transactional email in the app (welcome, password reset, order/invoice, dispute, admin-notify) with content partially drawn from user-supplied fields (email address, shipping name, dispute reason) — several of these advisories are reachable through exactly that kind of usage.
 Fix: `npm audit fix --force` → `nodemailer@10.0.10` (breaking major-version bump; smoke-test `server/email.js` and every call site afterward, since v10 changed some transport option shapes).
 
 ### MEDIUM
 
-**M1. No security headers anywhere in the stack**
+**M1. No security headers anywhere in the stack** — **PARTIALLY FIXED** (commit `36565c6`): `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy`, and HSTS added both in `server/server.js` (the API's own responses) and in a new root `.htaccess` (the GoDaddy-served HTML pages, which is where the clickjacking risk on `admin.html` actually lived). **Content-Security-Policy deliberately not added** — this site has no bundler and no inline-script audit, so a real `script-src` needs every one of its ~30 pages checked by hand first (ElevenLabs widget, BTCPay redirect, inline `<script>` tags); shipping one blind risks a blank storefront. Flagging as a separate follow-up rather than guessing at it.
 File: `server/server.js`, `server/app.js` (no `helmet`, no manual `res.set` for security headers); no `.htaccess` in the repo root for the GoDaddy-served static site
 Exploit: No `X-Frame-Options`/`frame-ancestors` means `admin.html`/`admin-products.html` can be iframed by an attacker-controlled page for clickjacking against an already-authenticated admin session. No CSP means any future XSS (none found today, but this is the mitigating layer for one that appears tomorrow) has no containment. No HSTS leaves a protocol-downgrade window on first visit before Cloudflare's edge TLS engages.
 Fix: add `helmet()` to `server/server.js` with a CSP that allow-lists the ElevenLabs widget script origin and BTCPay's checkout origin, plus `frame-ancestors 'none'` (or `'self'` if any page legitimately frames itself); add the Apache equivalent via `.htaccess` for the static GoDaddy site, since that's the layer actually serving those files in production.
@@ -103,19 +103,19 @@ Fix: add a `tokenVersion` field to the user record, embed it in the JWT payload,
 File: `server/server.js:44-51`, `server/.env.example:20`
 This can't be verified from the repository — it depends on the `ALLOWED_ORIGINS` environment variable actually set on Render. The code itself correctly rejects any origin not on the list once one is configured (not a wildcard-plus-credentials pattern, since auth uses a Bearer header, not cookies), so this is a config-verification item, not a code defect. See DASHBOARD/CONFIG below.
 
-**M4. `qs` / `body-parser` MODERATE DoS advisories (transitive, via Express)**
+**M4. `qs` / `body-parser` MODERATE DoS advisories (transitive, via Express)** — **FIXED** (commit `60c9ee8`, non-breaking `npm audit fix`)
 File: `server/package.json` (transitive dependency of `express@^4.19.2`)
 Exploit: `qs` 2.2.5–6.15.3 has an array-limit bypass and a `isBuffer`-triggered DoS; `body-parser` <=1.20.6 has a size-limit bypass — both reachable through any request Express parses.
 Fix: `npm audit fix` (non-breaking).
 
 ### LOW
 
-**L1. `requireAdmin`/`requireCron` static-key comparisons are not constant-time**
+**L1. `requireAdmin`/`requireCron` static-key comparisons are not constant-time** — **FIXED** (commit `f44c9ed`)
 File: `server/server.js:773` (`key === ADMIN_KEY`), `server/server.js:5573` (`key === CRON_KEY`)
 Exploit: theoretical timing side-channel to recover the key byte-by-byte; impractical over a real network given jitter, but inconsistent with the rest of the codebase, which correctly uses `crypto.timingSafeEqual` for every other secret comparison (`auth.js:392-395`, `server.js:3553-3557`).
 Fix: wrap both comparisons in the same length-checked `timingSafeEqual` pattern already used elsewhere in this file.
 
-**L2. `X-Powered-By: Express` not disabled**
+**L2. `X-Powered-By: Express` not disabled** — **FIXED** (commit `4be36c9`)
 File: `server/server.js` (no `app.disable('x-powered-by')` anywhere)
 Exploit: trivial framework fingerprinting only.
 Fix: `app.disable('x-powered-by')` near the top of `server.js`.
