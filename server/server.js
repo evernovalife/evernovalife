@@ -187,8 +187,19 @@ function escapeHtmlSrv(s) {
   ));
 }
 
-/* ---- sign in ---- */
-app.post('/api/auth/login', async (req, res) => {
+/* ---- sign in ----
+   Keyed on the submitted email, not the caller's address: credential
+   stuffing tries many passwords against ONE account, often from many IPs, so
+   an IP-keyed budget would barely slow it down. A falsy key (no email typed)
+   falls back to the IP, same rule every other limiter here follows. */
+const loginLimiter = ratelimit.limit({
+  name: 'login',
+  windowMs: 15 * 60 * 1000,
+  max: 8,
+  key: req => String((req.body && req.body.email) || '').trim().toLowerCase(),
+  message: 'Too many sign-in attempts for that email. Wait a few minutes and try again, or reset your password.'
+});
+app.post('/api/auth/login', loginLimiter, async (req, res) => {
   try {
     const { email, password } = req.body || {};
     const result = await auth.authenticate({ email, password });
