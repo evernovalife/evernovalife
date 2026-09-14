@@ -122,8 +122,19 @@ app.get('/api/health', (req, res) => res.json({
    register/login and sent back as "Authorization: Bearer <token>".
    ============================================================ */
 
-/* ---- create an account ---- */
-app.post('/api/auth/register', async (req, res) => {
+/* ---- create an account ----
+   IP-keyed, not email-keyed: an attacker spamming this types a new email
+   every call, so a per-email budget would never engage. Each call also
+   fires a welcome email to whatever address was typed and an admin-notify
+   email, so an uncapped route is both a spam vector against strangers and
+   an SMTP-cost/reputation one against this store. */
+const registerLimiter = ratelimit.limit({
+  name: 'register',
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  message: 'Too many accounts created from this connection. Wait a while and try again.'
+});
+app.post('/api/auth/register', registerLimiter, async (req, res) => {
   try {
     const { firstName, lastName, email, password, ref } = req.body || {};
     const result = await auth.registerUser({ firstName, lastName, email, password, ref });
@@ -898,8 +909,17 @@ app.get('/api/admin/email-test', requireAdmin, async (req, res) => {
 
 /* ---- forgot password: email a reset link ----
    Always responds the same way whether or not the email exists, so this
-   can't be used to discover which emails are registered. */
-app.post('/api/auth/forgot', async (req, res) => {
+   can't be used to discover which emails are registered.
+   Keyed on the submitted email so this can't be used to email-bomb one
+   victim's inbox; a missing email falls back to the IP-keyed budget. */
+const forgotLimiter = ratelimit.limit({
+  name: 'forgot-password',
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  key: req => String((req.body && req.body.email) || '').trim().toLowerCase(),
+  message: 'Too many reset requests for that email. Wait a few minutes and try again.'
+});
+app.post('/api/auth/forgot', forgotLimiter, async (req, res) => {
   const generic = { success: true, message: 'If that email has an account, a reset link is on its way. Check your inbox (and spam).' };
   try {
     const addr = (req.body && req.body.email) || '';

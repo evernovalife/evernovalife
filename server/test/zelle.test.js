@@ -49,6 +49,7 @@ const loyalty = require('../loyalty.js');
 const app = require('../server.js');
 const store = require('../store.js');
 const auth = require('../auth.js');
+const ratelimit = require('../ratelimit.js');
 
 let server, base, productId, unitPrice;
 
@@ -67,6 +68,12 @@ test.after(async () => {
   if (server) { server.close(); await once(server, 'close'); }
   try { fs.rmSync(TMP_DATA, { recursive: true, force: true }); } catch { /* ignore */ }
 });
+
+/* registerLimiter/loginLimiter count per IP/email, and every request in this
+   file comes from 127.0.0.1 in one process — so without a reset, this file's
+   own volume of test accounts would trip a control aimed at mass signup, not
+   at a legitimate test run. */
+test.beforeEach(() => ratelimit.reset());
 
 async function api(pathname, { method = 'GET', token, body } = {}) {
   const headers = {};
