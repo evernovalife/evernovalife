@@ -2540,6 +2540,7 @@ async function onShippingMethodChange(id, el) {
   await loadCheckoutQuote();
   renderCheckoutSummary(document.getElementById('checkoutSummary'));
   renderCheckoutLineItems();
+  updatePayButtonAmount();
 }
 
 /* Ask the server what this cart actually costs.
