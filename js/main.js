@@ -1885,6 +1885,13 @@ function renderCartPage() {
 
   renderOrderSummary(document.getElementById('orderSummary'), true);
   bindCartControls();
+
+  /* getShipping() falls back to cart.js's flat default until the live rate
+     table answers — load it here too, not just on checkout, so an
+     admin-edited shipping fee shows correctly on this page as well. */
+  loadShippingMethods().then(loaded => {
+    if (loaded) renderOrderSummary(document.getElementById('orderSummary'), true);
+  });
 }
 
 function cartRowMarkup(item) {
