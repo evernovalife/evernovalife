@@ -27,6 +27,7 @@ const store = require('./store.js');
 const loyalty = require('./loyalty.js');
 const subscriptions = require('./subscriptions.js');
 const productStore = require('./products.js');
+const seed = require('../js/products-data.js');   // PRODUCT_PAGES: which page each SKU lives on
 const shippingRates = require('./shipping.js');
 const labelDesign = require('./label-design.js');
 const mailer = require('./email.js');
@@ -3835,8 +3836,17 @@ function agentProductView(p) {
     price: Number(p.price) || 0,
     currency: 'USD',
     inStock: productStore.isAvailable(p),
-    url: `${SITE()}/product.html?id=${encodeURIComponent(p.id)}`
+    url: `${SITE()}/${productPath(p.id)}`
   };
+}
+
+/* Seeded SKUs have a page of their own (PRODUCT_PAGES in js/products-data.js,
+   written by tools/build-seo.js); anything added in admin since keeps the
+   shared URL, which still resolves. Link the real page so the agent isn't
+   handing people a redirect. */
+function productPath(id) {
+  const slug = (seed.PRODUCT_PAGES || {})[id];
+  return slug ? `${slug}.html` : `product.html?id=${encodeURIComponent(id)}`;
 }
 
 app.get('/api/agent/product', requireAgent, agentLimiter, (req, res) => {

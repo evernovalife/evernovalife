@@ -12,6 +12,15 @@ Disallow: /reset-password.html
 Disallow: /cart.html
 Disallow: /checkout.html
 Disallow: /wishlist.html
+Disallow: /pay.html
+Disallow: /inbox.html
+Disallow: /labels.html
+Disallow: /_run_check.html
 Disallow: /api/
+
+# product.html is deliberately NOT blocked here. Each product has its own page
+# now and the shared shell carries a noindex — but a crawler has to be allowed
+# to fetch the page to read that, and blocking it would also stop it following
+# the links to the real pages.
 
 Sitemap: https://evernovalife.com/sitemap.xml

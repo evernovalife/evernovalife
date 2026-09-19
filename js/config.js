@@ -62,9 +62,11 @@ window.ENL_SUPPORT_PHONE_HOURS = '';
    figures don't belong in a third party's dataset.
    ------------------------------------------------------------ */
 window.ENL_ANALYTICS = {
-  provider: '',                       // ← 'plausible' or 'umami' to turn it on
+  provider: 'plausible',
   domain: 'evernovalife.com',
-  src: 'https://plausible.io/js/script.js',
+  // The site-specific script Plausible issued when the site was added — not
+  // the shared /js/script.js — so use exactly this one, not the generic path.
+  src: 'https://plausible.io/js/pa-qotBCKUlBSooqWc7udn8O.js',
   websiteId: ''                       // Umami only
 };
 

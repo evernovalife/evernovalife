@@ -3,10 +3,16 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- BEGIN seo-head · replaced per SKU by tools/build-seo.js — do not edit in a generated page -->
+  <!-- Every seeded SKU has its own page now, and this file is the shell they are
+       cloned from plus the fallback for a product added in admin. On its own it
+       is a duplicate with no content of its own, so it stays out of the index
+       and passes its links on. A generated page replaces this whole block and
+       is indexed normally. -->
+  <meta name="robots" content="noindex, follow">
   <title>Product — Ever Nova Life</title>
   <meta name="description" content="Research peptide product details — purity, specifications and Certificate of Analysis. Ever Nova Life, research use only.">
   <link rel="canonical" href="https://evernovalife.com/product.html">
-  <meta name="theme-color" content="#07040f">
   <meta property="og:type" content="product">
   <meta property="og:site_name" content="Ever Nova Life">
   <meta property="og:title" content="Product — Ever Nova Life">
@@ -17,6 +23,8 @@
   <meta name="twitter:title" content="Product — Ever Nova Life">
   <meta name="twitter:description" content="Research peptide product details — purity, specifications and Certificate of Analysis. Ever Nova Life, research use only.">
   <meta name="twitter:image" content="https://evernovalife.com/og-image.svg">
+  <!-- END seo-head -->
+  <meta name="theme-color" content="#07040f">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <!-- Inter, loaded off the critical path. As a plain stylesheet link this
@@ -84,13 +92,16 @@
     <div class="container">
       <div class="breadcrumb" style="justify-content:flex-start;margin-bottom:1.5rem"><a href="index.html">Home</a> <span>/</span> <a href="products.html">Products</a> <span>/</span> <span id="detailCrumb">Product</span></div>
       <div class="product-detail" id="productDetail">
-        <!-- Fallback shown before JS runs / when JS is unavailable. Search engines
-             and no-JS visitors can still reach the full, crawlable catalog. -->
+        <!-- BEGIN seo-detail · replaced per SKU by tools/build-seo.js — do not edit in a generated page -->
+        <!-- Fallback shown before JS runs / when JS is unavailable. In a generated
+             per-SKU page this is the product's own facts, in HTML, so a crawler
+             that never executes a line of JavaScript still reads them. -->
         <div class="content-card glass">
           <h1>Research material detail</h1>
           <p>Product identity, size, lot number, price, and documentation status for every listed material are available in our <a href="products.html">catalog</a>. Lot-specific laboratory reports are published in the <a href="quality.html#coa-library">COA Library</a>.</p>
           <p><a class="btn btn-primary" href="products.html">Browse the full catalog</a></p>
         </div>
+        <!-- END seo-detail -->
       </div>
       <div class="content-card glass" style="margin-top:1.5rem;border:1px solid rgba(168,85,247,.35)">
         <p style="margin:0;font-size:.95rem"><strong>For qualified in-vitro research and laboratory use only.</strong> Not for human or animal use. Purchase may require account verification — see <a href="research-accounts.html">Research Accounts</a>. Lot-specific documentation is available in the <a href="quality.html#coa-library">COA Library</a>.</p>
@@ -166,12 +177,12 @@
     </div>
   </footer>
 
-  <script src="js/products-data.js?v=96"></script>
-  <script src="js/config.js?v=96"></script>
+  <script src="js/products-data.js?v=99"></script>
+  <script src="js/config.js?v=97"></script>
   <script src="js/chat.js?v=96"></script>
   <script src="js/cart.js?v=96"></script>
   <script src="js/promos.js?v=96"></script>
-  <script src="js/main.js?v=98"></script>
+  <script src="js/main.js?v=100"></script>
   <script src="js/live.js?v=96"></script>
   <script src="js/admin-alert.js?v=96"></script>
   <script src="js/customer-alert.js?v=96"></script>

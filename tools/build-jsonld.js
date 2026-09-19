@@ -43,18 +43,31 @@ function loadCatalog() {
   const src = fs.readFileSync(DATA, 'utf8');
   const sandbox = { window: {}, document: undefined };
   vm.createContext(sandbox);
-  vm.runInContext(src + '\n;globalThis.__out = { PRODUCTS, CATEGORIES };', sandbox);
+  vm.runInContext(src + '\n;globalThis.__out = { PRODUCTS, CATEGORIES, PRODUCT_PAGES };', sandbox);
   const out = sandbox.__out || {};
   if (!Array.isArray(out.PRODUCTS) || !out.PRODUCTS.length) {
     throw new Error('No PRODUCTS array found in js/products-data.js');
   }
+  PRODUCT_PAGES = out.PRODUCT_PAGES || {};
   return out.PRODUCTS;
+}
+
+/* Where each SKU actually lives, filled in by loadCatalog(). The catalog's
+   ItemList has to name the same URL the product's own page claims as its
+   canonical — two @ids for one product is two competing descriptions of it,
+   which is the thing this file exists to avoid.
+   Run tools/build-seo.js first: that is what writes PRODUCT_PAGES. */
+let PRODUCT_PAGES = {};
+
+function productUrl(p) {
+  const slug = PRODUCT_PAGES[p.id];
+  return slug ? `${ORIGIN}${slug}.html` : `${ORIGIN}product.html?id=${p.id}`;
 }
 
 /* Must stay in step with productSchema() in js/main.js — the runtime copy
    overwrites this one, and the two disagreeing is the failure mode. */
 function productSchema(p) {
-  const url = `${ORIGIN}product.html?id=${p.id}`;
+  const url = productUrl(p);
   const specs = p.specs || {};
   const props = Object.keys(specs)
     .filter(k => specs[k])

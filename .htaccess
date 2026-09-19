@@ -10,6 +10,11 @@
 # to matter would need every page checked by hand against whatever
 # it blocked first. Tracked as a follow-up, not guessed at here.
 # ============================================================
+# A missing URL has to answer 404, not 200 with a page on it. Without this
+# GoDaddy serves its own default and a crawler files every typo and every
+# retired product as a real page.
+ErrorDocument 404 /404.html
+
 <IfModule mod_headers.c>
   Header always set X-Content-Type-Options "nosniff"
   # No page on this site is meant to be framed by anyone, including itself.
