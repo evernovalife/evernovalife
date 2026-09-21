@@ -122,9 +122,14 @@ function metaDescription(p) {
   return text;
 }
 
+/* A search result shows roughly the first 60 characters of a title, so the
+   descriptor is dropped before the name is: the name and size are what people
+   search for. displayName() also stops "HGH 36 IU 36 IU", which the old
+   name + quantity join produced. */
 function pageTitle(p) {
-  const size = p.quantity ? ` ${p.quantity}` : '';
-  return `${p.name}${size} — Lot-Traceable Research Material | Ever Nova Life`;
+  const name = displayName(p);
+  const full = `${name} — Research Material | Ever Nova Life`;
+  return full.length <= 60 ? full : `${name} | Ever Nova Life`;
 }
 
 /* "HGH 36 IU", not "HGH 36 IU 36 IU" — same rule as the slug. */

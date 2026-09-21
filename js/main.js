@@ -1900,11 +1900,17 @@ function initProductDetailPage() {
   if (crumb) crumb.textContent = product.name;
 
   const pageUrl = productPageUrl(product);
-  setMetaContent('property', 'og:title', `${product.name} — Ever Nova Life`);
-  setMetaContent('name', 'twitter:title', `${product.name} — Ever Nova Life`);
-  setMetaContent('property', 'og:description', product.description);
-  setMetaContent('name', 'twitter:description', product.description);
-  setMetaContent('name', 'description', product.description);
+  /* Same rule as the title: a generated page ships a title and description
+     already cut to what a search result shows (tools/build-seo.js). Writing the
+     full catalog copy over them here would undo that for every crawler that
+     runs JavaScript, which includes Google. */
+  if (!window.ENL_PRODUCT_ID) {
+    setMetaContent('property', 'og:title', `${product.name} — Ever Nova Life`);
+    setMetaContent('name', 'twitter:title', `${product.name} — Ever Nova Life`);
+    setMetaContent('property', 'og:description', product.description);
+    setMetaContent('name', 'twitter:description', product.description);
+    setMetaContent('name', 'description', product.description);
+  }
   setMetaContent('property', 'og:url', pageUrl);
   const canonical = document.querySelector('link[rel="canonical"]');
   if (canonical) canonical.href = pageUrl;
