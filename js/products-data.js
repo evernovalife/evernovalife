@@ -145,7 +145,7 @@ const PRODUCTS = [
       reportDate: '2026-03-18',
       purity: '99.780%',
       content: 'GHK-Cu 60.04 mg',
-      file: 'assets/coa/122571.pdf',
+      file: 'assets/coa/122571.png',
       verifyUrl: 'https://janoshik.com'
     },
     inStock: true,
@@ -217,7 +217,7 @@ const PRODUCTS = [
       reportDate: '2026-04-23',
       purity: '99.025%',
       content: 'MOTS-C 11.82 mg',
-      file: 'assets/coa/147077.pdf',
+      file: 'assets/coa/147077.png',
       verifyUrl: 'https://janoshik.com'
     },
     inStock: true,
@@ -293,7 +293,7 @@ const PRODUCTS = [
       reportDate: '2026-03-18',
       purity: 'Not applicable (blend)',
       content: 'GHK-Cu 60.90 mg · BPC-157 11.50 mg · TB-500 11.65 mg · KPV 12.22 mg',
-      file: 'assets/coa/122606.pdf',
+      file: 'assets/coa/122606.png',
       verifyUrl: 'https://janoshik.com'
     },
     inStock: true,

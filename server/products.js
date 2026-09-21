@@ -79,7 +79,8 @@ const SEED_ADD_VERSION = 2;    // v2 (2026-08-18): Bacteriostatic Water (#2) rel
 
    HOW TO PUBLISH A NEW REPORT: drop the file in assets/coa/, fill the `coa`
    block in js/products-data.js, bump the number below, deploy. */
-const COA_SYNC_VERSION = 2;    // v2 (2026-08-18): #1 and #6 re-tested by Accurate Test Labs
+const COA_SYNC_VERSION = 3;    // v3 (2026-09-21): #3/#5/#7 file paths .pdf → .png (the files were always PNGs)
+                               // v2 (2026-08-18): #1 and #6 re-tested by Accurate Test Labs
 
 /* ---- Listing-copy re-sync (compliance) ----
    The same write-once problem as the price sync, and the one that matters most:

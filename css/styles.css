@@ -1583,6 +1583,15 @@ body.coa-lightbox-open { overflow: hidden; }
 .content-card p { color: var(--dark-text-muted); margin-bottom: 1rem; }
 .content-card ul.bullets { margin: 0 0 1rem 1.25rem; list-style: disc; color: var(--dark-text-muted); }
 .content-card ul.bullets li { margin-bottom: 0.5rem; }
+/* Links in running text and tables inherited the text colour (a { color: inherit }),
+   so a reader could not tell a link from the words around it. */
+.content-card :is(p, li, td) a:not(.btn), .faq-a a:not(.btn) {
+  color: var(--accent-violet);
+  text-decoration: underline;
+  text-decoration-color: rgba(192, 132, 252, 0.45);
+  text-underline-offset: 2px;
+}
+.content-card :is(p, li, td) a:not(.btn):hover, .faq-a a:not(.btn):hover { text-decoration-color: currentColor; }
 .content-card .updated { font-size: 0.82rem; color: var(--dark-text-faint); margin-bottom: 2rem; }
 .about-stats { display: grid; grid-template-columns: repeat(4,1fr); gap: 1.5rem; margin: 2.5rem 0; }
 .about-stat { text-align: center; padding: 1.5rem; }
@@ -1612,6 +1621,11 @@ body.coa-lightbox-open { overflow: hidden; }
 .rate-table th { color: #fff; font-weight: 700; background: var(--glass-bg); }
 .rate-table td { color: var(--dark-text-muted); }
 .rate-table tr:hover td { background: rgba(255,255,255,0.02); }
+/* Deep links land below the sticky header: the COA Library's per-lot rows
+   (quality.html#coa-<page>) and the guide pages' section headings. The row a
+   product page sent you to is marked, so it can be found in a wide table. */
+.rate-table tr[id], .content-card [id] { scroll-margin-top: calc(var(--header-h) + 1rem); }
+.rate-table tr:target td { background: rgba(168, 85, 247, 0.14); color: #fff; }
 
 /* Contact */
 .contact-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 2.5rem; align-items: start; }

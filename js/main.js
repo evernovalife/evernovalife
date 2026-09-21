@@ -1175,6 +1175,14 @@ function coaRow(label, value) {
   return `<tr><td>${escapeHtml(label)}</td><td>${escapeHtml(value)}</td></tr>`;
 }
 
+/* The listing's own row in the COA Library — tools/build-seo.js writes one
+   per generated page. A product added in admin has no page and so no row, and
+   gets the library itself. */
+function coaLibraryHref(product) {
+  const slug = productSlug(product && product.id);
+  return 'quality.html#' + (slug ? 'coa-' + slug : 'coa-library');
+}
+
 /* `opts.modal` drops the id: the quick-view modal renders this same panel, and
    two #coa targets on one document would make the fragment ambiguous. */
 function coaPanel(product, opts = {}) {
@@ -1222,7 +1230,8 @@ function coaPanel(product, opts = {}) {
         <span class="coa-status coa-status-available">Available</span>
       </div>
       <p class="coa-note">Third-party analysis of the batch supplied for this listing, issued by
-         ${escapeHtml(coa.lab || 'an independent laboratory')}.</p>
+         ${escapeHtml(coa.lab || 'an independent laboratory')}.
+         <a href="how-to-read-a-coa.html">How to read this report</a>.</p>
       ${coa.note ? `<p class="coa-note coa-scope">${escapeHtml(coa.note)}</p>` : ''}
       <table class="specs-table coa-table"><tbody>
         ${coaRow('Laboratory', coa.lab)}
@@ -1238,7 +1247,7 @@ function coaPanel(product, opts = {}) {
       <div class="coa-actions">
         ${coa.file ? `<a class="btn btn-primary btn-sm coa-file-link" href="${escapeHtml(coa.file)}" target="_blank" rel="noopener" hidden>Open full report</a>` : ''}
         ${coaVerifyLink(coa)}
-        <a class="btn btn-ghost btn-sm" href="quality.html#coa-library">All published reports</a>
+        <a class="btn btn-ghost btn-sm" href="${coaLibraryHref(product)}">In the COA Library</a>
       </div>
     </section>`;
 }
@@ -3556,6 +3565,34 @@ function initFAQPage() {
 }
 
 /* ============================================================
+   COA LIBRARY search (quality.html)
+   The table is written into the page by tools/build-seo.js, so this is only a
+   filter over rows already there — nothing is fetched. It used to be a form
+   that did nothing at all.
+   ============================================================ */
+function initCoaSearch() {
+  const input = document.getElementById('coaSearch');
+  const table = document.getElementById('coaTable');
+  if (!input || !table || !table.tBodies[0]) return;
+  const rows = Array.from(table.tBodies[0].rows);
+  const empty = document.getElementById('coaSearchEmpty');
+  const norm = s => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const apply = () => {
+    const q = norm(input.value);
+    let shown = 0;
+    rows.forEach(r => {
+      const hit = !q || norm(r.textContent).includes(q);
+      r.hidden = !hit;
+      if (hit) shown++;
+    });
+    if (empty) empty.hidden = shown > 0;
+  };
+  input.addEventListener('input', apply);
+  const form = document.getElementById('coaSearchForm');
+  if (form) form.addEventListener('submit', e => { e.preventDefault(); apply(); });
+}
+
+/* ============================================================
    CONTACT form (demo)
    ============================================================ */
 function initContactForm() {
@@ -4079,6 +4116,7 @@ document.addEventListener('DOMContentLoaded', () => {
     case 'cart.html': renderCartPage(); break;
     case 'checkout.html': initCheckoutPage(); break;
     case 'faq.html': initFAQPage(); break;
+    case 'quality.html': initCoaSearch(); break;
     case 'contact.html': initContactForm(); break;
     case 'wishlist.html': renderWishlistPage(); break;
     case 'shipping.html': renderPublicRateTable(); break;

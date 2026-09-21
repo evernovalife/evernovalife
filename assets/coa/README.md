@@ -93,5 +93,13 @@ so each `coa` block has a `note` and the panel prints it above the data table:
 
 Both are published at the owner's direction. The clean fix in each case is a
 report for the lot and vial actually shipped — until then, the `note` is what
-keeps the page from overstating what the document proves. `quality.html` carries
-the same two rows under **Report scope**.
+keeps the page from overstating what the document proves.
+
+## The COA Library on quality.html is generated
+
+Both tables there — the lot list and **Report scope** — are written by
+`node tools/build-seo.js` from the same `coa` blocks, one row per listing with a
+stable anchor (`quality.html#coa-<page>`, `#scope-<page>`) that the product pages
+link to. Do not edit them by hand; re-run the generator after publishing a report.
+It also resolves each `file` against this folder, so the library links whichever
+extension is actually here even if the catalog names another.
