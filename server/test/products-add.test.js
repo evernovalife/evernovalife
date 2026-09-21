@@ -92,3 +92,9 @@ test('an added product can be checked out at its seed price', () => {
   assert.equal(order.items[0].unitPrice, seed.price);
   assert.equal(order.subtotal, Number((seed.price * 2).toFixed(2)));
 });
+
+test('an admin can clear a was-price by emptying the box', () => {
+  const base = { name: 'Admin-Added Kit', category: 'supplies', price: 42.5 };
+  assert.equal(products.updateProduct(999, base).originalPrice, 55, 'not sent: kept');
+  assert.equal(products.updateProduct(999, { ...base, originalPrice: '' }).originalPrice, null, 'sent blank: cleared');
+});

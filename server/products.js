@@ -379,9 +379,11 @@ function sanitize(data, existing) {
     category,
     categoryName: CAT_NAME_BY_KEY[category] || str(data.categoryName, 80) || category,
     price: Math.max(0, num(data.price)),
-    originalPrice: (data.originalPrice == null || data.originalPrice === '')
+    /* Not sent = keep it; sent blank = clear it. Blank used to mean "keep" too,
+       so an admin emptying the box could never remove a strikethrough. */
+    originalPrice: data.originalPrice === undefined
       ? (existing.originalPrice != null ? existing.originalPrice : null)
-      : Math.max(0, num(data.originalPrice)),
+      : (data.originalPrice === null || data.originalPrice === '') ? null : Math.max(0, num(data.originalPrice)),
     purity: str(data.purity != null ? data.purity : existing.purity, 80),
     quantity: str(data.quantity != null ? data.quantity : existing.quantity, 80),
     lot: str(data.lot != null ? data.lot : existing.lot, 80),
