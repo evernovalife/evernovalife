@@ -1917,6 +1917,9 @@ function initProductDetailPage() {
 
   // structured data for rich search results
   injectJSONLD(productSchema(product, pageUrl), 'ld-product');
+  publicShippingMethods().then(methods => {
+    if (methods) injectJSONLD(productSchema(product, pageUrl, methods), 'ld-product');
+  });
   injectJSONLD({
     '@context': 'https://schema.org', '@type': 'BreadcrumbList',
     itemListElement: [
@@ -3800,7 +3803,58 @@ function injectJSONLD(obj, id) {
    ============================================================ */
 const SITE_ORIGIN = 'https://evernovalife.com/';
 
-function productSchema(product, pageUrl) {
+/* returns.html in schema form: 30 days from delivery, unopened, back by mail,
+   return postage on the buyer. Change both together, and the copy in
+   tools/build-seo.js with them. */
+const RETURN_POLICY = {
+  '@type': 'MerchantReturnPolicy',
+  applicableCountry: 'US',
+  returnPolicyCategory: 'https://schema.org/MerchantReturnFiniteReturnWindow',
+  merchantReturnDays: 30,
+  returnMethod: 'https://schema.org/ReturnByMail',
+  returnFees: 'https://schema.org/ReturnFeesCustomerResponsibility',
+  merchantReturnLink: SITE_ORIGIN + 'returns.html'
+};
+
+/* Shipping is admin-editable (server/shipping.js), so it is read live rather
+   than baked: the markup has to quote what checkout will charge. One entry per
+   enabled method, priced for one unit of this product — free when the product
+   alone clears the method's threshold. Dispatch is same or next business day
+   (shipping.html); transit is read off the method's ETA text. */
+let publicShippingP = null;
+function publicShippingMethods() {
+  if (!publicShippingP) {
+    publicShippingP = fetch(API_BASE + '/api/shipping')
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => (d && d.success && Array.isArray(d.methods) ? d.methods : null))
+      .catch(() => null);
+  }
+  return publicShippingP;
+}
+
+function shippingDetailsFor(product, methods) {
+  return methods.filter(m => m.enabled !== false).map(m => {
+    const free = Number(m.freeOver) > 0 && Number(product.price) >= Number(m.freeOver);
+    const days = String(m.eta || '').match(/\d+/g);
+    const transit = days ? [Number(days[0]), Number(days[days.length - 1])]
+      : (/next/i.test(m.eta || '') ? [1, 1] : null);
+    const detail = {
+      '@type': 'OfferShippingDetails',
+      shippingRate: { '@type': 'MonetaryAmount', value: free ? '0.00' : (Number(m.price) || 0).toFixed(2), currency: 'USD' },
+      shippingDestination: { '@type': 'DefinedRegion', addressCountry: 'US' }
+    };
+    if (transit) {
+      detail.deliveryTime = {
+        '@type': 'ShippingDeliveryTime',
+        handlingTime: { '@type': 'QuantitativeValue', minValue: 0, maxValue: 1, unitCode: 'DAY' },
+        transitTime: { '@type': 'QuantitativeValue', minValue: transit[0], maxValue: transit[1], unitCode: 'DAY' }
+      };
+    }
+    return detail;
+  });
+}
+
+function productSchema(product, pageUrl, shippingMethods) {
   const st = stockInfo(product);
   const url = pageUrl || productPageUrl(product);
   const specs = product.specs || {};
@@ -3831,9 +3885,11 @@ function productSchema(product, pageUrl) {
       priceValidUntil: validUntil,
       itemCondition: 'https://schema.org/NewCondition',
       availability: 'https://schema.org/' + (st.sellable ? 'InStock' : 'OutOfStock'),
-      seller: { '@type': 'Organization', name: 'Ever Nova Life', '@id': SITE_ORIGIN + '#org' }
+      seller: { '@type': 'Organization', name: 'Ever Nova Life', '@id': SITE_ORIGIN + '#org' },
+      hasMerchantReturnPolicy: RETURN_POLICY
     }
   };
+  if (shippingMethods && shippingMethods.length) schema.offers.shippingDetails = shippingDetailsFor(product, shippingMethods);
   if (props.length) schema.additionalProperty = props;
   return schema;
 }

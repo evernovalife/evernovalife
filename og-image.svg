@@ -1,4 +1,4 @@
-<svg width="1200" height="630" viewBox="0 0 1200 630" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Ever Nova Life — Where Science Comes Home">
+<svg width="1200" height="630" viewBox="0 0 1200 630" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Ever Nova Life — Lot-Traceable Research Materials">
   <defs>
     <linearGradient id="brand" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#fbf1c7"/><stop offset="45%" stop-color="#e8c766"/><stop offset="100%" stop-color="#c8991f"/>
@@ -28,17 +28,17 @@
 
   <!-- wordmark + copy -->
   <text x="430" y="248" font-family="'Century Gothic', 'Futura', 'Trebuchet MS', Arial, sans-serif" font-weight="700" font-size="60" letter-spacing="5" fill="url(#brand)">EVER NOVA LIFE</text>
-  <text x="432" y="320" font-family="Inter, Arial, sans-serif" font-weight="700" font-size="40" fill="#e2e8f0">Where Science Comes Home</text>
-  <text x="432" y="372" font-family="Inter, Arial, sans-serif" font-weight="500" font-size="26" fill="#cbd5e1">Premium research peptides · 99%+ HPLC purity · COA included</text>
+  <text x="432" y="320" font-family="Inter, Arial, sans-serif" font-weight="700" font-size="40" fill="#e2e8f0">Lot-Traceable Research Materials</text>
+  <text x="432" y="372" font-family="Inter, Arial, sans-serif" font-weight="500" font-size="26" fill="#cbd5e1">Third-party lab reports published in our COA Library</text>
 
   <!-- pill badges -->
   <g font-family="Inter, Arial, sans-serif" font-weight="700" font-size="22" fill="#fff">
-    <rect x="432" y="420" width="190" height="56" rx="28" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.18)"/>
-    <text x="527" y="456" text-anchor="middle">99%+ Purity</text>
-    <rect x="640" y="420" width="190" height="56" rx="28" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.18)"/>
-    <text x="735" y="456" text-anchor="middle">HPLC Verified</text>
-    <rect x="848" y="420" width="190" height="56" rx="28" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.18)"/>
-    <text x="943" y="456" text-anchor="middle">24h Shipping</text>
+    <rect x="432" y="420" width="222" height="56" rx="28" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.18)"/>
+    <text x="543" y="456" text-anchor="middle">Third-Party COAs</text>
+    <rect x="670" y="420" width="190" height="56" rx="28" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.18)"/>
+    <text x="765" y="456" text-anchor="middle">Lot-Traceable</text>
+    <rect x="876" y="420" width="226" height="56" rx="28" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.18)"/>
+    <text x="989" y="456" text-anchor="middle">Research Use Only</text>
   </g>
 
   <text x="432" y="540" font-family="Inter, Arial, sans-serif" font-weight="500" font-size="20" fill="#94a3b8">evernovalife.com · For in-vitro research use only</text>

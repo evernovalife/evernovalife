@@ -194,6 +194,19 @@ function replaceBetween(text, begin, end, replacement, where) {
 
 /* ---------- structured data ---------- */
 
+/* Same object as RETURN_POLICY in js/main.js (returns.html in schema form).
+   Shipping is NOT baked here: rates are admin-editable, so main.js adds
+   shippingDetails from the live API — a baked rate would go stale. */
+const RETURN_POLICY = {
+  '@type': 'MerchantReturnPolicy',
+  applicableCountry: 'US',
+  returnPolicyCategory: 'https://schema.org/MerchantReturnFiniteReturnWindow',
+  merchantReturnDays: 30,
+  returnMethod: 'https://schema.org/ReturnByMail',
+  returnFees: 'https://schema.org/ReturnFeesCustomerResponsibility',
+  merchantReturnLink: ORIGIN + 'returns.html'
+};
+
 /* Must stay in step with productSchema() in js/main.js — the runtime pass
    overwrites this node with the live catalog's version, and the two
    disagreeing is the failure mode. */
@@ -227,7 +240,8 @@ function productSchema(p, url) {
       // The seed carries no live count, so this is the published on/off state.
       // The runtime pass corrects it from the real stock figure.
       availability: 'https://schema.org/' + (p.inStock === false ? 'OutOfStock' : 'InStock'),
-      seller: { '@type': 'Organization', name: 'Ever Nova Life', '@id': ORIGIN + '#org' }
+      seller: { '@type': 'Organization', name: 'Ever Nova Life', '@id': ORIGIN + '#org' },
+      hasMerchantReturnPolicy: RETURN_POLICY
     }
   };
   if (props.length) schema.additionalProperty = props;
